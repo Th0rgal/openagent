@@ -1,0 +1,131 @@
+# Open Agent - Cursor Rules & Project Philosophy
+
+## Project Overview
+
+Open Agent is a minimal autonomous coding agent implemented in Rust. It is designed to be:
+- **AI-maintainable**: Rust's strong type system and compiler provide immediate feedback
+- **Self-contained**: No external dependencies beyond OpenRouter for LLM access
+- **Full-access**: Has complete access to the local machine (filesystem, terminal, network)
+
+## Architecture Philosophy
+
+### "Tools in a Loop"
+The agent follows the Cursor architecture pattern: an LLM with access to tools that can be called iteratively until a task is complete. The core loop is:
+
+1. Receive task from user via HTTP API
+2. Build context (system prompt + tools + user task)
+3. Call LLM
+4. If LLM requests tool calls: execute them, feed results back, goto 3
+5. If LLM produces final response: return to user
+
+### Separation of Concerns
+
+```
+api/         - HTTP interface only, no business logic
+agent/       - Core agent loop and prompt construction
+llm/         - LLM client abstraction (OpenRouter implementation)
+tools/       - Individual tool implementations, each isolated
+config.rs    - All configuration in one place
+```
+
+### Tool Design Principles
+
+Each tool should:
+- Have a single, clear purpose
+- Return human-readable output (the LLM needs to understand it)
+- Handle errors gracefully (return error messages, don't panic)
+- Be stateless (no tool should depend on another tool's state)
+- Include comprehensive JSON schema for parameters
+
+## Code Style Guidelines
+
+### Rust Conventions
+- Use `anyhow::Result` for error handling in application code
+- Use `thiserror` for library error types that need to be matched
+- Prefer `async_trait` for async trait methods
+- Use `tracing` for logging, not `println!`
+
+### Documentation
+- Every public item should have a doc comment
+- Module-level docs should explain the module's purpose
+- Tool descriptions should be clear enough for an LLM to understand
+
+### Error Messages
+- Error messages should be actionable
+- Include context (what were we trying to do?)
+- Include the underlying error when relevant
+
+## API Contract
+
+The HTTP API is the **only** interface to the agent. It exposes:
+
+```
+POST /api/task          - Submit a new task
+GET  /api/task/{id}     - Get task status and result
+GET  /api/task/{id}/stream - Stream progress via SSE
+GET  /api/health        - Health check
+```
+
+### Task Lifecycle
+1. `POST /api/task` returns immediately with task ID
+2. Client can poll `GET /api/task/{id}` or stream via SSE
+3. Task runs asynchronously in background
+4. Result includes status, final response, and execution log
+
+## Extending the Agent
+
+### Adding a New Tool
+
+1. Create a new struct in `src/tools/`
+2. Implement the `Tool` trait:
+   - `name()` - unique identifier
+   - `description()` - clear description for LLM
+   - `parameters_schema()` - JSON schema for arguments
+   - `execute()` - actual implementation
+3. Register it in `ToolRegistry::new()` in `src/tools/mod.rs`
+
+### Adding a New LLM Provider
+
+1. Implement the `LlmClient` trait in `src/llm/`
+2. The trait requires only `chat_completion()` with tool support
+3. Update `Agent::new()` to use the new client based on config
+
+## Environment Variables
+
+```
+OPENROUTER_API_KEY  - Required. Your OpenRouter API key
+DEFAULT_MODEL       - Optional. Default: openai/gpt-4.1-mini
+WORKSPACE_PATH      - Optional. Default: current directory
+HOST                - Optional. Default: 127.0.0.1
+PORT                - Optional. Default: 3000
+MAX_ITERATIONS      - Optional. Default: 50
+```
+
+## Testing Approach
+
+- Unit tests for individual tools (mock filesystem/commands)
+- Integration tests for agent loop (mock LLM responses)
+- End-to-end tests with real LLM (expensive, run manually)
+
+## Security Considerations
+
+This agent has **full machine access**. It can:
+- Read/write any file the process can access
+- Execute any shell command
+- Make network requests
+
+When deploying:
+- Run as a limited user
+- Use workspace isolation
+- Consider a sandbox for terminal commands
+- Never expose the API publicly without authentication
+
+## Future Improvements
+
+- [ ] WebSocket support for bidirectional streaming
+- [ ] Semantic code search (embeddings-based)
+- [ ] Background task persistence (survive restarts)
+- [ ] Multi-model support (use different models for different tasks)
+- [ ] Rate limiting and cost tracking
+- [ ] Authentication for the HTTP API
+
