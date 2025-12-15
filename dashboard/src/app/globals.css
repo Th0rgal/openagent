@@ -1,0 +1,161 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0d0d12;
+  --background-secondary: #15151d;
+  --background-tertiary: #1a1a24;
+  --foreground: #e4e4e7;
+  --foreground-muted: #71717a;
+  --border: #27272a;
+  --border-light: #3f3f46;
+  /* Blue (Vercel/shadcn-ish) accents */
+  --accent: #3b82f6;
+  --accent-secondary: #2563eb;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --error: #ef4444;
+  --info: #3b82f6;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--background-secondary);
+  --color-card-foreground: var(--foreground);
+  --color-muted: var(--background-tertiary);
+  --color-muted-foreground: var(--foreground-muted);
+  --color-border: var(--border);
+
+  --color-primary: var(--accent);
+  --color-primary-foreground: #ffffff;
+
+  --color-destructive: var(--error);
+  --color-destructive-foreground: #ffffff;
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--background);
+  /* Subtle grid + spotlight, keeping a “liquid glass” vibe but with straight lines */
+  background-image:
+    radial-gradient(900px 450px at 20% -10%, rgba(59, 130, 246, 0.18), transparent 60%),
+    radial-gradient(700px 360px at 85% 0%, rgba(37, 99, 235, 0.12), transparent 55%),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: auto, auto, 64px 64px, 64px 64px;
+  background-position: 0 0, 0 0, 0 0, 0 0;
+  background-attachment: fixed;
+  color: var(--foreground);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  min-height: 100vh;
+}
+
+/* Accessible, consistent focus treatment (shadcn-ish) */
+:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.55);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(59, 130, 246, 0.25);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--background-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-light);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--foreground-muted);
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    opacity: 0.5;
+    filter: blur(20px);
+  }
+  50% {
+    opacity: 0.8;
+    filter: blur(30px);
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.5s ease-out forwards;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 4s ease-in-out infinite;
+}
+
+/* Status badge colors */
+.status-running {
+  background: linear-gradient(135deg, var(--accent), var(--accent-secondary));
+}
+
+.status-completed {
+  background: var(--success);
+}
+
+.status-failed {
+  background: var(--error);
+}
+
+.status-pending {
+  background: var(--warning);
+}
+
+.status-cancelled {
+  background: var(--foreground-muted);
+}
+
+/* Glass effect */
+.panel,
+.glass {
+  background: rgba(21, 21, 29, 0.72);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+.panel-strong {
+  background: rgba(21, 21, 29, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, var(--accent), var(--accent-secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}

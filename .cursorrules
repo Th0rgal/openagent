@@ -6,89 +6,130 @@ Open Agent is a minimal autonomous coding agent implemented in Rust. It is desig
 - **AI-maintainable**: Rust's strong type system and compiler provide immediate feedback
 - **Self-contained**: No external dependencies beyond OpenRouter for LLM access
 - **Full-access**: Has complete access to the local machine (filesystem, terminal, network)
+- **Provable**: Code structured for future formal verification in Lean
 
-## Architecture Philosophy
+## Architecture (v2: Hierarchical Agent Tree)
 
-### "Tools in a Loop"
-The agent follows the Cursor architecture pattern: an LLM with access to tools that can be called iteratively until a task is complete. The core loop is:
-
-1. Receive task from user via HTTP API
-2. Build context (system prompt + tools + user task)
-3. Call LLM
-4. If LLM requests tool calls: execute them, feed results back, goto 3
-5. If LLM produces final response: return to user
-
-### Separation of Concerns
-
+### Agent Hierarchy
 ```
-api/         - HTTP interface only, no business logic
-agent/       - Core agent loop and prompt construction
-llm/         - LLM client abstraction (OpenRouter implementation)
-tools/       - Individual tool implementations, each isolated
-config.rs    - All configuration in one place
+                    ┌─────────────┐
+                    │  RootAgent  │
+                    └──────┬──────┘
+         ┌─────────────────┼─────────────────┐
+         ▼                 ▼                 ▼
+ ┌───────────────┐ ┌─────────────┐ ┌─────────────┐ ┌──────────┐
+ │ Complexity    │ │   Model     │ │    Task     │ │ Verifier │
+ │ Estimator     │ │  Selector   │ │  Executor   │ │          │
+ └───────────────┘ └─────────────┘ └─────────────┘ └──────────┘
 ```
 
-### Tool Design Principles
+### Agent Types
 
-Each tool should:
-- Have a single, clear purpose
-- Return human-readable output (the LLM needs to understand it)
-- Handle errors gracefully (return error messages, don't panic)
-- Be stateless (no tool should depend on another tool's state)
-- Include comprehensive JSON schema for parameters
+| Type | Role | Children |
+|------|------|----------|
+| **RootAgent** | Top-level orchestrator, receives API tasks | All leaf types |
+| **NodeAgent** | Intermediate orchestrator for subtasks | Executor, Verifier |
+| **ComplexityEstimator** | Estimates task difficulty (0-1 score) | None (leaf) |
+| **ModelSelector** | Picks optimal model (U-curve optimization) | None (leaf) |
+| **TaskExecutor** | Executes tasks using tools | None (leaf) |
+| **Verifier** | Validates completion (hybrid) | None (leaf) |
 
-## Code Style Guidelines
+### Task Flow
+1. Receive task via HTTP API
+2. **Estimate Complexity** (ComplexityEstimator)
+3. If complex: **Split into subtasks** with budget allocation
+4. **Select Model** for each (sub)task (U-curve cost optimization)
+5. **Execute** using tools (TaskExecutor)
+6. **Verify** completion (Verifier: programmatic → LLM fallback)
+7. Aggregate results and return
 
-### Rust Conventions
-- Use `anyhow::Result` for error handling in application code
-- Use `thiserror` for library error types that need to be matched
-- Prefer `async_trait` for async trait methods
-- Use `tracing` for logging, not `println!`
+### U-Curve Model Selection
+```
+Cost
+  ^
+  |    *                         *
+  |     *                       *
+  |        *       *         *
+  |           * *     * *
+  |            *       *
+  +-------------------------> Model Capability
+      (cheap/weak)    (optimal)    (expensive/strong)
+```
+- Cheap models: low per-token cost, high failure rate, more retries
+- Expensive models: high per-token cost, low failure rate
+- **Optimal**: minimizes expected total cost
 
-### Documentation
-- Every public item should have a doc comment
-- Module-level docs should explain the module's purpose
-- Tool descriptions should be clear enough for an LLM to understand
+## Module Structure
 
-### Error Messages
-- Error messages should be actionable
-- Include context (what were we trying to do?)
-- Include the underlying error when relevant
+```
+src/
+├── agents/                # Hierarchical agent system
+│   ├── mod.rs             # Agent traits (Agent, OrchestratorAgent, LeafAgent)
+│   ├── types.rs           # AgentId, AgentType, AgentResult, Complexity
+│   ├── context.rs         # Shared context for agent tree
+│   ├── tree.rs            # Tree structure management
+│   ├── orchestrator/      # Orchestrator agents
+│   │   ├── root.rs        # RootAgent (top-level)
+│   │   └── node.rs        # NodeAgent (intermediate)
+│   └── leaf/              # Leaf agents (specialized workers)
+│       ├── complexity.rs  # ComplexityEstimator
+│       ├── model_select.rs # ModelSelector with U-curve
+│       ├── executor.rs    # TaskExecutor (tools in a loop)
+│       └── verifier.rs    # Hybrid verification
+├── task/                  # Task types with invariants
+│   ├── task.rs            # Task, TaskId, TaskStatus
+│   ├── subtask.rs         # Subtask, SubtaskPlan
+│   └── verification.rs    # VerificationCriteria, ProgrammaticCheck
+├── budget/                # Cost tracking and pricing
+│   ├── budget.rs          # Budget with spend/allocate invariants
+│   ├── pricing.rs         # OpenRouter pricing client
+│   └── allocation.rs      # Budget allocation strategies
+├── agent/                 # Original simple agent (legacy)
+├── api/                   # HTTP interface
+├── llm/                   # LLM client (OpenRouter)
+├── tools/                 # Tool implementations
+└── config.rs              # Configuration
+```
+
+## Design for Provability
+
+### Conventions for Future Lean Proofs
+1. **Pre/Postconditions**: Document as `/// Precondition:` and `/// Postcondition:` comments
+2. **Invariants**: Document struct invariants, enforce in constructors
+3. **Algebraic Types**: Use enums with exhaustive matching, no `_` catch-all
+4. **Pure Functions**: Separate pure logic from IO where possible
+5. **Result Types**: Never panic, always return `Result`
+
+### Example
+```rust
+/// Allocate budget for a subtask.
+/// 
+/// # Precondition
+/// `amount <= self.remaining_cents()`
+/// 
+/// # Postcondition
+/// `self.allocated_cents` increases by exactly `amount`
+pub fn allocate(&mut self, amount: u64) -> Result<(), BudgetError>
+```
+
+## Adding a New Leaf Agent
+
+1. Create `src/agents/leaf/your_agent.rs`
+2. Implement `Agent` trait:
+   - `id()`, `agent_type()`, `execute()`
+3. Implement `LeafAgent` trait:
+   - `capability()` → add variant to `LeafCapability` enum
+4. Register in `RootAgent::new()` or relevant orchestrator
+5. Document pre/postconditions for provability
 
 ## API Contract
 
-The HTTP API is the **only** interface to the agent. It exposes:
-
 ```
-POST /api/task          - Submit a new task
+POST /api/task          - Submit task (uses hierarchical agent)
 GET  /api/task/{id}     - Get task status and result
 GET  /api/task/{id}/stream - Stream progress via SSE
 GET  /api/health        - Health check
 ```
-
-### Task Lifecycle
-1. `POST /api/task` returns immediately with task ID
-2. Client can poll `GET /api/task/{id}` or stream via SSE
-3. Task runs asynchronously in background
-4. Result includes status, final response, and execution log
-
-## Extending the Agent
-
-### Adding a New Tool
-
-1. Create a new struct in `src/tools/`
-2. Implement the `Tool` trait:
-   - `name()` - unique identifier
-   - `description()` - clear description for LLM
-   - `parameters_schema()` - JSON schema for arguments
-   - `execute()` - actual implementation
-3. Register it in `ToolRegistry::new()` in `src/tools/mod.rs`
-
-### Adding a New LLM Provider
-
-1. Implement the `LlmClient` trait in `src/llm/`
-2. The trait requires only `chat_completion()` with tool support
-3. Update `Agent::new()` to use the new client based on config
 
 ## Environment Variables
 
@@ -101,11 +142,19 @@ PORT                - Optional. Default: 3000
 MAX_ITERATIONS      - Optional. Default: 50
 ```
 
-## Testing Approach
+## Deployment
 
-- Unit tests for individual tools (mock filesystem/commands)
-- Integration tests for agent loop (mock LLM responses)
-- End-to-end tests with real LLM (expensive, run manually)
+### Production Server
+- **Host**: `95.216.112.253`
+- **SSH Access**: `ssh root@95.216.112.253` (key-based auth available to agent)
+- **Environment files**: Located in `/root/open_agent/.env` on the server
+
+### Local Development
+- **Backend API**: `http://127.0.0.1:3000` (Rust server via `cargo run`)
+- **Dashboard**: `http://127.0.0.1:3001` (Next.js via `bun run dev`)
+- **Environment files**: 
+  - Backend: `.env` in project root
+  - Dashboard: `dashboard/.env.local`
 
 ## Security Considerations
 
@@ -120,12 +169,10 @@ When deploying:
 - Consider a sandbox for terminal commands
 - Never expose the API publicly without authentication
 
-## Future Improvements
+## Future Work
 
-- [ ] WebSocket support for bidirectional streaming
+- [ ] Formal verification in Lean (extract pure logic)
+- [ ] WebSocket for bidirectional streaming
 - [ ] Semantic code search (embeddings-based)
-- [ ] Background task persistence (survive restarts)
-- [ ] Multi-model support (use different models for different tasks)
-- [ ] Rate limiting and cost tracking
-- [ ] Authentication for the HTTP API
-
+- [x] Multi-model support (U-curve optimization)
+- [x] Cost tracking (Budget system)

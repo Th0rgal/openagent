@@ -11,7 +11,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 
 # Web framework
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.7", features = ["ws", "multipart"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 
 # Serialization
@@ -36,6 +36,19 @@ walkdir = "2"
 urlencoding = "2"
 anyhow = "1"
 async-stream = "0.3"
+regex = "1"
+
+# For memory/storage
+chrono = { version = "0.4", features = ["serde"] }
+
+# Auth (JWT)
+jsonwebtoken = "9"
+
+# Remote console / file manager
+base64 = "0.22"
+bytes = "1"
+portable-pty = "0.9"
+tokio-util = { version = "0.7", features = ["io"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

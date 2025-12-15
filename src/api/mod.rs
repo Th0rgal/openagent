@@ -8,6 +8,11 @@
 //! - `GET /api/health` - Health check
 
 mod routes;
+mod auth;
+mod console;
+pub mod control;
+mod fs;
+mod ssh_util;
 pub mod types;
 
 pub use routes::serve;

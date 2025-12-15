@@ -4,32 +4,45 @@
 //!
 //! This library provides:
 //! - An HTTP API for task submission and monitoring
-//! - A tool-based agent loop for autonomous code editing
+//! - A hierarchical agent tree for complex task handling
+//! - Tool-based execution for autonomous code editing
 //! - Integration with OpenRouter for LLM access
 //!
-//! ## Architecture
+//! ## Architecture (v2: Hierarchical Agent Tree)
 //!
-//! The agent follows the "tools in a loop" pattern:
-//! 1. Receive a task via the API
-//! 2. Build context with system prompt and available tools
-//! 3. Call LLM, parse response, execute any tool calls
-//! 4. Feed results back to LLM, repeat until task complete
-//!
-//! ## Example
-//!
-//! ```rust,ignore
-//! use open_agent::{config::Config, agent::Agent};
-//!
-//! let config = Config::from_env()?;
-//! let agent = Agent::new(config);
-//! let result = agent.run_task("Create a hello world script").await?;
+//! ```text
+//!                    ┌─────────────┐
+//!                    │  RootAgent  │
+//!                    └──────┬──────┘
+//!         ┌─────────────────┼─────────────────┐
+//!         ▼                 ▼                 ▼
+//! ┌───────────────┐ ┌─────────────┐ ┌─────────────┐
+//! │ Complexity    │ │   Model     │ │    Task     │
+//! │ Estimator     │ │  Selector   │ │  Executor   │
+//! └───────────────┘ └─────────────┘ └─────────────┘
 //! ```
+//!
+//! ## Task Flow
+//! 1. Receive task via API
+//! 2. Estimate complexity (should we split?)
+//! 3. Select optimal model (U-curve cost optimization)
+//! 4. Execute (directly or via subtasks)
+//! 5. Verify completion (programmatic + LLM hybrid)
+//!
+//! ## Modules
+//! - `agents`: Hierarchical agent tree (Root, Node, Leaf agents)
+//! - `task`: Task, subtask, and verification types
+//! - `budget`: Cost tracking and model pricing
 
 pub mod api;
-pub mod agent;
+pub mod agents;
+pub mod budget;
 pub mod config;
 pub mod llm;
+pub mod memory;
+pub mod task;
 pub mod tools;
 
 pub use config::Config;
+pub use config::MemoryConfig;
 

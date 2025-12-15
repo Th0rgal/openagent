@@ -12,6 +12,10 @@ Cargo.lock
 # Environment
 .env
 .env.local
+.env.prod
+
+# Calibration / local artifacts
+.open_agent_calibration/
 
 # OS files
 .DS_Store
