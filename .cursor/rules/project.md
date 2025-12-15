@@ -41,7 +41,8 @@ Open Agent is a minimal autonomous coding agent implemented in Rust. It is desig
 4. **Select Model** for each (sub)task (U-curve cost optimization)
 5. **Execute** using tools (TaskExecutor)
 6. **Verify** completion (Verifier: programmatic → LLM fallback)
-7. Aggregate results and return
+7. **On failure**: Analyze signals → smart retry (upgrade/downgrade model)
+8. Aggregate results and return
 
 ### U-Curve Model Selection
 ```
@@ -58,6 +59,47 @@ Cost
 - Cheap models: low per-token cost, high failure rate, more retries
 - Expensive models: high per-token cost, low failure rate
 - **Optimal**: minimizes expected total cost
+
+### Smart Retry Strategy (Budget Overflow)
+
+When task execution fails, the system analyzes **why** it failed and selects the appropriate retry strategy:
+
+| Failure Mode | Signals | Retry Action |
+|--------------|---------|--------------|
+| **Model Capability Insufficient** | Repetitive actions, high tool failure rate, stuck in loops | **Upgrade** to smarter model |
+| **Budget Exhausted With Progress** | High tool success rate, files modified, partial results | **Continue** same model or try **cheaper** model |
+| **External Error** | API errors, network issues, rate limits | **Retry** same configuration |
+| **Task Infeasible** | Consistent failures across models | **Do not retry** |
+
+#### Execution Signals Tracked
+```rust
+ExecutionSignals {
+    iterations: u32,           // How many LLM calls made
+    successful_tool_calls: u32, // Tools that succeeded
+    failed_tool_calls: u32,     // Tools that failed
+    files_modified: bool,       // Any files created/changed
+    repetitive_actions: bool,   // Stuck in loops
+    partial_progress: bool,     // Making progress
+    cost_spent_cents: u64,      // Budget used
+}
+```
+
+#### Model Upgrade/Downgrade Ladder
+```
+┌─────────────────────────┐
+│ anthropic/claude-sonnet-4.5 │  ← Top tier
+├─────────────────────────┤
+│ anthropic/claude-3.5-sonnet │
+├─────────────────────────┤
+│ anthropic/claude-haiku-4.5  │  ← Budget tier
+└─────────────────────────┘
+```
+
+The `FailureAnalysis` provides:
+- `mode`: Why it failed
+- `confidence`: How certain (0.0-1.0)
+- `evidence`: Human-readable reasons
+- `recommendation`: What to do next
 
 ## Module Structure
 
@@ -83,7 +125,8 @@ src/
 ├── budget/                # Cost tracking and pricing
 │   ├── budget.rs          # Budget with spend/allocate invariants
 │   ├── pricing.rs         # OpenRouter pricing client
-│   └── allocation.rs      # Budget allocation strategies
+│   ├── allocation.rs      # Budget allocation strategies
+│   └── retry.rs           # Smart retry strategy (failure analysis)
 ├── memory/                # Persistent memory & retrieval
 │   ├── mod.rs             # Memory subsystem exports
 │   ├── supabase.rs        # PostgREST + Storage client
@@ -279,7 +322,6 @@ When deploying:
 
 - [ ] Formal verification in Lean (extract pure logic)
 - [ ] WebSocket for bidirectional streaming
-- [ ] Budget overflow strategies (fallback to cheaper model, request extension)
 - [ ] Enhanced ComplexityEstimator with historical context injection
 - [ ] Enhanced ModelSelector with data-driven success rates
 - [x] Semantic code search (embeddings-based)
@@ -287,4 +329,5 @@ When deploying:
 - [x] Cost tracking (Budget system)
 - [x] Persistent memory (Supabase + pgvector)
 - [x] Learning system (task_outcomes table, historical queries)
+- [x] Smart retry strategy (analyze failure mode → upgrade/downgrade model)
 

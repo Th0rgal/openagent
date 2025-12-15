@@ -9,9 +9,27 @@ use serde_json::json;
 use crate::agents::{
     Agent, AgentContext, AgentId, AgentResult, AgentType, LeafAgent, LeafCapability,
 };
+use crate::budget::ExecutionSignals;
 use crate::llm::{ChatMessage, Role, ToolCall};
 use crate::task::{Task, TokenUsageSummary};
 use crate::tools::ToolRegistry;
+
+/// Result from running the agent loop with detailed signals for failure analysis.
+#[derive(Debug)]
+pub struct ExecutionLoopResult {
+    /// Final output text
+    pub output: String,
+    /// Total cost in cents
+    pub cost_cents: u64,
+    /// Log of tool calls made
+    pub tool_log: Vec<String>,
+    /// Token usage summary
+    pub usage: Option<TokenUsageSummary>,
+    /// Detailed signals for failure analysis
+    pub signals: ExecutionSignals,
+    /// Whether execution succeeded
+    pub success: bool,
+}
 
 /// Agent that executes tasks using tools.
 /// 
@@ -87,10 +105,19 @@ When task is complete, provide a clear summary of:
         task: &Task,
         model: &str,
         ctx: &AgentContext,
-    ) -> (String, u64, Vec<String>, Option<TokenUsageSummary>) {
+    ) -> ExecutionLoopResult {
         let mut total_cost_cents = 0u64;
         let mut tool_log = Vec::new();
         let mut usage: Option<TokenUsageSummary> = None;
+        
+        // Track execution signals for failure analysis
+        let mut successful_tool_calls = 0u32;
+        let mut failed_tool_calls = 0u32;
+        let mut files_modified = false;
+        let mut last_tool_calls: Vec<String> = Vec::new();
+        let mut repetitive_actions = false;
+        let mut has_error_messages = false;
+        let mut iterations_completed = 0u32;
 
         // If we can fetch pricing, compute real costs from token usage.
         let pricing = ctx.pricing.get_pricing(model).await;
@@ -117,29 +144,64 @@ When task is complete, provide a clear summary of:
 
         // Agent loop
         for iteration in 0..ctx.max_iterations {
+            iterations_completed = iteration as u32 + 1;
             tracing::debug!("TaskExecutor iteration {}", iteration + 1);
 
             // Check budget
             let remaining = task.budget().remaining_cents();
             if remaining == 0 && total_cost_cents > 0 {
-                return (
-                    "Budget exhausted before task completion".to_string(),
-                    total_cost_cents,
+                let signals = ExecutionSignals {
+                    iterations: iterations_completed,
+                    max_iterations: ctx.max_iterations as u32,
+                    successful_tool_calls,
+                    failed_tool_calls,
+                    files_modified,
+                    repetitive_actions,
+                    has_error_messages,
+                    partial_progress: files_modified || successful_tool_calls > 0,
+                    cost_spent_cents: total_cost_cents,
+                    budget_total_cents: task.budget().total_cents(),
+                    final_output: "Budget exhausted before task completion".to_string(),
+                    model_used: model.to_string(),
+                };
+                return ExecutionLoopResult {
+                    output: "Budget exhausted before task completion".to_string(),
+                    cost_cents: total_cost_cents,
                     tool_log,
                     usage,
-                );
+                    signals,
+                    success: false,
+                };
             }
 
             // Call LLM
             let response = match ctx.llm.chat_completion(model, &messages, Some(&tool_schemas)).await {
                 Ok(r) => r,
                 Err(e) => {
-                    return (
-                        format!("LLM error: {}", e),
-                        total_cost_cents,
+                    has_error_messages = true;
+                    let error_msg = format!("LLM error: {}", e);
+                    let signals = ExecutionSignals {
+                        iterations: iterations_completed,
+                        max_iterations: ctx.max_iterations as u32,
+                        successful_tool_calls,
+                        failed_tool_calls,
+                        files_modified,
+                        repetitive_actions,
+                        has_error_messages,
+                        partial_progress: files_modified || successful_tool_calls > 0,
+                        cost_spent_cents: total_cost_cents,
+                        budget_total_cents: task.budget().total_cents(),
+                        final_output: error_msg.clone(),
+                        model_used: model.to_string(),
+                    };
+                    return ExecutionLoopResult {
+                        output: error_msg,
+                        cost_cents: total_cost_cents,
                         tool_log,
                         usage,
-                    );
+                        signals,
+                        success: false,
+                    };
                 }
             };
 
@@ -175,6 +237,16 @@ When task is complete, provide a clear summary of:
                         tool_call_id: None,
                     });
 
+                    // Check for repetitive actions
+                    let current_calls: Vec<String> = tool_calls
+                        .iter()
+                        .map(|tc| format!("{}:{}", tc.function.name, tc.function.arguments))
+                        .collect();
+                    if current_calls == last_tool_calls && !current_calls.is_empty() {
+                        repetitive_actions = true;
+                    }
+                    last_tool_calls = current_calls;
+
                     // Execute each tool call
                     for tool_call in tool_calls {
                         tool_log.push(format!(
@@ -183,9 +255,22 @@ When task is complete, provide a clear summary of:
                             tool_call.function.arguments
                         ));
 
+                        // Track file modifications
+                        if tool_call.function.name == "write_file" 
+                            || tool_call.function.name == "delete_file" {
+                            files_modified = true;
+                        }
+
                         let result = match self.execute_tool_call(tool_call, ctx).await {
-                            Ok(output) => output,
-                            Err(e) => format!("Error: {}", e),
+                            Ok(output) => {
+                                successful_tool_calls += 1;
+                                output
+                            }
+                            Err(e) => {
+                                failed_tool_calls += 1;
+                                has_error_messages = true;
+                                format!("Error: {}", e)
+                            }
                         };
 
                         // Add tool result
@@ -203,24 +288,79 @@ When task is complete, provide a clear summary of:
 
             // No tool calls - final response
             if let Some(content) = response.content {
-                return (content, total_cost_cents, tool_log, usage);
+                let signals = ExecutionSignals {
+                    iterations: iterations_completed,
+                    max_iterations: ctx.max_iterations as u32,
+                    successful_tool_calls,
+                    failed_tool_calls,
+                    files_modified,
+                    repetitive_actions,
+                    has_error_messages,
+                    partial_progress: true, // Completed successfully
+                    cost_spent_cents: total_cost_cents,
+                    budget_total_cents: task.budget().total_cents(),
+                    final_output: content.clone(),
+                    model_used: model.to_string(),
+                };
+                return ExecutionLoopResult {
+                    output: content,
+                    cost_cents: total_cost_cents,
+                    tool_log,
+                    usage,
+                    signals,
+                    success: true,
+                };
             }
 
             // Empty response
-            return (
-                "LLM returned empty response".to_string(),
-                total_cost_cents,
+            has_error_messages = true;
+            let signals = ExecutionSignals {
+                iterations: iterations_completed,
+                max_iterations: ctx.max_iterations as u32,
+                successful_tool_calls,
+                failed_tool_calls,
+                files_modified,
+                repetitive_actions,
+                has_error_messages,
+                partial_progress: files_modified || successful_tool_calls > 0,
+                cost_spent_cents: total_cost_cents,
+                budget_total_cents: task.budget().total_cents(),
+                final_output: "LLM returned empty response".to_string(),
+                model_used: model.to_string(),
+            };
+            return ExecutionLoopResult {
+                output: "LLM returned empty response".to_string(),
+                cost_cents: total_cost_cents,
                 tool_log,
                 usage,
-            );
+                signals,
+                success: false,
+            };
         }
 
-        (
-            format!("Max iterations ({}) reached", ctx.max_iterations),
-            total_cost_cents,
+        // Max iterations reached
+        let signals = ExecutionSignals {
+            iterations: iterations_completed,
+            max_iterations: ctx.max_iterations as u32,
+            successful_tool_calls,
+            failed_tool_calls,
+            files_modified,
+            repetitive_actions,
+            has_error_messages,
+            partial_progress: files_modified || successful_tool_calls > 0,
+            cost_spent_cents: total_cost_cents,
+            budget_total_cents: task.budget().total_cents(),
+            final_output: format!("Max iterations ({}) reached", ctx.max_iterations),
+            model_used: model.to_string(),
+        };
+        ExecutionLoopResult {
+            output: format!("Max iterations ({}) reached", ctx.max_iterations),
+            cost_cents: total_cost_cents,
             tool_log,
             usage,
-        )
+            signals,
+            success: false,
+        }
     }
 }
 
@@ -229,6 +369,7 @@ impl Default for TaskExecutor {
         Self::new()
     }
 }
+
 
 #[async_trait]
 impl Agent for TaskExecutor {
@@ -253,26 +394,84 @@ impl Agent for TaskExecutor {
             .unwrap_or_else(|| ctx.config.default_model.clone());
         let model = selected.as_str();
 
-        let (output, cost_cents, tool_log, usage) = self.run_loop(task, model, ctx).await;
+        let result = self.run_loop(task, model, ctx).await;
 
         // Record telemetry
         task.analysis_mut().selected_model = Some(model.to_string());
-        task.analysis_mut().actual_usage = usage.clone();
+        task.analysis_mut().actual_usage = result.usage.clone();
 
         // Update task budget
-        let _ = task.budget_mut().try_spend(cost_cents);
+        let _ = task.budget_mut().try_spend(result.cost_cents);
 
-        AgentResult::success(&output, cost_cents)
+        let mut agent_result = if result.success {
+            AgentResult::success(&result.output, result.cost_cents)
+        } else {
+            AgentResult::failure(&result.output, result.cost_cents)
+        };
+
+        agent_result = agent_result
             .with_model(model)
             .with_data(json!({
-                "tool_calls": tool_log.len(),
-                "tools_used": tool_log,
-                "usage": usage.map(|u| json!({
+                "tool_calls": result.tool_log.len(),
+                "tools_used": result.tool_log,
+                "usage": result.usage.as_ref().map(|u| json!({
                     "prompt_tokens": u.prompt_tokens,
                     "completion_tokens": u.completion_tokens,
                     "total_tokens": u.total_tokens
                 })),
-            }))
+                "execution_signals": {
+                    "iterations": result.signals.iterations,
+                    "max_iterations": result.signals.max_iterations,
+                    "successful_tool_calls": result.signals.successful_tool_calls,
+                    "failed_tool_calls": result.signals.failed_tool_calls,
+                    "files_modified": result.signals.files_modified,
+                    "repetitive_actions": result.signals.repetitive_actions,
+                    "partial_progress": result.signals.partial_progress,
+                }
+            }));
+
+        agent_result
+    }
+}
+
+impl TaskExecutor {
+    /// Execute a task and return detailed execution result for retry analysis.
+    pub async fn execute_with_signals(&self, task: &mut Task, ctx: &AgentContext) -> (AgentResult, ExecutionSignals) {
+        let selected = task
+            .analysis()
+            .selected_model
+            .clone()
+            .unwrap_or_else(|| ctx.config.default_model.clone());
+        let model = selected.as_str();
+
+        let result = self.run_loop(task, model, ctx).await;
+
+        // Record telemetry
+        task.analysis_mut().selected_model = Some(model.to_string());
+        task.analysis_mut().actual_usage = result.usage.clone();
+
+        // Update task budget
+        let _ = task.budget_mut().try_spend(result.cost_cents);
+
+        let mut agent_result = if result.success {
+            AgentResult::success(&result.output, result.cost_cents)
+        } else {
+            AgentResult::failure(&result.output, result.cost_cents)
+        };
+
+        agent_result = agent_result
+            .with_model(model)
+            .with_data(json!({
+                "tool_calls": result.tool_log.len(),
+                "tools_used": result.tool_log,
+                "usage": result.usage.as_ref().map(|u| json!({
+                    "prompt_tokens": u.prompt_tokens,
+                    "completion_tokens": u.completion_tokens,
+                    "total_tokens": u.total_tokens
+                })),
+            }));
+
+        (agent_result, result.signals)
     }
 }
 

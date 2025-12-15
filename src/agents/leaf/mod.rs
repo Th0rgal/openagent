@@ -13,6 +13,6 @@ mod verifier;
 
 pub use complexity::{ComplexityEstimator, ComplexityPromptVariant};
 pub use model_select::ModelSelector;
-pub use executor::TaskExecutor;
+pub use executor::{TaskExecutor, ExecutionLoopResult};
 pub use verifier::Verifier;
 
