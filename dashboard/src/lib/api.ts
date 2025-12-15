@@ -132,6 +132,7 @@ export function streamTask(id: string, onEvent: (event: { type: string; data: un
   const controller = new AbortController();
   const decoder = new TextDecoder();
   let buffer = '';
+  let sawDone = false;
 
   void (async () => {
     try {
@@ -141,8 +142,17 @@ export function streamTask(id: string, onEvent: (event: { type: string; data: un
         signal: controller.signal,
       });
 
-      if (!res.ok) return;
-      if (!res.body) return;
+      if (!res.ok) {
+        onEvent({
+          type: 'error',
+          data: { message: `Stream request failed (${res.status})`, status: res.status },
+        });
+        return;
+      }
+      if (!res.body) {
+        onEvent({ type: 'error', data: { message: 'Stream response had no body' } });
+        return;
+      }
 
       const reader = res.body.getReader();
       while (true) {
@@ -168,14 +178,24 @@ export function streamTask(id: string, onEvent: (event: { type: string; data: un
 
           if (!data) continue;
           try {
+            if (eventType === 'done') {
+              sawDone = true;
+            }
             onEvent({ type: eventType, data: JSON.parse(data) });
           } catch {
             // ignore parse errors
           }
         }
       }
+
+      // If the stream ends without a done event and we didn't intentionally abort, surface it.
+      if (!controller.signal.aborted && !sawDone) {
+        onEvent({ type: 'error', data: { message: 'Stream ended unexpectedly' } });
+      }
     } catch {
-      // ignore aborted / network errors
+      if (!controller.signal.aborted) {
+        onEvent({ type: 'error', data: { message: 'Stream connection failed' } });
+      }
     }
   })();
 

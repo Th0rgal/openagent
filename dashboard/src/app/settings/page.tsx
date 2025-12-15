@@ -4,11 +4,33 @@ import { useState, useEffect } from 'react';
 import { getHealth, HealthResponse } from '@/lib/api';
 import { Server, Bot, Cpu, Wallet, Save } from 'lucide-react';
 
+function readSavedSettings(): Partial<{
+  apiUrl: string;
+  defaultModel: string;
+  defaultBudget: string;
+}> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem('settings');
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    if (typeof parsed.apiUrl === 'string') out.apiUrl = parsed.apiUrl;
+    if (typeof parsed.defaultModel === 'string') out.defaultModel = parsed.defaultModel;
+    if (typeof parsed.defaultBudget === 'string') out.defaultBudget = parsed.defaultBudget;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 export default function SettingsPage() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [apiUrl, setApiUrl] = useState('http://127.0.0.1:3000');
-  const [defaultModel, setDefaultModel] = useState('anthropic/claude-sonnet-4.5');
-  const [defaultBudget, setDefaultBudget] = useState('1000');
+  const [apiUrl, setApiUrl] = useState(() => readSavedSettings().apiUrl ?? 'http://127.0.0.1:3000');
+  const [defaultModel, setDefaultModel] = useState(
+    () => readSavedSettings().defaultModel ?? 'anthropic/claude-sonnet-4.5'
+  );
+  const [defaultBudget, setDefaultBudget] = useState(() => readSavedSettings().defaultBudget ?? '1000');
 
   useEffect(() => {
     const checkHealth = async () => {

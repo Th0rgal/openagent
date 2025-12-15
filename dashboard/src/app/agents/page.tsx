@@ -12,6 +12,7 @@ import {
   XCircle,
   Loader,
   Clock,
+  Ban,
   ChevronRight,
   ChevronDown,
   Zap,
@@ -23,7 +24,7 @@ import {
 interface AgentNode {
   id: string;
   type: 'Root' | 'Node' | 'ComplexityEstimator' | 'ModelSelector' | 'TaskExecutor' | 'Verifier';
-  status: 'running' | 'completed' | 'failed' | 'pending' | 'paused';
+  status: 'running' | 'completed' | 'failed' | 'pending' | 'paused' | 'cancelled';
   name: string;
   description: string;
   budgetAllocated: number;
@@ -49,6 +50,7 @@ const statusColors = {
   failed: 'border-[var(--error)] bg-[var(--error)]/10',
   pending: 'border-[var(--warning)] bg-[var(--warning)]/10',
   paused: 'border-[var(--foreground-muted)] bg-[var(--foreground-muted)]/10',
+  cancelled: 'border-[var(--foreground-muted)] bg-[var(--foreground-muted)]/10',
 };
 
 const statusTextColors = {
@@ -57,7 +59,23 @@ const statusTextColors = {
   failed: 'text-[var(--error)]',
   pending: 'text-[var(--warning)]',
   paused: 'text-[var(--foreground-muted)]',
+  cancelled: 'text-[var(--foreground-muted)]',
 };
+
+function mapTaskStatusToAgentStatus(status: TaskState['status']): AgentNode['status'] {
+  switch (status) {
+    case 'running':
+      return 'running';
+    case 'completed':
+      return 'completed';
+    case 'failed':
+      return 'failed';
+    case 'pending':
+      return 'pending';
+    case 'cancelled':
+      return 'cancelled';
+  }
+}
 
 function AgentTreeNode({
   agent,
@@ -132,6 +150,9 @@ function AgentTreeNode({
           {agent.status === 'pending' && (
             <Clock className={cn('h-4 w-4', statusTextColors[agent.status])} />
           )}
+          {agent.status === 'cancelled' && (
+            <Ban className={cn('h-4 w-4', statusTextColors[agent.status])} />
+          )}
 
           {/* Budget */}
           <div className="text-right">
@@ -192,7 +213,7 @@ export default function AgentsPage() {
     ? {
         id: 'root',
         type: 'Root',
-        status: selectedTask.status === 'running' ? 'running' : selectedTask.status === 'completed' ? 'completed' : 'failed',
+        status: mapTaskStatusToAgentStatus(selectedTask.status),
         name: 'Root Agent',
         description: selectedTask.task.slice(0, 50) + '...',
         budgetAllocated: 1000,
@@ -221,7 +242,7 @@ export default function AgentsPage() {
           {
             id: 'executor',
             type: 'TaskExecutor',
-            status: selectedTask.status === 'running' ? 'running' : selectedTask.status === 'completed' ? 'completed' : 'failed',
+            status: mapTaskStatusToAgentStatus(selectedTask.status),
             name: 'Task Executor',
             description: 'Execute using tools',
             budgetAllocated: 900,
@@ -231,7 +252,14 @@ export default function AgentsPage() {
           {
             id: 'verifier',
             type: 'Verifier',
-            status: selectedTask.status === 'completed' ? 'completed' : 'pending',
+            status:
+              selectedTask.status === 'completed'
+                ? 'completed'
+                : selectedTask.status === 'failed'
+                  ? 'failed'
+                  : selectedTask.status === 'cancelled'
+                    ? 'cancelled'
+                    : 'pending',
             name: 'Verifier',
             description: 'Verify task completion',
             budgetAllocated: 80,
@@ -270,6 +298,9 @@ export default function AgentsPage() {
                 )}
                 {task.status === 'pending' && (
                   <Clock className="h-3 w-3 text-[var(--warning)]" />
+                )}
+                {task.status === 'cancelled' && (
+                  <Ban className="h-3 w-3 text-[var(--foreground-muted)]" />
                 )}
                 <span className="truncate text-sm text-[var(--foreground)]">
                   {task.task.slice(0, 30)}...

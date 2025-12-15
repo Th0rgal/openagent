@@ -393,7 +393,7 @@ async fn stream_task(
             last_log_len = log_entries.len();
             
             // Check if task is done
-            if status == TaskStatus::Completed || status == TaskStatus::Failed {
+            if status == TaskStatus::Completed || status == TaskStatus::Failed || status == TaskStatus::Cancelled {
                 let event = Event::default()
                     .event("done")
                     .json_data(serde_json::json!({

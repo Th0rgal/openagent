@@ -21,6 +21,8 @@ import {
   XCircle,
   Code,
   FileText,
+  Ban,
+  Clock,
 } from 'lucide-react';
 
 interface Message {
@@ -28,7 +30,7 @@ interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: Date;
-  status?: 'pending' | 'running' | 'completed' | 'failed';
+  status?: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   logs?: TaskLogEntry[];
 }
 
@@ -41,6 +43,7 @@ export default function ControlPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const loadedFromUrlTaskIdRef = useRef<string | null>(null);
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
+  const streamCleanupRef = useRef<null | (() => void)>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -49,6 +52,14 @@ export default function ControlPage() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  useEffect(() => {
+    return () => {
+      // Ensure we don't leak SSE connections when navigating away.
+      streamCleanupRef.current?.();
+      streamCleanupRef.current = null;
+    };
+  }, []);
 
   const loadTask = useCallback(async (taskId: string) => {
     try {
@@ -116,6 +127,9 @@ export default function ControlPage() {
       setMessages((prev) => [...prev, assistantMessage]);
 
       // Start streaming
+      // Abort any previous stream.
+      streamCleanupRef.current?.();
+
       const cleanup = streamTask(response.id, (event) => {
         if (event.type === 'log') {
           const logEntry = event.data as TaskLogEntry;
@@ -141,11 +155,26 @@ export default function ControlPage() {
           );
           setCurrentTaskId(null);
           setIsLoading(false);
+          streamCleanupRef.current = null;
+        } else if (event.type === 'error') {
+          const err = event.data as { message?: string; status?: number };
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === `assistant-${response.id}`
+                ? {
+                    ...m,
+                    content: err?.message || 'Streaming failed',
+                    status: 'failed',
+                  }
+                : m
+            )
+          );
+          setCurrentTaskId(null);
+          setIsLoading(false);
+          streamCleanupRef.current = null;
         }
       });
-
-      // Cleanup on unmount
-      return cleanup;
+      streamCleanupRef.current = cleanup;
     } catch (error) {
       console.error('Failed to create task:', error);
       setMessages((prev) => [
@@ -164,6 +193,10 @@ export default function ControlPage() {
   const handleStop = async () => {
     if (!currentTaskId) return;
     try {
+      // Stop streaming locally immediately.
+      streamCleanupRef.current?.();
+      streamCleanupRef.current = null;
+
       await stopTask(currentTaskId);
       setMessages((prev) =>
         prev.map((m) =>
@@ -255,6 +288,12 @@ export default function ControlPage() {
                   {/* Status badge */}
                   {message.status && message.role === 'assistant' && (
                     <div className="mb-2 flex items-center gap-2">
+                      {message.status === 'pending' && (
+                        <span className="flex items-center gap-1 text-xs text-[var(--warning)]">
+                          <Clock className="h-3 w-3" />
+                          Pending
+                        </span>
+                      )}
                       {message.status === 'running' && (
                         <span className="flex items-center gap-1 text-xs text-[var(--accent)]">
                           <Loader className="h-3 w-3 animate-spin" />
@@ -265,6 +304,12 @@ export default function ControlPage() {
                         <span className="flex items-center gap-1 text-xs text-[var(--success)]">
                           <CheckCircle className="h-3 w-3" />
                           Completed
+                        </span>
+                      )}
+                      {message.status === 'cancelled' && (
+                        <span className="flex items-center gap-1 text-xs text-[var(--foreground-muted)]">
+                          <Ban className="h-3 w-3" />
+                          Cancelled
                         </span>
                       )}
                       {message.status === 'failed' && (
