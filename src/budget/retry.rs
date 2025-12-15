@@ -255,6 +255,22 @@ impl ExecutionSignals {
             || output_lower.contains("connection refused")
             || output_lower.contains("timeout")
             || output_lower.contains("rate limit")
+            || output_lower.contains("429")
+            || output_lower.contains("too many requests")
+            || output_lower.contains("rate limited")
+            || output_lower.contains("server error")
+            || output_lower.contains("502")
+            || output_lower.contains("503")
+            || output_lower.contains("504")
+    }
+
+    /// Check if this is specifically a rate limit error.
+    pub fn is_rate_limit_error(&self) -> bool {
+        let output_lower = self.final_output.to_lowercase();
+        output_lower.contains("rate limit")
+            || output_lower.contains("429")
+            || output_lower.contains("too many requests")
+            || output_lower.contains("rate limited")
     }
     
     /// Generate a retry recommendation based on analysis.
@@ -308,10 +324,20 @@ impl ExecutionSignals {
             }
             
             FailureMode::ExternalError => {
-                // External issue, retry with same setup
-                RetryRecommendation::ContinueSameModel {
-                    additional_budget_cents: self.cost_spent_cents / 2, // Less budget needed for retry
-                    reason: "External error occurred. Retry with same configuration.".to_string(),
+                // Check if it's a rate limit error
+                if self.is_rate_limit_error() {
+                    // Rate limit - try a different model to avoid hitting the same limit
+                    RetryRecommendation::TryCheaperModel {
+                        suggested_model: self.suggest_alternative_model(),
+                        additional_budget_cents: self.cost_spent_cents,
+                        reason: "Rate limited by provider. Trying alternative model to avoid same limit.".to_string(),
+                    }
+                } else {
+                    // Other external issue, retry with same setup
+                    RetryRecommendation::ContinueSameModel {
+                        additional_budget_cents: self.cost_spent_cents / 2, // Less budget needed for retry
+                        reason: "External error occurred. Retry with same configuration.".to_string(),
+                    }
                 }
             }
             
@@ -385,6 +411,33 @@ impl ExecutionSignals {
             _ => {
                 // Default upgrade path
                 Some("anthropic/claude-sonnet-4.5".to_string())
+            }
+        }
+    }
+
+    /// Suggest an alternative model from a different provider (useful for rate limits).
+    fn suggest_alternative_model(&self) -> Option<String> {
+        // When rate limited, try a model from a different provider
+        match self.model_used.as_str() {
+            // Anthropic -> OpenAI
+            m if m.starts_with("anthropic/") => {
+                Some("openai/gpt-4o-mini".to_string())
+            }
+            // OpenAI -> Google
+            m if m.starts_with("openai/") => {
+                Some("google/gemini-2.0-flash-001".to_string())
+            }
+            // Google -> Anthropic
+            m if m.starts_with("google/") => {
+                Some("anthropic/claude-haiku-4.5".to_string())
+            }
+            // Mistral -> Anthropic (particularly for free tier rate limits)
+            m if m.starts_with("mistralai/") || m.contains("mistral") => {
+                Some("anthropic/claude-haiku-4.5".to_string())
+            }
+            // Default: try Anthropic
+            _ => {
+                Some("anthropic/claude-haiku-4.5".to_string())
             }
         }
     }

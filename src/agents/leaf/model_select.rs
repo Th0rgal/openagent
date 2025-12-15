@@ -266,6 +266,10 @@ impl Agent for ModelSelector {
     /// # Returns
     /// AgentResult with ModelRecommendation in the `data` field.
     async fn execute(&self, task: &mut Task, ctx: &AgentContext) -> AgentResult {
+        if ctx.is_cancelled() {
+            return AgentResult::failure("Cancelled", 0);
+        }
+
         // Get complexity + estimated tokens from task analysis (populated by ComplexityEstimator).
         let complexity = task
             .analysis()

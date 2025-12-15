@@ -8,6 +8,7 @@ mod file_ops;
 mod git;
 mod search;
 mod terminal;
+mod ui;
 mod web;
 
 use std::collections::HashMap;
@@ -76,6 +77,10 @@ impl ToolRegistry {
         tools.insert("git_diff".to_string(), Arc::new(git::GitDiff));
         tools.insert("git_commit".to_string(), Arc::new(git::GitCommit));
         tools.insert("git_log".to_string(), Arc::new(git::GitLog));
+
+        // Frontend Tool UI (schemas for rich rendering in the dashboard)
+        tools.insert("ui_optionList".to_string(), Arc::new(ui::UiOptionList));
+        tools.insert("ui_dataTable".to_string(), Arc::new(ui::UiDataTable));
 
         Self { tools }
     }

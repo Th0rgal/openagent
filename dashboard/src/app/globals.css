@@ -20,6 +20,18 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--background-secondary);
+  --color-card-foreground: var(--foreground);
+  --color-muted: var(--background-tertiary);
+  --color-muted-foreground: var(--foreground-muted);
+  --color-border: var(--border);
+
+  --color-primary: var(--accent);
+  --color-primary-foreground: #ffffff;
+
+  --color-destructive: var(--error);
+  --color-destructive-foreground: #ffffff;
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }

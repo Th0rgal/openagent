@@ -62,8 +62,12 @@ export default function HistoryPage() {
     <div className="p-8">
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-[var(--foreground)]">History</h1>
-        <p className="text-sm text-[var(--foreground-muted)]">View all past and current tasks</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-[var(--foreground)]">
+          History
+        </h1>
+        <p className="mt-1 text-sm text-[var(--foreground-muted)]">
+          View all past and current tasks
+        </p>
       </div>
 
       {/* Filters */}

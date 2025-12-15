@@ -242,3 +242,117 @@ export async function getRunTasks(id: string): Promise<{ run_id: string; tasks: 
   return res.json();
 }
 
+// ==================== Global Control Session ====================
+
+export type ControlRunState = 'idle' | 'running' | 'waiting_for_tool';
+
+export type ControlAgentEvent =
+  | { type: 'status'; state: ControlRunState; queue_len: number }
+  | { type: 'user_message'; id: string; content: string }
+  | {
+      type: 'assistant_message';
+      id: string;
+      content: string;
+      success: boolean;
+      cost_cents: number;
+      model: string | null;
+    }
+  | { type: 'tool_call'; tool_call_id: string; name: string; args: unknown }
+  | { type: 'tool_result'; tool_call_id: string; name: string; result: unknown }
+  | { type: 'error'; message: string };
+
+export async function postControlMessage(content: string): Promise<{ id: string; queued: boolean }> {
+  const res = await apiFetch('/api/control/message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  if (!res.ok) throw new Error('Failed to post control message');
+  return res.json();
+}
+
+export async function postControlToolResult(payload: {
+  tool_call_id: string;
+  name: string;
+  result: unknown;
+}): Promise<void> {
+  const res = await apiFetch('/api/control/tool_result', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to post tool result');
+}
+
+export async function cancelControl(): Promise<void> {
+  const res = await apiFetch('/api/control/cancel', { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to cancel control session');
+}
+
+export function streamControl(
+  onEvent: (event: { type: string; data: unknown }) => void
+): () => void {
+  const controller = new AbortController();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  void (async () => {
+    try {
+      const res = await apiFetch('/api/control/stream', {
+        method: 'GET',
+        headers: { Accept: 'text/event-stream' },
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        onEvent({
+          type: 'error',
+          data: { message: `Stream request failed (${res.status})`, status: res.status },
+        });
+        return;
+      }
+      if (!res.body) {
+        onEvent({ type: 'error', data: { message: 'Stream response had no body' } });
+        return;
+      }
+
+      const reader = res.body.getReader();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let idx = buffer.indexOf('\n\n');
+        while (idx !== -1) {
+          const raw = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          idx = buffer.indexOf('\n\n');
+
+          let eventType = 'message';
+          let data = '';
+          for (const line of raw.split('\n')) {
+            if (line.startsWith('event:')) {
+              eventType = line.slice('event:'.length).trim();
+            } else if (line.startsWith('data:')) {
+              data += line.slice('data:'.length).trim();
+            }
+          }
+
+          if (!data) continue;
+          try {
+            onEvent({ type: eventType, data: JSON.parse(data) });
+          } catch {
+            // ignore parse errors
+          }
+        }
+      }
+    } catch {
+      if (!controller.signal.aborted) {
+        onEvent({ type: 'error', data: { message: 'Stream connection failed' } });
+      }
+    }
+  })();
+
+  return () => controller.abort();
+}
+

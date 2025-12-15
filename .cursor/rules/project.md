@@ -391,6 +391,36 @@ MEMORY_RERANK_MODEL      - Optional. Default: qwen/qwen3-reranker-8b
 - **Budget fallback**: `anthropic/claude-3.5-haiku` - Fast, cheap, good for simple tasks
 - **Complex tasks**: `anthropic/claude-opus-4.5` - Highest capability when needed
 
+## Deployment
+
+### Production Server
+- **Host**: `95.216.112.253`
+- **SSH Access**: `ssh root@95.216.112.253` (key-based auth)
+- **Backend URL**: `https://agent-backend.thomas.md` (proxied to localhost:3000)
+- **Dashboard URL**: `https://agent.thomas.md` (Vercel deployment)
+- **Environment files**: `/etc/open_agent/open_agent.env`
+- **Service**: `systemctl status open_agent` (runs as systemd service)
+- **Binary**: `/usr/local/bin/open_agent`
+
+### Local Development
+- **Backend API**: `http://127.0.0.1:3000` (Rust server via `cargo run`)
+- **Dashboard**: `http://127.0.0.1:3001` (Next.js via `bun run dev`)
+- **Environment files**: 
+  - Backend: `.env` in project root
+  - Dashboard: `dashboard/.env.local`
+
+### Accessing Environment Variables
+The cursor agent has SSH access to the production server and can:
+- Read/modify env variables at `/etc/open_agent/open_agent.env`
+- Restart services: `systemctl restart open_agent`
+- Check logs: `journalctl -u open_agent -f`
+
+### Port Configuration
+| Service | Local Port | Production URL |
+|---------|-----------|----------------|
+| Backend API | 3000 | https://agent-backend.thomas.md |
+| Dashboard | 3001 | https://agent.thomas.md |
+
 ## Security Considerations
 
 This agent has **full machine access**. It can:

@@ -3,8 +3,10 @@
 //! This module provides a trait-based abstraction over LLM providers,
 //! with OpenRouter as the primary implementation.
 
+mod error;
 mod openrouter;
 
+pub use error::{LlmError, LlmErrorKind, RetryConfig, classify_http_status};
 pub use openrouter::OpenRouterClient;
 
 use async_trait::async_trait;

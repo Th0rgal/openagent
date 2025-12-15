@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::llm::LlmClient;
 use crate::memory::MemorySystem;
 use crate::tools::ToolRegistry;
+use tokio::sync::broadcast;
 
 /// Shared context passed to all agents during execution.
 /// 
@@ -38,6 +39,18 @@ pub struct AgentContext {
     
     /// Memory system for persistent storage (optional)
     pub memory: Option<MemorySystem>,
+
+    /// Optional event sink for streaming agent events (e.g. control session SSE).
+    pub control_events: Option<broadcast::Sender<crate::api::control::AgentEvent>>,
+
+    /// Optional hub for awaiting frontend (interactive) tool results.
+    pub frontend_tool_hub: Option<Arc<crate::api::control::FrontendToolHub>>,
+
+    /// Optional shared control-session status (so the executor can switch to WaitingForTool).
+    pub control_status: Option<Arc<tokio::sync::RwLock<crate::api::control::ControlStatus>>>,
+
+    /// Optional cancellation token for cooperative cancellation.
+    pub cancel_token: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl AgentContext {
@@ -58,6 +71,10 @@ impl AgentContext {
             workspace,
             max_split_depth: 3, // Default max recursion for splitting
             memory: None,
+            control_events: None,
+            frontend_tool_hub: None,
+            control_status: None,
+            cancel_token: None,
         }
     }
     
@@ -79,6 +96,10 @@ impl AgentContext {
             workspace,
             max_split_depth: 3,
             memory,
+            control_events: None,
+            frontend_tool_hub: None,
+            control_status: None,
+            cancel_token: None,
         }
     }
 
@@ -96,6 +117,10 @@ impl AgentContext {
             max_split_depth: self.max_split_depth.saturating_sub(1),
             max_iterations: self.max_iterations,
             memory: self.memory.clone(),
+            control_events: self.control_events.clone(),
+            frontend_tool_hub: self.frontend_tool_hub.clone(),
+            control_status: self.control_status.clone(),
+            cancel_token: self.cancel_token.clone(),
         }
     }
 
@@ -112,6 +137,14 @@ impl AgentContext {
     /// Check if memory is available.
     pub fn has_memory(&self) -> bool {
         self.memory.is_some()
+    }
+
+    /// Check if cooperative cancellation was requested.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_token
+            .as_ref()
+            .map(|t| t.is_cancelled())
+            .unwrap_or(false)
     }
 }
 

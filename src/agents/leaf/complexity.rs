@@ -203,6 +203,10 @@ impl Agent for ComplexityEstimator {
     /// # Returns
     /// AgentResult with Complexity data in the `data` field.
     async fn execute(&self, task: &mut Task, ctx: &AgentContext) -> AgentResult {
+        if ctx.is_cancelled() {
+            return AgentResult::failure("Cancelled", 0);
+        }
+
         let prompt = self.build_prompt(task);
         
         let messages = vec![

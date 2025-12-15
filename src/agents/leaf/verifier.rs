@@ -313,6 +313,10 @@ impl Agent for Verifier {
     }
 
     async fn execute(&self, task: &mut Task, ctx: &AgentContext) -> AgentResult {
+        if ctx.is_cancelled() {
+            return AgentResult::failure("Cancelled", 0);
+        }
+
         let result = self.verify(task, ctx).await;
         
         if result.passed() {

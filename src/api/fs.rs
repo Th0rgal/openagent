@@ -12,13 +12,12 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 
 use super::routes::AppState;
-use super::ssh_util::{materialize_private_key, sftp_batch, ssh_exec};
+use super::ssh_util::{materialize_private_key, sftp_batch, ssh_exec, ssh_exec_with_stdin};
 
 #[derive(Debug, Deserialize)]
 pub struct PathQuery {
@@ -45,9 +44,7 @@ pub struct FsEntry {
     pub mtime: i64,
 }
 
-fn python_list_script_b64() -> String {
-    // Reads sys.argv[1] as path; prints JSON list to stdout.
-    let script = r#"
+const LIST_SCRIPT: &str = r#"
 import os, sys, json, stat
 
 path = sys.argv[1]
@@ -80,8 +77,6 @@ except FileNotFoundError:
 
 print(json.dumps(out))
 "#;
-    base64::engine::general_purpose::STANDARD.encode(script.as_bytes())
-}
 
 async fn get_key_and_cfg(state: &Arc<AppState>) -> Result<(crate::config::ConsoleSshConfig, super::ssh_util::TempKeyFile), (StatusCode, String)> {
     let cfg = state.config.console_ssh.clone();
@@ -101,13 +96,13 @@ pub async fn list(
 ) -> Result<Json<Vec<FsEntry>>, (StatusCode, String)> {
     let (cfg, key_file) = get_key_and_cfg(&state).await?;
 
-    let b64 = python_list_script_b64();
-    let code = format!("import base64,sys; exec(base64.b64decode('{}'))", b64);
-    let out = ssh_exec(
+    // Avoid ssh quoting issues by piping the script on stdin.
+    let out = ssh_exec_with_stdin(
         &cfg,
         key_file.path(),
         "python3",
-        &vec!["-c".into(), code, q.path.clone()],
+        &vec!["-".into(), q.path.clone()],
+        LIST_SCRIPT,
     )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

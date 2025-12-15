@@ -221,13 +221,21 @@ impl Config {
         }
         
         // Memory configuration (optional)
+        let embed_model = std::env::var("MEMORY_EMBED_MODEL")
+            .unwrap_or_else(|_| "openai/text-embedding-3-small".to_string());
+        
+        // Determine embed dimension from env or infer from model
+        let embed_dimension = std::env::var("MEMORY_EMBED_DIMENSION")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| infer_embed_dimension(&embed_model));
+        
         let memory = MemoryConfig {
             supabase_url: std::env::var("SUPABASE_URL").ok(),
             supabase_service_role_key: std::env::var("SUPABASE_SERVICE_ROLE_KEY").ok(),
-            embed_model: std::env::var("MEMORY_EMBED_MODEL")
-                .unwrap_or_else(|_| "openai/text-embedding-3-small".to_string()),
+            embed_model,
             rerank_model: std::env::var("MEMORY_RERANK_MODEL").ok(),
-            embed_dimension: 1536, // OpenAI text-embedding-3-small default
+            embed_dimension,
         };
 
         let console_ssh = ConsoleSshConfig {
@@ -282,6 +290,37 @@ fn parse_bool(value: &str) -> Result<bool, String> {
         "0" | "false" | "f" | "no" | "n" | "off" => Ok(false),
         other => Err(format!("expected boolean-like value, got: {}", other)),
     }
+}
+
+/// Infer embedding dimension from model name.
+fn infer_embed_dimension(model: &str) -> usize {
+    let model_lower = model.to_lowercase();
+    
+    // Qwen embedding models output 4096 dimensions
+    if model_lower.contains("qwen") && model_lower.contains("embedding") {
+        return 4096;
+    }
+    
+    // OpenAI text-embedding-3 models
+    if model_lower.contains("text-embedding-3") {
+        if model_lower.contains("large") {
+            return 3072;
+        }
+        return 1536; // small
+    }
+    
+    // OpenAI ada
+    if model_lower.contains("ada") {
+        return 1536;
+    }
+    
+    // Cohere embed models
+    if model_lower.contains("embed-english") || model_lower.contains("embed-multilingual") {
+        return 1024;
+    }
+    
+    // Default fallback
+    1536
 }
 
 fn read_private_key_from_env() -> Result<Option<String>, ConfigError> {

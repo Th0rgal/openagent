@@ -32,6 +32,7 @@ use crate::tools::ToolRegistry;
 use super::types::*;
 use super::auth;
 use super::console;
+use super::control;
 use super::fs;
 
 /// Shared application state.
@@ -42,6 +43,8 @@ pub struct AppState {
     pub root_agent: AgentRef,
     /// Memory system (optional)
     pub memory: Option<MemorySystem>,
+    /// Global interactive control session
+    pub control: control::ControlState,
 }
 
 /// Start the HTTP server.
@@ -54,12 +57,20 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     
     // Initialize memory system (optional - needs Supabase config)
     let memory = memory::init_memory(&config.memory, &config.api_key).await;
+
+    // Spawn the single global control session actor.
+    let control_state = control::spawn_control_session(
+        config.clone(),
+        Arc::clone(&root_agent),
+        memory.clone(),
+    );
     
     let state = Arc::new(AppState {
         config: config.clone(),
         tasks: RwLock::new(HashMap::new()),
         root_agent,
         memory,
+        control: control_state,
     });
 
     let public_routes = Router::new()
@@ -75,6 +86,11 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         .route("/api/task/:id/stop", post(stop_task))
         .route("/api/task/:id/stream", get(stream_task))
         .route("/api/tasks", get(list_tasks))
+        // Global control session endpoints
+        .route("/api/control/message", post(control::post_message))
+        .route("/api/control/tool_result", post(control::post_tool_result))
+        .route("/api/control/stream", get(control::stream))
+        .route("/api/control/cancel", post(control::post_cancel))
         // Memory endpoints
         .route("/api/runs", get(list_runs))
         .route("/api/runs/:id", get(get_run))

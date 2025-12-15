@@ -142,6 +142,20 @@ PORT                - Optional. Default: 3000
 MAX_ITERATIONS      - Optional. Default: 50
 ```
 
+## Deployment
+
+### Production Server
+- **Host**: `95.216.112.253`
+- **SSH Access**: `ssh root@95.216.112.253` (key-based auth available to agent)
+- **Environment files**: Located in `/root/open_agent/.env` on the server
+
+### Local Development
+- **Backend API**: `http://127.0.0.1:3000` (Rust server via `cargo run`)
+- **Dashboard**: `http://127.0.0.1:3001` (Next.js via `bun run dev`)
+- **Environment files**: 
+  - Backend: `.env` in project root
+  - Dashboard: `dashboard/.env.local`
+
 ## Security Considerations
 
 This agent has **full machine access**. It can:

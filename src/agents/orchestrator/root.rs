@@ -206,6 +206,10 @@ Respond ONLY with the JSON object."#,
 
         // Execute each subtask with planning + verification + smart retry.
         for task in &mut tasks {
+            if ctx.is_cancelled() {
+                return AgentResult::failure("Cancelled", total_cost);
+            }
+
             let subtask_result = self
                 .execute_single_subtask_with_retry(task, ctx, &retry_config)
                 .await;
@@ -260,6 +264,10 @@ Respond ONLY with the JSON object."#,
         let mut retry_history = Vec::new();
 
         loop {
+            if ctx.is_cancelled() {
+                return AgentResult::failure("Cancelled", total_cost);
+            }
+
             // 1) Estimate complexity for this subtask.
             let est = self.complexity_estimator.execute(task, ctx).await;
             total_cost += est.cost_cents;
@@ -500,6 +508,10 @@ impl Agent for RootAgent {
     async fn execute(&self, task: &mut Task, ctx: &AgentContext) -> AgentResult {
         let mut total_cost = 0u64;
 
+        if ctx.is_cancelled() {
+            return AgentResult::failure("Cancelled", total_cost);
+        }
+
         // Step 1: Estimate complexity (cost is tracked in the result)
         let complexity_result = self.complexity_estimator.execute(task, ctx).await;
         total_cost += complexity_result.cost_cents;
@@ -576,6 +588,10 @@ impl RootAgent {
         let mut retry_history = Vec::new();
 
         loop {
+            if ctx.is_cancelled() {
+                return AgentResult::failure("Cancelled", total_cost);
+            }
+
             // Select model (U-curve) for execution
             let sel = self.model_selector.execute(task, ctx).await;
             total_cost += sel.cost_cents;
