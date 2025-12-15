@@ -25,6 +25,9 @@ pub struct PricingInfo {
     
     /// Maximum output tokens
     pub max_output_tokens: Option<u64>,
+    
+    /// Whether this model supports tool/function calling
+    pub supports_tools: bool,
 }
 
 impl PricingInfo {
@@ -134,6 +137,12 @@ impl ModelPricing {
         let mut cache = self.cache.write().await;
         
         for model in data.data {
+            // Check if model supports tools/function calling
+            let supports_tools = model.supported_parameters
+                .as_ref()
+                .map(|params| params.iter().any(|p| p == "tools"))
+                .unwrap_or(false);
+            
             let info = PricingInfo {
                 model_id: model.id.clone(),
                 prompt_cost_per_million: parse_price(&model.pricing.prompt),
@@ -141,6 +150,7 @@ impl ModelPricing {
                 context_length: model.context_length.unwrap_or(4096),
                 max_output_tokens: model.top_provider.as_ref()
                     .and_then(|p| p.max_completion_tokens),
+                supports_tools,
             };
             cache.insert(model.id, info);
         }
@@ -151,6 +161,7 @@ impl ModelPricing {
     /// Get default pricing for common models (fallback).
     fn default_pricing(&self, model_id: &str) -> Option<PricingInfo> {
         // Hardcoded defaults for when API is unavailable
+        // All these models support tool calling
         let defaults = [
             ("openai/gpt-4.1-mini", 0.40, 1.60, 1_000_000),
             ("openai/gpt-4.1", 2.50, 10.00, 1_000_000),
@@ -158,6 +169,7 @@ impl ModelPricing {
             ("openai/gpt-4o-mini", 0.15, 0.60, 128_000),
             ("anthropic/claude-3.5-sonnet", 3.00, 15.00, 200_000),
             ("anthropic/claude-3-haiku", 0.25, 1.25, 200_000),
+            ("google/gemini-2.0-flash-001", 0.10, 0.40, 1_000_000),
         ];
 
         for (id, prompt, completion, context) in defaults {
@@ -168,6 +180,7 @@ impl ModelPricing {
                     completion_cost_per_million: completion,
                     context_length: context,
                     max_output_tokens: None,
+                    supports_tools: true, // All defaults support tools
                 });
             }
         }
@@ -177,8 +190,16 @@ impl ModelPricing {
 
     /// Get models sorted by cost (cheapest first).
     pub async fn models_by_cost(&self) -> Vec<PricingInfo> {
+        self.models_by_cost_filtered(false).await
+    }
+    
+    /// Get models sorted by cost, optionally filtering to only tool-supporting models.
+    pub async fn models_by_cost_filtered(&self, require_tools: bool) -> Vec<PricingInfo> {
         let cache = self.cache.read().await;
-        let mut models: Vec<_> = cache.values().cloned().collect();
+        let mut models: Vec<_> = cache.values()
+            .filter(|m| !require_tools || m.supports_tools)
+            .cloned()
+            .collect();
         models.sort_by(|a, b| {
             a.average_cost_per_token()
                 .partial_cmp(&b.average_cost_per_token())
@@ -211,6 +232,8 @@ struct OpenRouterModel {
     pricing: OpenRouterPricing,
     context_length: Option<u64>,
     top_provider: Option<OpenRouterProvider>,
+    #[serde(default)]
+    supported_parameters: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]

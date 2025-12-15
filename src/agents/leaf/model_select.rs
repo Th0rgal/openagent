@@ -277,8 +277,8 @@ impl Agent for ModelSelector {
         // Get available budget
         let budget_cents = task.budget().remaining_cents();
         
-        // Fetch pricing for all models
-        let models = ctx.pricing.models_by_cost().await;
+        // Fetch pricing for models that support tool calling
+        let models = ctx.pricing.models_by_cost_filtered(true).await;
         
         if models.is_empty() {
             // Use hardcoded defaults if no pricing available

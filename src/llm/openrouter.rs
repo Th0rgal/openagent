@@ -54,6 +54,12 @@ impl LlmClient for OpenRouterClient {
         };
 
         tracing::debug!("Sending request to OpenRouter: model={}", model);
+        
+        // Write request to temp file for debugging
+        if let Ok(json_str) = serde_json::to_string_pretty(&request) {
+            let _ = std::fs::write("/tmp/openrouter_request.json", &json_str);
+            eprintln!("OpenRouter request written to /tmp/openrouter_request.json");
+        }
 
         let response = self
             .client
