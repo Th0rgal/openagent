@@ -202,10 +202,43 @@ impl ModelPricing {
     }
     
     /// Get models sorted by cost, optionally filtering to only tool-supporting models.
+    /// 
+    /// Automatically excludes:
+    /// - Free models (ending in :free) as they often don't work reliably
+    /// - Models with $0 pricing
+    /// - Models not from trusted providers
     pub async fn models_by_cost_filtered(&self, require_tools: bool) -> Vec<PricingInfo> {
+        // Trusted providers that work reliably with tool calling
+        const TRUSTED_PROVIDERS: &[&str] = &[
+            "anthropic/",
+            "openai/",
+            "google/",
+            "meta-llama/",
+            "mistralai/",
+            "deepseek/",
+        ];
+        
         let cache = self.cache.read().await;
         let mut models: Vec<_> = cache.values()
-            .filter(|m| !require_tools || m.supports_tools)
+            .filter(|m| {
+                // Must support tools if required
+                if require_tools && !m.supports_tools {
+                    return false;
+                }
+                
+                // Exclude free models - they're unreliable
+                if m.model_id.ends_with(":free") {
+                    return false;
+                }
+                
+                // Exclude zero-cost models
+                if m.prompt_cost_per_million <= 0.0 && m.completion_cost_per_million <= 0.0 {
+                    return false;
+                }
+                
+                // Only include models from trusted providers
+                TRUSTED_PROVIDERS.iter().any(|p| m.model_id.starts_with(p))
+            })
             .cloned()
             .collect();
         models.sort_by(|a, b| {
