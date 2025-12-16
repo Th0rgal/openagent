@@ -19,20 +19,24 @@ export function useLocalStorage<T>(
   });
 
   // Update localStorage when value changes
+  // Using functional update to avoid storedValue in dependencies (keeps setValue stable)
   const setValue = useCallback(
     (value: T | ((prev: T) => T)) => {
-      try {
-        // Allow value to be a function for prev state pattern
-        const valueToStore = value instanceof Function ? value(storedValue) : value;
-        setStoredValue(valueToStore);
-        if (typeof window !== 'undefined') {
-          window.localStorage.setItem(key, JSON.stringify(valueToStore));
+      setStoredValue((prev) => {
+        try {
+          // Allow value to be a function for prev state pattern
+          const valueToStore = value instanceof Function ? value(prev) : value;
+          if (typeof window !== 'undefined') {
+            window.localStorage.setItem(key, JSON.stringify(valueToStore));
+          }
+          return valueToStore;
+        } catch (error) {
+          console.warn(`Error setting localStorage key "${key}":`, error);
+          return prev;
         }
-      } catch (error) {
-        console.warn(`Error setting localStorage key "${key}":`, error);
-      }
+      });
     },
-    [key, storedValue]
+    [key]
   );
 
   // Sync with other tabs/windows
