@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
-import { listTasks, listRuns, TaskState, Run } from '@/lib/api';
+import { listTasks, listRuns, listMissions, getCurrentMission, streamControl, TaskState, Run, Mission, ControlRunState } from '@/lib/api';
 import { formatCents } from '@/lib/utils';
 import {
   Bot,
@@ -163,17 +163,44 @@ function AgentTreeNode({
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
 export default function AgentsPage() {
   const [tasks, setTasks] = useState<TaskState[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const selectedTask = useMemo(
-    () => tasks.find((t) => t.id === selectedTaskId) ?? null,
-    [tasks, selectedTaskId]
+  const [missions, setMissions] = useState<Mission[]>([]);
+  const [currentMission, setCurrentMission] = useState<Mission | null>(null);
+  const [controlState, setControlState] = useState<ControlRunState>('idle');
+  const [selectedMissionId, setSelectedMissionId] = useState<string | null>(null);
+  const selectedMission = useMemo(
+    () => missions.find((m) => m.id === selectedMissionId) ?? currentMission,
+    [missions, selectedMissionId, currentMission]
   );
   const [selectedAgent, setSelectedAgent] = useState<AgentNode | null>(null);
   const [loading, setLoading] = useState(true);
   const fetchedRef = useRef(false);
+  const streamCleanupRef = useRef<null | (() => void)>(null);
+
+  // Stream control events for real-time status
+  useEffect(() => {
+    streamCleanupRef.current?.();
+    
+    const cleanup = streamControl((event) => {
+      const data: unknown = event.data;
+      if (event.type === 'status' && isRecord(data)) {
+        const st = data['state'];
+        setControlState(typeof st === 'string' ? (st as ControlRunState) : 'idle');
+      }
+    });
+    
+    streamCleanupRef.current = cleanup;
+    return () => {
+      streamCleanupRef.current?.();
+      streamCleanupRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -182,9 +209,11 @@ export default function AgentsPage() {
     const fetchData = async () => {
       const mySeq = ++seq;
       try {
-        const [tasksData, runsData] = await Promise.all([
+        const [tasksData, runsData, missionsData, currentMissionData] = await Promise.all([
           listTasks().catch(() => []),
           !fetchedRef.current ? listRuns().catch(() => ({ runs: [] })) : Promise.resolve({ runs }),
+          listMissions().catch(() => []),
+          getCurrentMission().catch(() => null),
         ]);
         if (cancelled || mySeq !== seq) return;
         
@@ -193,12 +222,13 @@ export default function AgentsPage() {
         if ('runs' in runsData) {
           setRuns(runsData.runs || []);
         }
-        setSelectedTaskId((prev) => {
-          if (tasksData.length === 0) return null;
-          if (!prev) return tasksData[0]!.id;
-          const stillExists = tasksData.some((t) => t.id === prev);
-          return stillExists ? prev : tasksData[0]!.id;
-        });
+        setMissions(missionsData);
+        setCurrentMission(currentMissionData);
+        
+        // Auto-select current mission if none selected
+        if (!selectedMissionId && currentMissionData) {
+          setSelectedMissionId(currentMissionData.id);
+        }
       } catch (error) {
         console.error('Failed to fetch data:', error);
       } finally {
@@ -215,15 +245,23 @@ export default function AgentsPage() {
       seq += 1;
       clearInterval(interval);
     };
-  }, [runs]);
+  }, [runs, selectedMissionId]);
 
-  const mockAgentTree: AgentNode | null = selectedTask
+  // Map control state to agent status
+  const controlStateToStatus = (state: ControlRunState, missionStatus?: string): AgentNode['status'] => {
+    if (state === 'running' || state === 'waiting_for_tool') return 'running';
+    if (missionStatus === 'completed') return 'completed';
+    if (missionStatus === 'failed') return 'failed';
+    return 'pending';
+  };
+
+  const mockAgentTree: AgentNode | null = selectedMission
     ? {
         id: 'root',
         type: 'Root',
-        status: mapTaskStatusToAgentStatus(selectedTask.status),
+        status: controlStateToStatus(controlState, selectedMission.status),
         name: 'Root Agent',
-        description: selectedTask.task.slice(0, 50) + '...',
+        description: selectedMission.title?.slice(0, 50) || 'Mission ' + selectedMission.id.slice(0, 8),
         budgetAllocated: 1000,
         budgetSpent: 50,
         children: [
@@ -245,77 +283,122 @@ export default function AgentsPage() {
             description: 'Select optimal model',
             budgetAllocated: 10,
             budgetSpent: 3,
-            selectedModel: selectedTask.model,
+            selectedModel: 'claude-3.5-sonnet',
           },
           {
             id: 'executor',
             type: 'TaskExecutor',
-            status: mapTaskStatusToAgentStatus(selectedTask.status),
+            status: controlStateToStatus(controlState, selectedMission.status),
             name: 'Task Executor',
             description: 'Execute using tools',
             budgetAllocated: 900,
             budgetSpent: 35,
-            logs: selectedTask.log.map((l) => l.content),
+            logs: selectedMission.history.slice(-5).map((h) => h.content.slice(0, 100)),
           },
           {
             id: 'verifier',
             type: 'Verifier',
             status:
-              selectedTask.status === 'completed'
+              selectedMission.status === 'completed'
                 ? 'completed'
-                : selectedTask.status === 'failed'
+                : selectedMission.status === 'failed'
                   ? 'failed'
-                  : selectedTask.status === 'cancelled'
-                    ? 'cancelled'
-                    : 'pending',
+                  : 'pending',
             name: 'Verifier',
             description: 'Verify task completion',
             budgetAllocated: 80,
-            budgetSpent: selectedTask.status === 'completed' ? 7 : 0,
+            budgetSpent: selectedMission.status === 'completed' ? 7 : 0,
           },
         ],
       }
     : null;
 
+  // Determine if there's active work
+  const isActive = controlState !== 'idle';
+  const activeMissions = missions.filter(m => m.status === 'active');
+  const hasActiveMission = currentMission !== null || activeMissions.length > 0;
+
   return (
     <div className="flex h-screen">
-      {/* Task selector sidebar */}
+      {/* Mission selector sidebar */}
       <div className="w-64 border-r border-white/[0.06] glass-panel p-4">
-        <h2 className="mb-4 text-sm font-medium text-white">Tasks</h2>
+        <h2 className="mb-4 text-sm font-medium text-white">Missions</h2>
+        
+        {/* Current/Active indicator */}
+        {isActive && currentMission && (
+          <div className="mb-4 p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/30">
+            <div className="flex items-center gap-2">
+              <Loader className="h-3 w-3 animate-spin text-indigo-400" />
+              <span className="text-xs font-medium text-indigo-400">Active</span>
+            </div>
+            <p className="mt-1 text-xs text-white/60 truncate">
+              {currentMission.title || 'Mission ' + currentMission.id.slice(0, 8)}
+            </p>
+          </div>
+        )}
+        
         <div className="space-y-2">
-          {tasks.map((task) => (
-            <button
-              key={task.id}
-              onClick={() => setSelectedTaskId(task.id)}
-              className={cn(
-                'w-full rounded-xl p-3 text-left transition-all',
-                selectedTaskId === task.id
-                  ? 'bg-white/[0.08] border border-indigo-500/50'
-                  : 'bg-white/[0.02] border border-white/[0.04] hover:bg-white/[0.04] hover:border-white/[0.08]'
+          {missions.length === 0 && !currentMission ? (
+            <p className="text-xs text-white/40 py-2">No missions yet</p>
+          ) : (
+            <>
+              {/* Show current mission first if it exists */}
+              {currentMission && (
+                <button
+                  key={currentMission.id}
+                  onClick={() => setSelectedMissionId(currentMission.id)}
+                  className={cn(
+                    'w-full rounded-xl p-3 text-left transition-all',
+                    selectedMissionId === currentMission.id
+                      ? 'bg-white/[0.08] border border-indigo-500/50'
+                      : 'bg-white/[0.02] border border-white/[0.04] hover:bg-white/[0.04] hover:border-white/[0.08]'
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    {controlState !== 'idle' ? (
+                      <Loader className="h-3 w-3 animate-spin text-indigo-400" />
+                    ) : currentMission.status === 'completed' ? (
+                      <CheckCircle className="h-3 w-3 text-emerald-400" />
+                    ) : currentMission.status === 'failed' ? (
+                      <XCircle className="h-3 w-3 text-red-400" />
+                    ) : (
+                      <Clock className="h-3 w-3 text-indigo-400" />
+                    )}
+                    <span className="truncate text-sm text-white/80">
+                      {currentMission.title?.slice(0, 25) || 'Current Mission'}
+                    </span>
+                  </div>
+                </button>
               )}
-            >
-              <div className="flex items-center gap-2">
-                {task.status === 'running' && (
-                  <Loader className="h-3 w-3 animate-spin text-indigo-400" />
-                )}
-                {task.status === 'completed' && (
-                  <CheckCircle className="h-3 w-3 text-emerald-400" />
-                )}
-                {task.status === 'failed' && (
-                  <XCircle className="h-3 w-3 text-red-400" />
-                )}
-                {task.status === 'pending' && (
-                  <Clock className="h-3 w-3 text-amber-400" />
-                )}
-                {task.status === 'cancelled' && (
-                  <Ban className="h-3 w-3 text-white/40" />
-                )}
-                <span className="truncate text-sm text-white/80">
-                  {task.task.slice(0, 25)}...
-                </span>
-              </div>
-            </button>
-          ))}
+              
+              {/* Other missions */}
+              {missions.filter(m => m.id !== currentMission?.id).map((mission) => (
+                <button
+                  key={mission.id}
+                  onClick={() => setSelectedMissionId(mission.id)}
+                  className={cn(
+                    'w-full rounded-xl p-3 text-left transition-all',
+                    selectedMissionId === mission.id
+                      ? 'bg-white/[0.08] border border-indigo-500/50'
+                      : 'bg-white/[0.02] border border-white/[0.04] hover:bg-white/[0.04] hover:border-white/[0.08]'
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    {mission.status === 'active' ? (
+                      <Clock className="h-3 w-3 text-indigo-400" />
+                    ) : mission.status === 'completed' ? (
+                      <CheckCircle className="h-3 w-3 text-emerald-400" />
+                    ) : (
+                      <XCircle className="h-3 w-3 text-red-400" />
+                    )}
+                    <span className="truncate text-sm text-white/80">
+                      {mission.title?.slice(0, 25) || 'Mission ' + mission.id.slice(0, 8)}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </>
+          )}
         </div>
       </div>
 
@@ -340,12 +423,12 @@ export default function AgentsPage() {
               selectedId={selectedAgent?.id || null}
             />
           </div>
-        ) : tasks.length === 0 ? (
+        ) : !hasActiveMission && missions.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16">
             <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/[0.02] mb-4">
               <MessageSquare className="h-8 w-8 text-white/30" />
             </div>
-            <p className="text-white/80">No active tasks</p>
+            <p className="text-white/80">No active missions</p>
             <p className="mt-2 text-sm text-white/40">
               Start a conversation in the{' '}
               <Link href="/control" className="text-indigo-400 hover:text-indigo-300">
@@ -364,7 +447,7 @@ export default function AgentsPage() {
           </div>
         ) : (
           <div className="flex items-center justify-center py-16">
-            <p className="text-white/40">Select a task to view agent tree</p>
+            <p className="text-white/40">Select a mission to view agent tree</p>
           </div>
         )}
       </div>

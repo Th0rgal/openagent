@@ -352,6 +352,7 @@ export type ControlAgentEvent =
       cost_cents: number;
       model: string | null;
     }
+  | { type: "thinking"; content: string; done: boolean }
   | { type: "tool_call"; tool_call_id: string; name: string; args: unknown }
   | { type: "tool_result"; tool_call_id: string; name: string; result: unknown }
   | { type: "error"; message: string };

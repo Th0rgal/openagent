@@ -296,6 +296,18 @@ When task is complete, provide a clear summary of:
                 }
             };
 
+            // Emit thinking event if there's content (agent reasoning)
+            if let Some(ref content) = response.content {
+                if !content.is_empty() {
+                    if let Some(events) = &ctx.control_events {
+                        let _ = events.send(AgentEvent::Thinking {
+                            content: content.clone(),
+                            done: response.tool_calls.is_none(),
+                        });
+                    }
+                }
+            }
+
             // Cost + usage accounting.
             if let Some(u) = &response.usage {
                 let u_sum = TokenUsageSummary::new(u.prompt_tokens, u.completion_tokens);

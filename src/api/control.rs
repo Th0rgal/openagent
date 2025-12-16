@@ -86,6 +86,13 @@ pub enum AgentEvent {
         cost_cents: u64,
         model: Option<String>,
     },
+    /// Agent thinking/reasoning (streaming)
+    Thinking {
+        /// Incremental thinking content
+        content: String,
+        /// Whether this is the final thinking chunk
+        done: bool,
+    },
     ToolCall {
         tool_call_id: String,
         name: String,
@@ -107,6 +114,7 @@ impl AgentEvent {
             AgentEvent::Status { .. } => "status",
             AgentEvent::UserMessage { .. } => "user_message",
             AgentEvent::AssistantMessage { .. } => "assistant_message",
+            AgentEvent::Thinking { .. } => "thinking",
             AgentEvent::ToolCall { .. } => "tool_call",
             AgentEvent::ToolResult { .. } => "tool_result",
             AgentEvent::Error { .. } => "error",

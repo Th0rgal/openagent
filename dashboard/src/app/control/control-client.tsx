@@ -29,7 +29,9 @@ import {
   Clock,
   Plus,
   ChevronDown,
+  ChevronRight,
   Target,
+  Brain,
 } from 'lucide-react';
 import {
   OptionList,
@@ -55,6 +57,13 @@ type ChatItem =
       success: boolean;
       costCents: number;
       model: string | null;
+    }
+  | {
+      kind: 'thinking';
+      id: string;
+      content: string;
+      done: boolean;
+      startTime: number;
     }
   | {
       kind: 'tool';
@@ -101,6 +110,72 @@ function missionStatusLabel(status: MissionStatus): {
     case 'failed':
       return { label: 'Failed', className: 'bg-red-500/20 text-red-400' };
   }
+}
+
+// Thinking item component with collapsible UI
+function ThinkingItem({ item }: { item: Extract<ChatItem, { kind: 'thinking' }> }) {
+  const [expanded, setExpanded] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  // Update elapsed time while thinking is active
+  useEffect(() => {
+    if (item.done) return;
+    const interval = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - item.startTime) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [item.done, item.startTime]);
+
+  const formatDuration = (seconds: number) => {
+    if (seconds < 60) return `${seconds}s`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}m ${secs}s`;
+  };
+
+  // Extract a summary (first line or first 100 chars)
+  const summary = item.content.split('\n')[0]?.slice(0, 100) || 'Thinking...';
+
+  return (
+    <div className="flex justify-start gap-3">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/20">
+        <Brain className={cn('h-4 w-4 text-amber-400', !item.done && 'animate-pulse')} />
+      </div>
+      <div className="max-w-[80%] rounded-2xl rounded-bl-md bg-amber-500/5 border border-amber-500/20 overflow-hidden">
+        {/* Header - always visible */}
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-white/[0.02] transition-colors"
+        >
+          {expanded ? (
+            <ChevronDown className="h-4 w-4 text-amber-400 shrink-0" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-amber-400 shrink-0" />
+          )}
+          <span className="text-xs text-amber-400 font-medium">
+            {item.done ? 'Thought' : 'Thinking'} for {formatDuration(item.done ? Math.floor((Date.now() - item.startTime) / 1000) : elapsedSeconds)}
+          </span>
+          {!expanded && (
+            <span className="text-xs text-white/40 truncate flex-1">
+              — {summary}
+            </span>
+          )}
+          {!item.done && (
+            <Loader className="h-3 w-3 text-amber-400 animate-spin shrink-0" />
+          )}
+        </button>
+        
+        {/* Expandable content */}
+        {expanded && (
+          <div className="px-4 pb-3 border-t border-amber-500/10">
+            <div className="mt-2 text-xs text-white/60 font-mono whitespace-pre-wrap max-h-64 overflow-y-auto">
+              {item.content}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function ControlClient() {
@@ -262,8 +337,9 @@ export default function ControlClient() {
       }
 
       if (event.type === 'assistant_message' && isRecord(data)) {
+        // Remove any pending thinking items when we get the final message
         setItems((prev) => [
-          ...prev,
+          ...prev.filter(it => it.kind !== 'thinking' || it.done),
           {
             kind: 'assistant',
             id: String(data['id'] ?? Date.now()),
@@ -273,6 +349,40 @@ export default function ControlClient() {
             model: data['model'] ? String(data['model']) : null,
           },
         ]);
+        return;
+      }
+
+      if (event.type === 'thinking' && isRecord(data)) {
+        const content = String(data['content'] ?? '');
+        const done = Boolean(data['done']);
+        
+        setItems((prev) => {
+          // Find existing thinking item that's not done
+          const existingIdx = prev.findIndex(it => it.kind === 'thinking' && !it.done);
+          if (existingIdx >= 0) {
+            // Update existing thinking item
+            const updated = [...prev];
+            const existing = updated[existingIdx] as Extract<ChatItem, { kind: 'thinking' }>;
+            updated[existingIdx] = {
+              ...existing,
+              content: existing.content + '\n\n---\n\n' + content,
+              done,
+            };
+            return updated;
+          } else {
+            // Create new thinking item
+            return [
+              ...prev,
+              {
+                kind: 'thinking' as const,
+                id: `thinking-${Date.now()}`,
+                content,
+                done,
+                startTime: Date.now(),
+              },
+            ];
+          }
+        });
         return;
       }
 
@@ -549,6 +659,10 @@ export default function ControlClient() {
                       </div>
                     </div>
                   );
+                }
+
+                if (item.kind === 'thinking') {
+                  return <ThinkingItem key={item.id} item={item} />;
                 }
 
                 if (item.kind === 'tool') {
