@@ -271,6 +271,58 @@ pub struct HistoricalContext {
     pub similar_success_rate: f64,
 }
 
+/// Mission status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MissionStatus {
+    Active,
+    Completed,
+    Failed,
+}
+
+impl std::fmt::Display for MissionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Active => write!(f, "active"),
+            Self::Completed => write!(f, "completed"),
+            Self::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+impl std::str::FromStr for MissionStatus {
+    type Err = String;
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "active" => Ok(Self::Active),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            _ => Err(format!("Invalid mission status: {}", s)),
+        }
+    }
+}
+
+/// A mission stored in the database.
+/// Represents a persistent goal-oriented agent session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbMission {
+    pub id: Uuid,
+    pub status: String,
+    pub title: Option<String>,
+    /// Conversation history as JSON array of {role, content} objects
+    pub history: serde_json::Value,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A message in the mission history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissionMessage {
+    pub role: String,
+    pub content: String,
+}
+
 impl ContextPack {
     /// Format as a string for prompt injection.
     pub fn format_for_prompt(&self) -> String {

@@ -3,7 +3,7 @@
 use reqwest::Client;
 use uuid::Uuid;
 
-use super::types::{DbRun, DbTask, DbEvent, DbChunk, DbTaskOutcome, SearchResult, ModelStats};
+use super::types::{DbRun, DbTask, DbEvent, DbChunk, DbTaskOutcome, SearchResult, ModelStats, DbMission, MissionMessage};
 
 /// Supabase client for database and storage operations.
 pub struct SupabaseClient {
@@ -507,6 +507,137 @@ impl SupabaseClient {
         }
         
         Ok(serde_json::from_str(&text).unwrap_or_default())
+    }
+    
+    // ==================== Missions ====================
+    
+    /// Create a new mission.
+    pub async fn create_mission(&self, title: Option<&str>) -> anyhow::Result<DbMission> {
+        let body = serde_json::json!({
+            "title": title,
+            "status": "active",
+            "history": []
+        });
+        
+        let resp = self.client
+            .post(format!("{}/missions", self.rest_url()))
+            .header("apikey", &self.service_role_key)
+            .header("Authorization", format!("Bearer {}", self.service_role_key))
+            .header("Content-Type", "application/json")
+            .header("Prefer", "return=representation")
+            .json(&body)
+            .send()
+            .await?;
+        
+        let status = resp.status();
+        let text = resp.text().await?;
+        
+        if !status.is_success() {
+            anyhow::bail!("Failed to create mission: {} - {}", status, text);
+        }
+        
+        let missions: Vec<DbMission> = serde_json::from_str(&text)?;
+        missions.into_iter().next().ok_or_else(|| anyhow::anyhow!("No mission returned"))
+    }
+    
+    /// Get a mission by ID.
+    pub async fn get_mission(&self, id: Uuid) -> anyhow::Result<Option<DbMission>> {
+        let resp = self.client
+            .get(format!("{}/missions?id=eq.{}", self.rest_url(), id))
+            .header("apikey", &self.service_role_key)
+            .header("Authorization", format!("Bearer {}", self.service_role_key))
+            .send()
+            .await?;
+        
+        let missions: Vec<DbMission> = resp.json().await?;
+        Ok(missions.into_iter().next())
+    }
+    
+    /// List missions with pagination.
+    pub async fn list_missions(&self, limit: usize, offset: usize) -> anyhow::Result<Vec<DbMission>> {
+        let resp = self.client
+            .get(format!(
+                "{}/missions?order=updated_at.desc&limit={}&offset={}",
+                self.rest_url(), limit, offset
+            ))
+            .header("apikey", &self.service_role_key)
+            .header("Authorization", format!("Bearer {}", self.service_role_key))
+            .send()
+            .await?;
+        
+        Ok(resp.json().await?)
+    }
+    
+    /// Update mission status.
+    pub async fn update_mission_status(&self, id: Uuid, status: &str) -> anyhow::Result<()> {
+        let body = serde_json::json!({
+            "status": status,
+            "updated_at": chrono::Utc::now().to_rfc3339()
+        });
+        
+        let resp = self.client
+            .patch(format!("{}/missions?id=eq.{}", self.rest_url(), id))
+            .header("apikey", &self.service_role_key)
+            .header("Authorization", format!("Bearer {}", self.service_role_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+        
+        if !resp.status().is_success() {
+            let text = resp.text().await?;
+            anyhow::bail!("Failed to update mission status: {}", text);
+        }
+        
+        Ok(())
+    }
+    
+    /// Update mission history.
+    pub async fn update_mission_history(&self, id: Uuid, history: &[MissionMessage]) -> anyhow::Result<()> {
+        let body = serde_json::json!({
+            "history": history,
+            "updated_at": chrono::Utc::now().to_rfc3339()
+        });
+        
+        let resp = self.client
+            .patch(format!("{}/missions?id=eq.{}", self.rest_url(), id))
+            .header("apikey", &self.service_role_key)
+            .header("Authorization", format!("Bearer {}", self.service_role_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+        
+        if !resp.status().is_success() {
+            let text = resp.text().await?;
+            anyhow::bail!("Failed to update mission history: {}", text);
+        }
+        
+        Ok(())
+    }
+    
+    /// Update mission title.
+    pub async fn update_mission_title(&self, id: Uuid, title: &str) -> anyhow::Result<()> {
+        let body = serde_json::json!({
+            "title": title,
+            "updated_at": chrono::Utc::now().to_rfc3339()
+        });
+        
+        let resp = self.client
+            .patch(format!("{}/missions?id=eq.{}", self.rest_url(), id))
+            .header("apikey", &self.service_role_key)
+            .header("Authorization", format!("Bearer {}", self.service_role_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+        
+        if !resp.status().is_success() {
+            let text = resp.text().await?;
+            anyhow::bail!("Failed to update mission title: {}", text);
+        }
+        
+        Ok(())
     }
 }
 

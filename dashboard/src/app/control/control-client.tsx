@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import Markdown from 'react-markdown';
 import { cn } from '@/lib/utils';
 import {
@@ -8,7 +9,13 @@ import {
   postControlMessage,
   postControlToolResult,
   streamControl,
+  loadMission,
+  createMission,
+  setMissionStatus,
+  getCurrentMission,
   type ControlRunState,
+  type Mission,
+  type MissionStatus,
 } from '@/lib/api';
 import {
   Send,
@@ -20,6 +27,9 @@ import {
   XCircle,
   Ban,
   Clock,
+  Plus,
+  ChevronDown,
+  Target,
 } from 'lucide-react';
 import {
   OptionList,
@@ -79,17 +89,40 @@ function statusLabel(state: ControlRunState): {
   }
 }
 
+function missionStatusLabel(status: MissionStatus): {
+  label: string;
+  className: string;
+} {
+  switch (status) {
+    case 'active':
+      return { label: 'Active', className: 'bg-indigo-500/20 text-indigo-400' };
+    case 'completed':
+      return { label: 'Completed', className: 'bg-emerald-500/20 text-emerald-400' };
+    case 'failed':
+      return { label: 'Failed', className: 'bg-red-500/20 text-red-400' };
+  }
+}
+
 export default function ControlClient() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  
   const [items, setItems] = useState<ChatItem[]>([]);
   const [input, setInput] = useState('');
 
   const [runState, setRunState] = useState<ControlRunState>('idle');
   const [queueLen, setQueueLen] = useState(0);
+  
+  // Mission state
+  const [currentMission, setCurrentMission] = useState<Mission | null>(null);
+  const [showStatusMenu, setShowStatusMenu] = useState(false);
+  const [missionLoading, setMissionLoading] = useState(false);
 
   const isBusy = runState !== 'idle';
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamCleanupRef = useRef<null | (() => void)>(null);
+  const statusMenuRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -98,6 +131,109 @@ export default function ControlClient() {
   useEffect(() => {
     scrollToBottom();
   }, [items]);
+  
+  // Close status menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (statusMenuRef.current && !statusMenuRef.current.contains(event.target as Node)) {
+        setShowStatusMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Convert mission history to chat items
+  const missionHistoryToItems = useCallback((mission: Mission): ChatItem[] => {
+    return mission.history.map((entry, i) => {
+      if (entry.role === 'user') {
+        return {
+          kind: 'user' as const,
+          id: `history-${mission.id}-${i}`,
+          content: entry.content,
+        };
+      } else {
+        return {
+          kind: 'assistant' as const,
+          id: `history-${mission.id}-${i}`,
+          content: entry.content,
+          success: true,
+          costCents: 0,
+          model: null,
+        };
+      }
+    });
+  }, []);
+
+  // Load mission from URL param on mount
+  useEffect(() => {
+    const missionId = searchParams.get('mission');
+    if (missionId) {
+      setMissionLoading(true);
+      loadMission(missionId)
+        .then((mission) => {
+          setCurrentMission(mission);
+          setItems(missionHistoryToItems(mission));
+        })
+        .catch((err) => {
+          console.error('Failed to load mission:', err);
+          setItems((prev) => [
+            ...prev,
+            { kind: 'system', id: `err-${Date.now()}`, content: `Failed to load mission: ${err.message}` },
+          ]);
+        })
+        .finally(() => setMissionLoading(false));
+    } else {
+      // Try to get current mission
+      getCurrentMission()
+        .then((mission) => {
+          if (mission) {
+            setCurrentMission(mission);
+            setItems(missionHistoryToItems(mission));
+            // Update URL without navigation
+            router.replace(`/control?mission=${mission.id}`, { scroll: false });
+          }
+        })
+        .catch((err) => {
+          console.error('Failed to get current mission:', err);
+        });
+    }
+  }, [searchParams, router, missionHistoryToItems]);
+
+  // Handle creating a new mission
+  const handleNewMission = async () => {
+    try {
+      setMissionLoading(true);
+      const mission = await createMission();
+      setCurrentMission(mission);
+      setItems([]);
+      router.replace(`/control?mission=${mission.id}`, { scroll: false });
+    } catch (err) {
+      console.error('Failed to create mission:', err);
+      setItems((prev) => [
+        ...prev,
+        { kind: 'system', id: `err-${Date.now()}`, content: 'Failed to create new mission.' },
+      ]);
+    } finally {
+      setMissionLoading(false);
+    }
+  };
+
+  // Handle setting mission status
+  const handleSetStatus = async (status: MissionStatus) => {
+    if (!currentMission) return;
+    try {
+      await setMissionStatus(currentMission.id, status);
+      setCurrentMission({ ...currentMission, status });
+      setShowStatusMenu(false);
+    } catch (err) {
+      console.error('Failed to set mission status:', err);
+      setItems((prev) => [
+        ...prev,
+        { kind: 'system', id: `err-${Date.now()}`, content: 'Failed to update mission status.' },
+      ]);
+    }
+  };
 
   useEffect(() => {
     streamCleanupRef.current?.();
@@ -232,20 +368,91 @@ export default function ControlClient() {
     }
   };
 
+  const missionStatus = currentMission ? missionStatusLabel(currentMission.status) : null;
+  const missionTitle = currentMission?.title 
+    ? (currentMission.title.length > 60 ? currentMission.title.slice(0, 60) + '...' : currentMission.title)
+    : 'New Mission';
+
   return (
     <div className="flex h-screen flex-col p-6">
       {/* Header */}
       <div className="mb-6 flex items-start justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-white">
-            Agent Control
-          </h1>
-          <p className="mt-1 text-sm text-white/50">
-            Talk to the global RootAgent session
-          </p>
+        <div className="flex items-center gap-4">
+          {/* Mission indicator */}
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/20">
+              <Target className="h-5 w-5 text-indigo-400" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-lg font-semibold text-white">
+                  {missionLoading ? 'Loading...' : missionTitle}
+                </h1>
+                {missionStatus && (
+                  <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium', missionStatus.className)}>
+                    {missionStatus.label}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-white/40">
+                {currentMission ? `Mission ${currentMission.id.slice(0, 8)}...` : 'No active mission'}
+              </p>
+            </div>
+          </div>
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Status dropdown */}
+          {currentMission && (
+            <div className="relative" ref={statusMenuRef}>
+              <button
+                onClick={() => setShowStatusMenu(!showStatusMenu)}
+                className="flex items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-sm text-white/70 hover:bg-white/[0.04] transition-colors"
+              >
+                Set Status
+                <ChevronDown className="h-4 w-4" />
+              </button>
+              {showStatusMenu && (
+                <div className="absolute right-0 top-full mt-1 w-40 rounded-lg border border-white/[0.06] bg-[#1a1a1a] py-1 shadow-xl z-10">
+                  <button
+                    onClick={() => handleSetStatus('completed')}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-sm text-white/70 hover:bg-white/[0.04]"
+                  >
+                    <CheckCircle className="h-4 w-4 text-emerald-400" />
+                    Mark Complete
+                  </button>
+                  <button
+                    onClick={() => handleSetStatus('failed')}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-sm text-white/70 hover:bg-white/[0.04]"
+                  >
+                    <XCircle className="h-4 w-4 text-red-400" />
+                    Mark Failed
+                  </button>
+                  {currentMission.status !== 'active' && (
+                    <button
+                      onClick={() => handleSetStatus('active')}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-sm text-white/70 hover:bg-white/[0.04]"
+                    >
+                      <Clock className="h-4 w-4 text-indigo-400" />
+                      Reactivate
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* New Mission button */}
+          <button
+            onClick={handleNewMission}
+            disabled={missionLoading}
+            className="flex items-center gap-2 rounded-lg bg-indigo-500/20 px-3 py-2 text-sm font-medium text-indigo-400 hover:bg-indigo-500/30 transition-colors disabled:opacity-50"
+          >
+            <Plus className="h-4 w-4" />
+            New Mission
+          </button>
+
+          {/* Run status */}
           <div className={cn('flex items-center gap-2 text-sm', status.className)}>
             <StatusIcon className={cn('h-4 w-4', runState !== 'idle' && 'animate-spin')} />
             <span>{status.label}</span>

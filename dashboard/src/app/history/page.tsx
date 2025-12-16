@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { listTasks, listRuns, TaskState, Run } from "@/lib/api";
+import { listTasks, listRuns, listMissions, TaskState, Run, Mission } from "@/lib/api";
 import {
   CheckCircle,
   XCircle,
@@ -13,6 +13,7 @@ import {
   ArrowRight,
   Search,
   MessageSquare,
+  Target,
 } from "lucide-react";
 
 const statusIcons = {
@@ -21,6 +22,7 @@ const statusIcons = {
   completed: CheckCircle,
   failed: XCircle,
   cancelled: Ban,
+  active: Clock,
 };
 
 const statusConfig = {
@@ -29,11 +31,13 @@ const statusConfig = {
   completed: { color: "text-emerald-400", bg: "bg-emerald-500/10" },
   failed: { color: "text-red-400", bg: "bg-red-500/10" },
   cancelled: { color: "text-white/40", bg: "bg-white/[0.04]" },
+  active: { color: "text-indigo-400", bg: "bg-indigo-500/10" },
 };
 
 export default function HistoryPage() {
   const [tasks, setTasks] = useState<TaskState[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
+  const [missions, setMissions] = useState<Mission[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
@@ -45,12 +49,14 @@ export default function HistoryPage() {
 
     const fetchData = async () => {
       try {
-        const [tasksData, runsData] = await Promise.all([
+        const [tasksData, runsData, missionsData] = await Promise.all([
           listTasks().catch(() => []),
           listRuns().catch(() => ({ runs: [] })),
+          listMissions().catch(() => []),
         ]);
         setTasks(tasksData);
         setRuns(runsData.runs || []);
+        setMissions(missionsData);
       } catch (error) {
         console.error("Failed to fetch data:", error);
       } finally {
@@ -75,7 +81,15 @@ export default function HistoryPage() {
     return true;
   });
 
-  const hasData = filteredTasks.length > 0 || filteredRuns.length > 0;
+  const filteredMissions = missions.filter((mission) => {
+    if (filter !== "all" && mission.status !== filter) return false;
+    const title = mission.title || "";
+    if (search && !title.toLowerCase().includes(search.toLowerCase()))
+      return false;
+    return true;
+  });
+
+  const hasData = filteredTasks.length > 0 || filteredRuns.length > 0 || filteredMissions.length > 0;
 
   return (
     <div className="p-6">
@@ -142,6 +156,92 @@ export default function HistoryPage() {
         </div>
       ) : (
         <div className="space-y-6">
+          {/* Missions */}
+          {filteredMissions.length > 0 && (
+            <div>
+              <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-white/40">
+                Missions ({filteredMissions.length})
+              </h2>
+              <div className="rounded-xl bg-white/[0.02] border border-white/[0.04] overflow-hidden">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-white/[0.04]">
+                      <th className="px-4 py-3 text-left text-[10px] font-medium uppercase tracking-wider text-white/40">
+                        Status
+                      </th>
+                      <th className="px-4 py-3 text-left text-[10px] font-medium uppercase tracking-wider text-white/40">
+                        Mission
+                      </th>
+                      <th className="px-4 py-3 text-left text-[10px] font-medium uppercase tracking-wider text-white/40">
+                        Messages
+                      </th>
+                      <th className="px-4 py-3 text-left text-[10px] font-medium uppercase tracking-wider text-white/40">
+                        Updated
+                      </th>
+                      <th className="px-4 py-3 text-left text-[10px] font-medium uppercase tracking-wider text-white/40">
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/[0.04]">
+                    {filteredMissions.map((mission) => {
+                      const Icon = statusIcons[mission.status] || Target;
+                      const config = statusConfig[mission.status] || statusConfig.active;
+                      const title = mission.title || "Untitled Mission";
+                      const displayTitle = title.length > 80 ? title.slice(0, 80) + "..." : title;
+                      return (
+                        <tr
+                          key={mission.id}
+                          className="hover:bg-white/[0.02] transition-colors"
+                        >
+                          <td className="px-4 py-3">
+                            <span
+                              className={cn(
+                                "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-medium capitalize",
+                                config.bg,
+                                config.color
+                              )}
+                            >
+                              <Icon className="h-3 w-3" />
+                              {mission.status}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <Target className="h-4 w-4 text-indigo-400 shrink-0" />
+                              <p className="max-w-md truncate text-sm text-white/80">
+                                {displayTitle}
+                              </p>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="text-sm text-white/60 tabular-nums">
+                              {mission.history.length}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="text-xs text-white/40">
+                              {new Date(mission.updated_at).toLocaleString()}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <Link
+                              href={`/control?mission=${mission.id}`}
+                              className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                            >
+                              {mission.status === "active" ? "Continue" : "View"}{" "}
+                              <ArrowRight className="h-3 w-3" />
+                            </Link>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* Active Tasks */}
           {filteredTasks.length > 0 && (
             <div>

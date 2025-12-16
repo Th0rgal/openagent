@@ -269,6 +269,74 @@ export async function getRunTasks(
   return res.json();
 }
 
+// ==================== Missions ====================
+
+export type MissionStatus = "active" | "completed" | "failed";
+
+export interface MissionHistoryEntry {
+  role: string;
+  content: string;
+}
+
+export interface Mission {
+  id: string;
+  status: MissionStatus;
+  title: string | null;
+  history: MissionHistoryEntry[];
+  created_at: string;
+  updated_at: string;
+}
+
+// List all missions
+export async function listMissions(): Promise<Mission[]> {
+  const res = await apiFetch("/api/control/missions");
+  if (!res.ok) throw new Error("Failed to fetch missions");
+  return res.json();
+}
+
+// Get a specific mission
+export async function getMission(id: string): Promise<Mission> {
+  const res = await apiFetch(`/api/control/missions/${id}`);
+  if (!res.ok) throw new Error("Failed to fetch mission");
+  return res.json();
+}
+
+// Get current mission
+export async function getCurrentMission(): Promise<Mission | null> {
+  const res = await apiFetch("/api/control/missions/current");
+  if (!res.ok) throw new Error("Failed to fetch current mission");
+  return res.json();
+}
+
+// Create a new mission
+export async function createMission(): Promise<Mission> {
+  const res = await apiFetch("/api/control/missions", { method: "POST" });
+  if (!res.ok) throw new Error("Failed to create mission");
+  return res.json();
+}
+
+// Load/switch to a mission
+export async function loadMission(id: string): Promise<Mission> {
+  const res = await apiFetch(`/api/control/missions/${id}/load`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error("Failed to load mission");
+  return res.json();
+}
+
+// Set mission status
+export async function setMissionStatus(
+  id: string,
+  status: MissionStatus
+): Promise<void> {
+  const res = await apiFetch(`/api/control/missions/${id}/status`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) throw new Error("Failed to set mission status");
+}
+
 // ==================== Global Control Session ====================
 
 export type ControlRunState = "idle" | "running" | "waiting_for_tool";
