@@ -60,18 +60,28 @@ pub struct DbTask {
 /// An event stored in the database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbEvent {
+    /// Auto-generated ID - skip on insert, include on read
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<i64>,
     pub run_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub task_id: Option<Uuid>,
     pub seq: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ts: Option<String>,
     pub agent_type: String,
     pub event_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub blob_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_tokens: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_cents: Option<i32>,
 }
 
