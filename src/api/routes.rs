@@ -366,16 +366,26 @@ async fn run_agent_task(
             // RootAgent wraps executor data under "execution" field
             let exec_data = data.get("execution").unwrap_or(data);
             
+            tracing::debug!("Recording events for run {}, exec_data keys: {:?}", 
+                run_id, 
+                exec_data.as_object().map(|o| o.keys().collect::<Vec<_>>())
+            );
+            
             // Record each tool call as an event
             if let Some(tools_used) = exec_data.get("tools_used") {
                 if let Some(arr) = tools_used.as_array() {
+                    tracing::debug!("Recording {} tool call events", arr.len());
                     for tool_entry in arr {
                         let tool_str = tool_entry.as_str().unwrap_or("");
                         let event = crate::memory::RecordedEvent::new("TaskExecutor", crate::memory::EventKind::ToolCall)
                             .with_preview(tool_str);
-                        let _ = mem.writer.record_event(&recorder, event).await;
+                        if let Err(e) = mem.writer.record_event(&recorder, event).await {
+                            tracing::warn!("Failed to record tool call event: {}", e);
+                        }
                     }
                 }
+            } else {
+                tracing::debug!("No tools_used found in exec_data");
             }
 
             // Record final response as an event
@@ -397,7 +407,11 @@ async fn run_agent_task(
                     result.output.clone()
                 })
                 .with_tokens(prompt_tokens, completion_tokens, result.cost_cents as i32);
-            let _ = mem.writer.record_event(&recorder, response_event).await;
+            if let Err(e) = mem.writer.record_event(&recorder, response_event).await {
+                tracing::warn!("Failed to record response event: {}", e);
+            }
+        } else {
+            tracing::debug!("No result.data available for event recording");
         }
 
         let _ = mem
