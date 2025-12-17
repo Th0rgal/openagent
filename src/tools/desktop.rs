@@ -301,7 +301,7 @@ impl Tool for Screenshot {
     }
 
     fn description(&self) -> &str {
-        "Take a screenshot of the virtual desktop. By default, automatically uploads the screenshot and returns a public URL with markdown that you can include directly in your response to show the image to the user."
+        "Take a screenshot of the virtual desktop. Automatically uploads and returns a 'markdown' field. IMPORTANT: You MUST copy the markdown field value (e.g., '![screenshot](https://...)') directly into your response text for the user to see the image."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -412,13 +412,16 @@ impl Tool for Screenshot {
         // Auto-upload to Supabase if enabled and configured
         if should_upload {
             if let Some((url, markdown)) = upload_screenshot_to_supabase(&filepath, description).await {
-                return Ok(json!({
-                    "success": true,
-                    "path": filepath.display().to_string(),
-                    "size_bytes": metadata.len(),
-                    "url": url,
-                    "markdown": markdown
-                }).to_string());
+                // Return format that strongly encourages the LLM to include the markdown
+                return Ok(format!(
+                    "Screenshot captured and uploaded successfully.\n\n\
+                    INCLUDE THIS IN YOUR RESPONSE TO SHOW THE IMAGE:\n{}\n\n\
+                    Details: path={}, size={} bytes, url={}",
+                    markdown,
+                    filepath.display(),
+                    metadata.len(),
+                    url
+                ));
             }
             // Fall through to local-only if upload fails
         }
