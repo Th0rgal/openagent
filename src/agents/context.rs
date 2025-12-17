@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::llm::LlmClient;
 use crate::memory::MemorySystem;
 use crate::tools::ToolRegistry;
+use crate::tools::mission::MissionControl;
 use tokio::sync::broadcast;
 
 /// Shared context passed to all agents during execution.
@@ -59,6 +60,9 @@ pub struct AgentContext {
 
     /// Benchmark registry for task-aware model selection.
     pub benchmarks: Option<SharedBenchmarkRegistry>,
+
+    /// Mission control for allowing the agent to complete/fail missions.
+    pub mission_control: Option<MissionControl>,
 }
 
 impl AgentContext {
@@ -84,6 +88,7 @@ impl AgentContext {
             control_status: None,
             cancel_token: None,
             benchmarks: None,
+            mission_control: None,
         }
     }
     
@@ -110,6 +115,7 @@ impl AgentContext {
             control_status: None,
             cancel_token: None,
             benchmarks: None,
+            mission_control: None,
         }
     }
 
@@ -132,6 +138,7 @@ impl AgentContext {
             control_status: self.control_status.clone(),
             cancel_token: self.cancel_token.clone(),
             benchmarks: self.benchmarks.clone(),
+            mission_control: self.mission_control.clone(),
         }
     }
 

@@ -12,6 +12,7 @@ mod directory;
 mod file_ops;
 mod git;
 mod index;
+pub mod mission;
 mod search;
 mod storage;
 mod terminal;
@@ -61,6 +62,11 @@ pub struct ToolRegistry {
 impl ToolRegistry {
     /// Create a new registry with all default tools.
     pub fn new() -> Self {
+        Self::with_mission_control(None)
+    }
+
+    /// Create a new registry with all default tools and optional mission control.
+    pub fn with_mission_control(mission_control: Option<mission::MissionControl>) -> Self {
         let mut tools: HashMap<String, Arc<dyn Tool>> = HashMap::new();
 
         // File operations
@@ -128,6 +134,13 @@ impl ToolRegistry {
             );
             tools.insert("desktop_scroll".to_string(), Arc::new(desktop::Scroll));
         }
+
+        // Mission control (allows agent to complete/fail missions)
+        let mission_tool: Arc<dyn Tool> = match mission_control {
+            Some(ctrl) => Arc::new(mission::CompleteMission::with_control(ctrl)),
+            None => Arc::new(mission::CompleteMission::new()),
+        };
+        tools.insert("complete_mission".to_string(), mission_tool);
 
         Self { tools }
     }

@@ -106,6 +106,12 @@ pub enum AgentEvent {
     Error {
         message: String,
     },
+    /// Mission status changed (by agent or user)
+    MissionStatusChanged {
+        mission_id: Uuid,
+        status: MissionStatus,
+        summary: Option<String>,
+    },
 }
 
 impl AgentEvent {
@@ -118,6 +124,7 @@ impl AgentEvent {
             AgentEvent::ToolCall { .. } => "tool_call",
             AgentEvent::ToolResult { .. } => "tool_result",
             AgentEvent::Error { .. } => "error",
+            AgentEvent::MissionStatusChanged { .. } => "mission_status_changed",
         }
     }
 }
@@ -544,6 +551,9 @@ pub fn spawn_control_session(
         queue_len: 0,
     }));
     let current_mission = Arc::new(RwLock::new(None));
+    
+    // Channel for agent-initiated mission control commands
+    let (mission_cmd_tx, mission_cmd_rx) = mpsc::channel::<crate::tools::mission::MissionControlCommand>(64);
 
     let state = ControlState {
         cmd_tx,
@@ -559,6 +569,8 @@ pub fn spawn_control_session(
         memory,
         benchmarks,
         cmd_rx,
+        mission_cmd_rx,
+        mission_cmd_tx,
         events_tx,
         tool_hub,
         status,
@@ -574,6 +586,8 @@ async fn control_actor_loop(
     memory: Option<MemorySystem>,
     benchmarks: crate::budget::SharedBenchmarkRegistry,
     mut cmd_rx: mpsc::Receiver<ControlCommand>,
+    mut mission_cmd_rx: mpsc::Receiver<crate::tools::mission::MissionControlCommand>,
+    mission_cmd_tx: mpsc::Sender<crate::tools::mission::MissionControlCommand>,
     events_tx: broadcast::Sender<AgentEvent>,
     tool_hub: Arc<FrontendToolHub>,
     status: Arc<RwLock<ControlStatus>>,
@@ -706,6 +720,10 @@ async fn control_actor_loop(
                                 let cancel = CancellationToken::new();
                                 let pricing = Arc::clone(&pricing);
                                 let hist_snapshot = history.clone();
+                                let mission_ctrl = crate::tools::mission::MissionControl {
+                                    current_mission_id: Arc::clone(&current_mission),
+                                    cmd_tx: mission_cmd_tx.clone(),
+                                };
                                 running_cancel = Some(cancel.clone());
                                 running = Some(tokio::spawn(async move {
                                     let result = run_single_control_turn(
@@ -720,6 +738,7 @@ async fn control_actor_loop(
                                         cancel,
                                         hist_snapshot,
                                         msg.clone(),
+                                        Some(mission_ctrl),
                                     )
                                     .await;
                                     (mid, msg, result)
@@ -782,9 +801,42 @@ async fn control_actor_loop(
                         if let Some(mem) = &memory {
                             let result = mem.supabase.update_mission_status(id, &new_status.to_string()).await
                                 .map_err(|e| e.to_string());
+                            if result.is_ok() {
+                                let _ = events_tx.send(AgentEvent::MissionStatusChanged {
+                                    mission_id: id,
+                                    status: new_status,
+                                    summary: None,
+                                });
+                            }
                             let _ = respond.send(result);
                         } else {
                             let _ = respond.send(Err("Memory not configured".to_string()));
+                        }
+                    }
+                }
+            }
+            // Handle agent-initiated mission status changes (from complete_mission tool)
+            mission_cmd = mission_cmd_rx.recv() => {
+                if let Some(cmd) = mission_cmd {
+                    match cmd {
+                        crate::tools::mission::MissionControlCommand::SetStatus { status, summary } => {
+                            let mission_id = current_mission.read().await.clone();
+                            if let Some(id) = mission_id {
+                                let new_status = match status {
+                                    crate::tools::mission::MissionStatusValue::Completed => MissionStatus::Completed,
+                                    crate::tools::mission::MissionStatusValue::Failed => MissionStatus::Failed,
+                                };
+                                if let Some(mem) = &memory {
+                                    if let Ok(()) = mem.supabase.update_mission_status(id, &new_status.to_string()).await {
+                                        let _ = events_tx.send(AgentEvent::MissionStatusChanged {
+                                            mission_id: id,
+                                            status: new_status,
+                                            summary,
+                                        });
+                                        tracing::info!("Mission {} marked as {} by agent", id, new_status);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -835,6 +887,10 @@ async fn control_actor_loop(
                     let cancel = CancellationToken::new();
                     let pricing = Arc::clone(&pricing);
                     let hist_snapshot = history.clone();
+                    let mission_ctrl = crate::tools::mission::MissionControl {
+                        current_mission_id: Arc::clone(&current_mission),
+                        cmd_tx: mission_cmd_tx.clone(),
+                    };
                     running_cancel = Some(cancel.clone());
                     running = Some(tokio::spawn(async move {
                         let result = run_single_control_turn(
@@ -849,6 +905,7 @@ async fn control_actor_loop(
                             cancel,
                             hist_snapshot,
                             msg.clone(),
+                            Some(mission_ctrl),
                         )
                         .await;
                         (mid, msg, result)
@@ -919,6 +976,7 @@ async fn run_single_control_turn(
     cancel: CancellationToken,
     history: Vec<(String, String)>,
     user_message: String,
+    mission_control: Option<crate::tools::mission::MissionControl>,
 ) -> crate::agents::AgentResult {
     // Build a task prompt that includes conversation context with size limits.
     // This prevents context overflow when history gets large.
@@ -937,7 +995,7 @@ async fn run_single_control_turn(
     convo.push_str(&history_context);
     convo.push_str("User:\n");
     convo.push_str(&user_message);
-    convo.push_str("\n\nInstructions:\n- Continue the conversation helpfully.\n- You may use tools to gather information or make changes.\n- When appropriate, use Tool UI tools (ui_*) for structured output or to ask for user selections.\n- For large data processing tasks (>10KB), use run_command to execute Python scripts rather than processing inline.\n");
+    convo.push_str("\n\nInstructions:\n- Continue the conversation helpfully.\n- You may use tools to gather information or make changes.\n- When appropriate, use Tool UI tools (ui_*) for structured output or to ask for user selections.\n- For large data processing tasks (>10KB), use run_command to execute Python scripts rather than processing inline.\n- When you have fully completed the user's goal or determined it cannot be completed, use the complete_mission tool to mark the mission status.\n");
 
     let budget = Budget::new(1000);
     let verification = VerificationCriteria::None;
@@ -951,7 +1009,7 @@ async fn run_single_control_turn(
 
     // Context for agent execution.
     let llm = Arc::new(OpenRouterClient::new(config.api_key.clone()));
-    let tools = ToolRegistry::new();
+    let tools = ToolRegistry::with_mission_control(mission_control.clone());
     let mut ctx = AgentContext::with_memory(
         config.clone(),
         llm,
@@ -960,6 +1018,7 @@ async fn run_single_control_turn(
         config.working_dir.clone(),
         memory,
     );
+    ctx.mission_control = mission_control;
     ctx.control_events = Some(events_tx);
     ctx.frontend_tool_hub = Some(tool_hub);
     ctx.control_status = Some(status);

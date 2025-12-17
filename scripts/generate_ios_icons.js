@@ -30,10 +30,10 @@ function createBrainSvg(size) {
     const scaleY = contentSize / 1186;
     const scale = Math.min(scaleX, scaleY);
     
-    // Center the brain
+    // Center the brain with slight rightward shift for visual centering
     const scaledWidth = 1568 * scale;
     const scaledHeight = 1186 * scale;
-    const offsetX = (size - scaledWidth) / 2;
+    const offsetX = (size - scaledWidth) / 2 + (size * 0.03); // Shift 3% right for visual centering
     const offsetY = (size - scaledHeight) / 2;
     
     return `<?xml version="1.0" encoding="UTF-8"?>

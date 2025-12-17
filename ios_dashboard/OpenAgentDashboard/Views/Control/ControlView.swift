@@ -8,21 +8,22 @@
 import SwiftUI
 
 struct ControlView: View {
-    @State private var messages: [ChatMessage] = []
     @State private var inputText = ""
-    @State private var runState: ControlRunState = .idle
-    @State private var queueLength = 0
-    @State private var currentMission: Mission?
-    @State private var isLoading = true
-    @State private var streamTask: Task<Void, Never>?
-    @State private var showMissionMenu = false
     @State private var shouldScrollToBottom = false
+    @State private var lastMessageCount = 0
     
     @FocusState private var isInputFocused: Bool
     
-    private let api = APIService.shared
+    private let session = ControlSessionManager.shared
     private let nav = NavigationState.shared
     private let bottomAnchorId = "bottom-anchor"
+    
+    // Convenience accessors for session state
+    private var messages: [ChatMessage] { session.messages }
+    private var runState: ControlRunState { session.runState }
+    private var queueLength: Int { session.queueLength }
+    private var currentMission: Mission? { session.currentMission }
+    private var isLoading: Bool { session.isLoading }
     
     var body: some View {
         ZStack {
@@ -67,7 +68,7 @@ struct ControlView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button {
-                        Task { await createNewMission() }
+                        Task { await session.createNewMission() }
                     } label: {
                         Label("New Mission", systemImage: "plus")
                     }
@@ -76,20 +77,20 @@ struct ControlView: View {
                         Divider()
                         
                         Button {
-                            Task { await setMissionStatus(.completed) }
+                            Task { await session.setMissionStatus(.completed) }
                         } label: {
                             Label("Mark Complete", systemImage: "checkmark.circle")
                         }
                         
                         Button(role: .destructive) {
-                            Task { await setMissionStatus(.failed) }
+                            Task { await session.setMissionStatus(.failed) }
                         } label: {
                             Label("Mark Failed", systemImage: "xmark.circle")
                         }
                         
                         if mission.status != .active {
                             Button {
-                                Task { await setMissionStatus(.active) }
+                                Task { await session.setMissionStatus(.active) }
                             } label: {
                                 Label("Reactivate", systemImage: "arrow.clockwise")
                             }
@@ -102,25 +103,31 @@ struct ControlView: View {
             }
         }
         .task {
+            // Start the session manager (idempotent)
+            session.start()
+            
             // Check if we're being opened with a specific mission from History
             if let pendingId = nav.consumePendingMission() {
-                await loadMission(id: pendingId)
-            } else {
-                await loadCurrentMission()
+                await session.loadMission(id: pendingId)
+            } else if session.currentMission == nil {
+                await session.loadCurrentMission()
             }
-            startStreaming()
         }
         .onChange(of: nav.pendingMissionId) { _, newId in
             // Handle navigation from History while Control is already visible
             if let missionId = newId {
                 nav.pendingMissionId = nil
                 Task {
-                    await loadMission(id: missionId)
+                    await session.loadMission(id: missionId)
                 }
             }
         }
-        .onDisappear {
-            streamTask?.cancel()
+        .onChange(of: messages.count) { oldCount, newCount in
+            // Trigger scroll when messages are added
+            if newCount > lastMessageCount {
+                shouldScrollToBottom = true
+                lastMessageCount = newCount
+            }
         }
     }
     
@@ -182,9 +189,6 @@ struct ControlView: View {
             .onTapGesture {
                 // Dismiss keyboard when tapping on messages area
                 isInputFocused = false
-            }
-            .onChange(of: messages.count) { _, _ in
-                scrollToBottom(proxy: proxy)
             }
             .onChange(of: shouldScrollToBottom) { _, shouldScroll in
                 if shouldScroll {
@@ -299,7 +303,7 @@ struct ControlView: View {
                 // Send/Stop button
                 Button {
                     if runState != .idle {
-                        Task { await cancelRun() }
+                        Task { await session.cancelRun() }
                     } else {
                         sendMessage()
                     }
@@ -325,205 +329,14 @@ struct ControlView: View {
     
     // MARK: - Actions
     
-    private func loadCurrentMission() async {
-        isLoading = true
-        defer { isLoading = false }
-
-        do {
-            if let mission = try await api.getCurrentMission() {
-                currentMission = mission
-                messages = mission.history.enumerated().map { index, entry in
-                    ChatMessage(
-                        id: "\(mission.id)-\(index)",
-                        type: entry.isUser ? .user : .assistant(success: true, costCents: 0, model: nil),
-                        content: entry.content
-                    )
-                }
-                
-                // Scroll to bottom after loading
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    shouldScrollToBottom = true
-                }
-            }
-        } catch {
-            print("Failed to load mission: \(error)")
-        }
-    }
-    
-    private func loadMission(id: String) async {
-        isLoading = true
-        defer { isLoading = false }
-
-        do {
-            let missions = try await api.listMissions()
-            if let mission = missions.first(where: { $0.id == id }) {
-                currentMission = mission
-                messages = mission.history.enumerated().map { index, entry in
-                    ChatMessage(
-                        id: "\(mission.id)-\(index)",
-                        type: entry.isUser ? .user : .assistant(success: true, costCents: 0, model: nil),
-                        content: entry.content
-                    )
-                }
-                HapticService.success()
-                
-                // Scroll to bottom after loading
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    shouldScrollToBottom = true
-                }
-            }
-        } catch {
-            print("Failed to load mission: \(error)")
-        }
-    }
-    
-    private func createNewMission() async {
-        do {
-            let mission = try await api.createMission()
-            currentMission = mission
-            messages = []
-            HapticService.success()
-        } catch {
-            print("Failed to create mission: \(error)")
-            HapticService.error()
-        }
-    }
-    
-    private func setMissionStatus(_ status: MissionStatus) async {
-        guard let mission = currentMission else { return }
-        
-        do {
-            try await api.setMissionStatus(id: mission.id, status: status)
-            currentMission?.status = status
-            HapticService.success()
-        } catch {
-            print("Failed to set status: \(error)")
-            HapticService.error()
-        }
-    }
-    
     private func sendMessage() {
         let content = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !content.isEmpty else { return }
         
         inputText = ""
-        HapticService.lightTap()
         
         Task {
-            do {
-                let _ = try await api.sendMessage(content: content)
-            } catch {
-                print("Failed to send message: \(error)")
-                HapticService.error()
-            }
-        }
-    }
-    
-    private func cancelRun() async {
-        do {
-            try await api.cancelControl()
-            HapticService.success()
-        } catch {
-            print("Failed to cancel: \(error)")
-            HapticService.error()
-        }
-    }
-    
-    private func startStreaming() {
-        streamTask = api.streamControl { eventType, data in
-            Task { @MainActor in
-                handleStreamEvent(type: eventType, data: data)
-            }
-        }
-    }
-    
-    private func handleStreamEvent(type: String, data: [String: Any]) {
-        switch type {
-        case "status":
-            if let state = data["state"] as? String {
-                runState = ControlRunState(rawValue: state) ?? .idle
-            }
-            if let queue = data["queue_len"] as? Int {
-                queueLength = queue
-            }
-            
-        case "user_message":
-            if let content = data["content"] as? String,
-               let id = data["id"] as? String {
-                let message = ChatMessage(id: id, type: .user, content: content)
-                messages.append(message)
-            }
-            
-        case "assistant_message":
-            if let content = data["content"] as? String,
-               let id = data["id"] as? String {
-                let success = data["success"] as? Bool ?? true
-                let costCents = data["cost_cents"] as? Int ?? 0
-                let model = data["model"] as? String
-                
-                // Remove any incomplete thinking messages
-                messages.removeAll { $0.isThinking && !$0.thinkingDone }
-                
-                let message = ChatMessage(
-                    id: id,
-                    type: .assistant(success: success, costCents: costCents, model: model),
-                    content: content
-                )
-                messages.append(message)
-            }
-            
-        case "thinking":
-            if let content = data["content"] as? String {
-                let done = data["done"] as? Bool ?? false
-                
-                // Find existing thinking message or create new
-                if let index = messages.lastIndex(where: { $0.isThinking && !$0.thinkingDone }) {
-                    messages[index].content += "\n\n---\n\n" + content
-                    if done {
-                        messages[index] = ChatMessage(
-                            id: messages[index].id,
-                            type: .thinking(done: true, startTime: Date()),
-                            content: messages[index].content
-                        )
-                    }
-                } else if !done {
-                    let message = ChatMessage(
-                        id: "thinking-\(Date().timeIntervalSince1970)",
-                        type: .thinking(done: false, startTime: Date()),
-                        content: content
-                    )
-                    messages.append(message)
-                }
-            }
-            
-        case "error":
-            if let errorMessage = data["message"] as? String {
-                let message = ChatMessage(
-                    id: "error-\(Date().timeIntervalSince1970)",
-                    type: .error,
-                    content: errorMessage
-                )
-                messages.append(message)
-            }
-            
-        case "tool_call":
-            if let toolCallId = data["tool_call_id"] as? String,
-               let name = data["name"] as? String,
-               let args = data["args"] as? [String: Any] {
-                // Parse UI tool calls
-                if let toolUI = ToolUIContent.parse(name: name, args: args) {
-                    let message = ChatMessage(
-                        id: toolCallId,
-                        type: .toolUI(name: name),
-                        content: "",
-                        toolUI: toolUI
-                    )
-                    messages.append(message)
-                }
-            }
-            
-        default:
-            break
+            await session.sendMessage(content: content)
         }
     }
 }
