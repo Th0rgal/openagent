@@ -12,36 +12,44 @@ struct ToolUIDataTableView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Title
+            // Title header
             if let title = table.title {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Theme.textPrimary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.backgroundSecondary.opacity(0.5))
+                HStack(spacing: 8) {
+                    Image(systemName: "tablecells")
+                        .font(.caption)
+                        .foregroundStyle(Theme.accent)
+                    
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.backgroundSecondary)
             }
             
-            // Table content
-            ScrollView(.horizontal, showsIndicators: false) {
+            // Table content with horizontal scroll
+            ScrollView(.horizontal, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 0) {
                     // Header row
                     HStack(spacing: 0) {
                         ForEach(table.columns, id: \.id) { column in
                             Text(column.displayLabel)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(Theme.textTertiary)
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(Theme.textMuted)
                                 .textCase(.uppercase)
-                                .frame(minWidth: columnWidth(for: column), alignment: .leading)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
+                                .lineLimit(2)
+                                .frame(width: columnWidth(for: column), alignment: .leading)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
                         }
                     }
-                    .background(Theme.backgroundSecondary.opacity(0.3))
+                    .background(Color.white.opacity(0.03))
                     
-                    Divider()
-                        .background(Theme.border)
+                    Rectangle()
+                        .fill(Theme.border)
+                        .frame(height: 0.5)
                     
                     // Data rows
                     if table.rows.isEmpty {
@@ -51,50 +59,64 @@ struct ToolUIDataTableView: View {
                             .padding()
                             .frame(maxWidth: .infinity, alignment: .center)
                     } else {
-                        ForEach(Array(table.rows.enumerated()), id: \.offset) { index, row in
-                            HStack(spacing: 0) {
-                                ForEach(table.columns, id: \.id) { column in
-                                    let cellValue = row[column.id]?.stringValue ?? "-"
-                                    Text(cellValue)
-                                        .font(.subheadline)
-                                        .foregroundStyle(Theme.textSecondary)
-                                        .frame(minWidth: columnWidth(for: column), alignment: .leading)
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 10)
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(table.rows.enumerated()), id: \.offset) { index, row in
+                                HStack(spacing: 0) {
+                                    ForEach(Array(table.columns.enumerated()), id: \.element.id) { colIndex, column in
+                                        let cellValue = row[column.id]?.stringValue ?? "-"
+                                        
+                                        Text(cellValue)
+                                            .font(.caption)
+                                            .foregroundStyle(colIndex == 0 ? Theme.textPrimary : Theme.textSecondary)
+                                            .fontWeight(colIndex == 0 ? .medium : .regular)
+                                            .lineLimit(3)
+                                            .frame(width: columnWidth(for: column), alignment: .leading)
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 10)
+                                    }
                                 }
-                            }
-                            
-                            if index < table.rows.count - 1 {
-                                Divider()
-                                    .background(Theme.border.opacity(0.5))
+                                .background(index % 2 == 0 ? Color.clear : Color.white.opacity(0.02))
+                                
+                                if index < table.rows.count - 1 {
+                                    Rectangle()
+                                        .fill(Theme.border.opacity(0.3))
+                                        .frame(height: 0.5)
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Theme.backgroundSecondary.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Theme.border, lineWidth: 0.5)
         )
     }
     
     private func columnWidth(for column: ToolUIDataTable.Column) -> CGFloat {
-        // Parse width if provided, otherwise use default
+        // Parse width if provided, otherwise use adaptive default
         if let width = column.width {
             if width.hasSuffix("px") {
                 let numStr = width.dropLast(2)
                 if let num = Double(numStr) {
-                    return CGFloat(num)
+                    return min(200, max(80, CGFloat(num)))
                 }
             }
             if let num = Double(width) {
-                return CGFloat(num)
+                return min(200, max(80, CGFloat(num)))
             }
         }
-        return 120 // Default column width
+        // Smart default based on column id
+        let id = column.id.lowercased()
+        if id.contains("name") || id.contains("model") || id.contains("description") {
+            return 140
+        } else if id.contains("id") || id.contains("cost") || id.contains("price") {
+            return 90
+        }
+        return 110
     }
 }
 

@@ -27,7 +27,7 @@ struct ToolUIOptionListView: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             ForEach(optionList.options) { option in
                 if isConfirmed {
                     // Only show confirmed options
@@ -40,11 +40,11 @@ struct ToolUIOptionListView: View {
                 }
             }
         }
-        .padding(12)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(10)
+        .background(Theme.backgroundSecondary.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Theme.border, lineWidth: 0.5)
         )
     }

@@ -17,25 +17,21 @@ struct ToolUIView: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Tool label
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
+            // Compact tool label
+            HStack(spacing: 5) {
                 Image(systemName: toolIcon)
-                    .font(.caption2)
+                    .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(Theme.accent)
                 
-                Text("Tool: ")
-                    .font(.caption2)
-                    .foregroundStyle(Theme.textTertiary)
-                +
                 Text(toolName)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(Theme.accent)
+                    .font(.system(size: 10, weight: .medium).monospaced())
+                    .foregroundStyle(Theme.accent.opacity(0.8))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Theme.accent.opacity(0.1))
-            .clipShape(Capsule())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Theme.accent.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             
             // Tool content
             toolContent
