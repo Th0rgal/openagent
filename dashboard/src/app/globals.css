@@ -3,9 +3,8 @@
 /* Terminal font (JetBrainsMono Nerd Font Mono) */
 @font-face {
   font-family: "JetBrainsMono Nerd Font Mono";
-  src:
-    url("/fonts/jetbrainsmono-nerd-font/JetBrainsMonoNerdFontMono-Regular.ttf")
-      format("truetype");
+  src: url("/fonts/jetbrainsmono-nerd-font/JetBrainsMonoNerdFontMono-Regular.ttf")
+    format("truetype");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
@@ -13,9 +12,8 @@
 
 @font-face {
   font-family: "JetBrainsMono Nerd Font Mono";
-  src:
-    url("/fonts/jetbrainsmono-nerd-font/JetBrainsMonoNerdFontMono-Bold.ttf")
-      format("truetype");
+  src: url("/fonts/jetbrainsmono-nerd-font/JetBrainsMonoNerdFontMono-Bold.ttf")
+    format("truetype");
   font-weight: 700;
   font-style: normal;
   font-display: swap;
@@ -27,27 +25,27 @@
 
 :root {
   /* Backgrounds (dark mode) - No pure black */
-  --background: 18 18 20;          /* #121214 - primary surface */
+  --background: 18 18 20; /* #121214 - primary surface */
   --background-elevated: 28 28 30; /* #1C1C1E - cards, panels */
   --background-tertiary: 44 44 46; /* #2C2C2E - nested elements */
 
   /* Text Hierarchy */
-  --foreground: 255 255 255;           /* Primary text - white */
+  --foreground: 255 255 255; /* Primary text - white */
   --foreground-secondary: 160 160 165; /* #A0A0A5 - secondary text */
-  --foreground-tertiary: 110 110 115;  /* #6E6E73 - tertiary/disabled */
-  --foreground-muted: 72 72 77;        /* #48484D - very subtle */
+  --foreground-tertiary: 110 110 115; /* #6E6E73 - tertiary/disabled */
+  --foreground-muted: 72 72 77; /* #48484D - very subtle */
 
   /* Accent (single accent color - Indigo) */
-  --accent: 99 102 241;  /* Indigo-500 (#6366F1) */
+  --accent: 99 102 241; /* Indigo-500 (#6366F1) */
 
   /* Semantic Colors */
-  --success: 34 197 94;   /* #22C55E - emerald/green */
-  --warning: 234 179 8;   /* #EAB308 - amber */
-  --error: 239 68 68;     /* #EF4444 - red */
-  --info: 59 130 246;     /* #3B82F6 - blue */
+  --success: 34 197 94; /* #22C55E - emerald/green */
+  --warning: 234 179 8; /* #EAB308 - amber */
+  --error: 239 68 68; /* #EF4444 - red */
+  --info: 59 130 246; /* #3B82F6 - blue */
 
   /* Borders - subtle */
-  --border: 255 255 255;  /* Used with /0.06 */
+  --border: 255 255 255; /* Used with /0.06 */
   --border-elevated: 255 255 255; /* Used with /0.08 */
 }
 
@@ -78,8 +76,8 @@
 body {
   background-color: rgb(var(--background));
   color: rgb(var(--foreground));
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, 
-               "Helvetica Neue", Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
   min-height: 100vh;
 }
 
@@ -103,13 +101,6 @@ select:focus-visible {
 
 ::selection {
   background: rgb(var(--accent) / 0.25);
-}
-
-/* Fix selection visibility on purple/indigo backgrounds */
-.bg-indigo-500::selection,
-.bg-indigo-500 *::selection {
-  background: rgba(255, 255, 255, 0.3);
-  color: white;
 }
 
 /* =========================================================================
@@ -137,23 +128,44 @@ select:focus-visible {
    Animations
    ========================================================================= */
 @keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes slide-up {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes slide-in-right {
-  from { opacity: 0; transform: translateX(16px); }
-  to { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 @keyframes pulse-subtle {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 .animate-fade-in {
@@ -293,10 +305,18 @@ select:focus-visible {
   border-radius: 9999px;
 }
 
-.status-connected { background: rgb(var(--success)); }
-.status-disconnected { background: rgb(var(--error)); }
-.status-warning { background: rgb(var(--warning)); }
-.status-info { background: rgb(var(--info)); }
+.status-connected {
+  background: rgb(var(--success));
+}
+.status-disconnected {
+  background: rgb(var(--error));
+}
+.status-warning {
+  background: rgb(var(--warning));
+}
+.status-info {
+  background: rgb(var(--info));
+}
 
 /* =========================================================================
    Badges/Tags

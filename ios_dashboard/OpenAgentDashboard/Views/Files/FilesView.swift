@@ -15,6 +15,9 @@ struct FilesView: View {
     @State private var errorMessage: String?
     @State private var selectedEntry: FileEntry?
     @State private var showingDeleteAlert = false
+    @State private var isEditingPath = false
+    @State private var editedPath = ""
+    @FocusState private var isPathFieldFocused: Bool
     @State private var showingNewFolderAlert = false
     @State private var newFolderName = ""
     @State private var isImporting = false
@@ -178,7 +181,7 @@ struct FilesView: View {
     private var breadcrumbView: some View {
         HStack(spacing: 0) {
             // Up button
-            if currentPath != "/" {
+            if currentPath != "/" && !isEditingPath {
                 Button {
                     goUp()
                 } label: {
@@ -189,33 +192,80 @@ struct FilesView: View {
                 }
             }
             
-            // Breadcrumb path
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 2) {
-                    ForEach(Array(breadcrumbs.enumerated()), id: \.offset) { index, crumb in
-                        if index > 0 {
-                            Image(systemName: "chevron.right")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(Theme.textMuted)
+            if isEditingPath {
+                // Editable path text field
+                HStack(spacing: 8) {
+                    Image(systemName: "folder")
+                        .foregroundStyle(Theme.accent)
+                    
+                    TextField("Path", text: $editedPath)
+                        .font(.subheadline.monospaced())
+                        .textFieldStyle(.plain)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .focused($isPathFieldFocused)
+                        .onSubmit {
+                            navigateTo(editedPath)
+                            isEditingPath = false
                         }
-                        
-                        Button {
-                            navigateTo(crumb.path)
-                        } label: {
-                            Text(crumb.name)
-                                .font(.subheadline.weight(index == breadcrumbs.count - 1 ? .semibold : .medium))
-                                .foregroundStyle(index == breadcrumbs.count - 1 ? Theme.textPrimary : Theme.textTertiary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
-                                .background(index == breadcrumbs.count - 1 ? Theme.backgroundSecondary : .clear)
-                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        }
+                    
+                    Button {
+                        isEditingPath = false
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(Theme.textMuted)
+                    }
+                    
+                    Button {
+                        navigateTo(editedPath)
+                        isEditingPath = false
+                    } label: {
+                        Image(systemName: "arrow.right.circle.fill")
+                            .foregroundStyle(Theme.accent)
                     }
                 }
-                .padding(.trailing, 16)
+                .padding(.horizontal, 16)
+            } else {
+                // Breadcrumb path
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 2) {
+                        ForEach(Array(breadcrumbs.enumerated()), id: \.offset) { index, crumb in
+                            if index > 0 {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(Theme.textMuted)
+                            }
+                            
+                            Button {
+                                navigateTo(crumb.path)
+                            } label: {
+                                Text(crumb.name)
+                                    .font(.subheadline.weight(index == breadcrumbs.count - 1 ? .semibold : .medium))
+                                    .foregroundStyle(index == breadcrumbs.count - 1 ? Theme.textPrimary : Theme.textTertiary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 6)
+                                    .background(index == breadcrumbs.count - 1 ? Theme.backgroundSecondary : .clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            }
+                        }
+                        
+                        // Edit button
+                        Button {
+                            editedPath = currentPath
+                            isEditingPath = true
+                            isPathFieldFocused = true
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.caption)
+                                .foregroundStyle(Theme.textMuted)
+                                .padding(6)
+                        }
+                    }
+                    .padding(.trailing, 16)
+                }
             }
         }
-        .padding(.leading, currentPath == "/" ? 16 : 0)
+        .padding(.leading, currentPath == "/" && !isEditingPath ? 16 : 0)
         .frame(height: 44)
         .background(.thinMaterial)
     }
