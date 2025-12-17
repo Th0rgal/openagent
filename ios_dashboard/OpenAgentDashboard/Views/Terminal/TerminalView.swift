@@ -48,65 +48,105 @@ struct TerminalView: View {
         
         /// Parse ANSI escape codes and return AttributedString with colors
         private static func parseANSI(_ text: String) -> AttributedString? {
+            // First, strip ALL non-SGR escape sequences (cursor movement, etc.)
+            let cleanedText = stripNonColorEscapes(text)
+            
             var result = AttributedString()
             var currentColor: Color = .white
+            var currentBgColor: Color? = nil
             var isBold = false
+            var isDim = false
             
-            // Pattern to match ANSI escape sequences
+            // Pattern to match SGR (color/style) escape sequences only
             let pattern = "\u{001B}\\[([0-9;]*)m"
             guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
-                return nil
+                // If regex fails, return plain text
+                var attr = AttributedString(cleanedText)
+                attr.foregroundColor = .white
+                attr.font = .system(size: 13, weight: .regular, design: .monospaced)
+                return attr
             }
             
-            let nsText = text as NSString
+            let nsText = cleanedText as NSString
             var lastEnd = 0
-            let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsText.length))
+            let matches = regex.matches(in: cleanedText, options: [], range: NSRange(location: 0, length: nsText.length))
             
             for match in matches {
                 // Add text before this escape sequence
                 if match.range.location > lastEnd {
                     let textRange = NSRange(location: lastEnd, length: match.range.location - lastEnd)
                     let substring = nsText.substring(with: textRange)
-                    var attr = AttributedString(substring)
-                    attr.foregroundColor = currentColor
-                    if isBold {
-                        attr.font = .system(size: 13, weight: .bold, design: .monospaced)
-                    } else {
-                        attr.font = .system(size: 13, weight: .regular, design: .monospaced)
+                    if !substring.isEmpty {
+                        var attr = AttributedString(substring)
+                        attr.foregroundColor = isDim ? currentColor.opacity(0.6) : currentColor
+                        attr.font = .system(size: 13, weight: isBold ? .bold : .regular, design: .monospaced)
+                        if let bg = currentBgColor {
+                            attr.backgroundColor = bg
+                        }
+                        result.append(attr)
                     }
-                    result.append(attr)
                 }
                 
-                // Parse the escape code
+                // Parse the SGR codes
                 if match.numberOfRanges > 1 {
                     let codeRange = match.range(at: 1)
-                    let codes = nsText.substring(with: codeRange).split(separator: ";").compactMap { Int($0) }
+                    let codeString = nsText.substring(with: codeRange)
+                    let codes = codeString.isEmpty ? [0] : codeString.split(separator: ";").compactMap { Int($0) }
                     
-                    for code in codes {
+                    var i = 0
+                    while i < codes.count {
+                        let code = codes[i]
                         switch code {
-                        case 0: // Reset
+                        case 0: // Reset all
                             currentColor = .white
+                            currentBgColor = nil
                             isBold = false
-                        case 1: // Bold
-                            isBold = true
-                        case 30: currentColor = Color(white: 0.3) // Black
-                        case 31: currentColor = Color(red: 1, green: 0.33, blue: 0.33) // Red
-                        case 32: currentColor = Color(red: 0.33, green: 0.85, blue: 0.33) // Green
-                        case 33: currentColor = Color(red: 1, green: 0.85, blue: 0.33) // Yellow
-                        case 34: currentColor = Color(red: 0.4, green: 0.6, blue: 1) // Blue
-                        case 35: currentColor = Color(red: 0.85, green: 0.45, blue: 0.85) // Magenta
-                        case 36: currentColor = Color(red: 0.4, green: 0.9, blue: 0.9) // Cyan
-                        case 37: currentColor = .white // White
-                        case 90: currentColor = Color(white: 0.5) // Bright black (gray)
-                        case 91: currentColor = Color(red: 1, green: 0.5, blue: 0.5) // Bright red
-                        case 92: currentColor = Color(red: 0.5, green: 1, blue: 0.5) // Bright green
-                        case 93: currentColor = Color(red: 1, green: 1, blue: 0.5) // Bright yellow
-                        case 94: currentColor = Color(red: 0.6, green: 0.8, blue: 1) // Bright blue
-                        case 95: currentColor = Color(red: 1, green: 0.6, blue: 1) // Bright magenta
-                        case 96: currentColor = Color(red: 0.6, green: 1, blue: 1) // Bright cyan
-                        case 97: currentColor = .white // Bright white
+                            isDim = false
+                        case 1: isBold = true
+                        case 2: isDim = true
+                        case 22: isBold = false; isDim = false
+                        // Foreground colors (30-37, 90-97)
+                        case 30: currentColor = Color(white: 0.2)
+                        case 31: currentColor = Color(red: 0.94, green: 0.33, blue: 0.31)
+                        case 32: currentColor = Color(red: 0.33, green: 0.86, blue: 0.43)
+                        case 33: currentColor = Color(red: 0.98, green: 0.74, blue: 0.25)
+                        case 34: currentColor = Color(red: 0.40, green: 0.57, blue: 0.93)
+                        case 35: currentColor = Color(red: 0.83, green: 0.42, blue: 0.78)
+                        case 36: currentColor = Color(red: 0.30, green: 0.82, blue: 0.87)
+                        case 37: currentColor = Color(white: 0.9)
+                        case 39: currentColor = .white // Default
+                        case 90: currentColor = Color(white: 0.5)
+                        case 91: currentColor = Color(red: 1, green: 0.45, blue: 0.45)
+                        case 92: currentColor = Color(red: 0.45, green: 1, blue: 0.55)
+                        case 93: currentColor = Color(red: 1, green: 0.9, blue: 0.45)
+                        case 94: currentColor = Color(red: 0.55, green: 0.7, blue: 1)
+                        case 95: currentColor = Color(red: 1, green: 0.55, blue: 0.95)
+                        case 96: currentColor = Color(red: 0.45, green: 0.95, blue: 1)
+                        case 97: currentColor = .white
+                        // Background colors (40-47, 100-107)
+                        case 40: currentBgColor = Color(white: 0.1)
+                        case 41: currentBgColor = Color(red: 0.6, green: 0.15, blue: 0.15)
+                        case 42: currentBgColor = Color(red: 0.15, green: 0.5, blue: 0.2)
+                        case 43: currentBgColor = Color(red: 0.6, green: 0.45, blue: 0.1)
+                        case 44: currentBgColor = Color(red: 0.15, green: 0.25, blue: 0.55)
+                        case 45: currentBgColor = Color(red: 0.5, green: 0.2, blue: 0.45)
+                        case 46: currentBgColor = Color(red: 0.1, green: 0.45, blue: 0.5)
+                        case 47: currentBgColor = Color(white: 0.7)
+                        case 49: currentBgColor = nil // Default bg
+                        // 256 color mode (38;5;n or 48;5;n)
+                        case 38:
+                            if i + 2 < codes.count && codes[i + 1] == 5 {
+                                currentColor = color256(codes[i + 2])
+                                i += 2
+                            }
+                        case 48:
+                            if i + 2 < codes.count && codes[i + 1] == 5 {
+                                currentBgColor = color256(codes[i + 2])
+                                i += 2
+                            }
                         default: break
                         }
+                        i += 1
                     }
                 }
                 
@@ -117,17 +157,78 @@ struct TerminalView: View {
             if lastEnd < nsText.length {
                 let textRange = NSRange(location: lastEnd, length: nsText.length - lastEnd)
                 let substring = nsText.substring(with: textRange)
-                var attr = AttributedString(substring)
-                attr.foregroundColor = currentColor
-                if isBold {
-                    attr.font = .system(size: 13, weight: .bold, design: .monospaced)
-                } else {
-                    attr.font = .system(size: 13, weight: .regular, design: .monospaced)
+                if !substring.isEmpty {
+                    var attr = AttributedString(substring)
+                    attr.foregroundColor = isDim ? currentColor.opacity(0.6) : currentColor
+                    attr.font = .system(size: 13, weight: isBold ? .bold : .regular, design: .monospaced)
+                    if let bg = currentBgColor {
+                        attr.backgroundColor = bg
+                    }
+                    result.append(attr)
                 }
-                result.append(attr)
             }
             
             return result.characters.isEmpty ? nil : result
+        }
+        
+        /// Strip all non-SGR escape sequences (cursor movement, screen clear, etc.)
+        private static func stripNonColorEscapes(_ text: String) -> String {
+            // Match all ANSI escape sequences
+            // SGR codes end in 'm', others end in A-Z (except m)
+            // Also handle OSC sequences (ESC ] ... BEL/ST)
+            let patterns = [
+                "\\x1B\\[[0-9;]*[A-LN-Za-ln-z]",  // CSI sequences except 'm'
+                "\\x1B\\][^\\x07\\x1B]*(?:\\x07|\\x1B\\\\)",  // OSC sequences
+                "\\x1B[\\(\\)][AB012]",  // Character set selection
+                "\\x1B[78DEHM]",  // Single-char escapes
+                "\\x1B\\[\\?[0-9;]*[hl]",  // Private mode set/reset
+            ]
+            
+            var result = text
+            for pattern in patterns {
+                if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+                    result = regex.stringByReplacingMatches(
+                        in: result,
+                        options: [],
+                        range: NSRange(result.startIndex..., in: result),
+                        withTemplate: ""
+                    )
+                }
+            }
+            return result
+        }
+        
+        /// Convert 256-color palette index to Color
+        private static func color256(_ index: Int) -> Color {
+            if index < 16 {
+                // Standard colors
+                let colors: [Color] = [
+                    Color(white: 0.1), Color(red: 0.8, green: 0.2, blue: 0.2),
+                    Color(red: 0.2, green: 0.8, blue: 0.3), Color(red: 0.8, green: 0.7, blue: 0.2),
+                    Color(red: 0.3, green: 0.4, blue: 0.9), Color(red: 0.8, green: 0.3, blue: 0.7),
+                    Color(red: 0.2, green: 0.7, blue: 0.8), Color(white: 0.85),
+                    Color(white: 0.4), Color(red: 1, green: 0.4, blue: 0.4),
+                    Color(red: 0.4, green: 1, blue: 0.5), Color(red: 1, green: 0.95, blue: 0.4),
+                    Color(red: 0.5, green: 0.6, blue: 1), Color(red: 1, green: 0.5, blue: 0.9),
+                    Color(red: 0.4, green: 0.95, blue: 1), .white
+                ]
+                return colors[index]
+            } else if index < 232 {
+                // 216 color cube (6x6x6)
+                let n = index - 16
+                let b = n % 6
+                let g = (n / 6) % 6
+                let r = n / 36
+                return Color(
+                    red: r == 0 ? 0 : Double(r * 40 + 55) / 255,
+                    green: g == 0 ? 0 : Double(g * 40 + 55) / 255,
+                    blue: b == 0 ? 0 : Double(b * 40 + 55) / 255
+                )
+            } else {
+                // Grayscale (24 shades)
+                let gray = Double((index - 232) * 10 + 8) / 255
+                return Color(white: gray)
+            }
         }
     }
     

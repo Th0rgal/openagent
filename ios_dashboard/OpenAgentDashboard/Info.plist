@@ -54,5 +54,7 @@
         <key>NSAllowsArbitraryLoads</key>
         <true/>
     </dict>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
 </dict>
 </plist>
