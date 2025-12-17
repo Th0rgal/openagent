@@ -133,6 +133,10 @@ impl ToolRegistry {
                 Arc::new(desktop::MouseMove),
             );
             tools.insert("desktop_scroll".to_string(), Arc::new(desktop::Scroll));
+            tools.insert(
+                "desktop_i3_command".to_string(),
+                Arc::new(desktop::I3Command),
+            );
         }
 
         // Mission control (allows agent to complete/fail missions)

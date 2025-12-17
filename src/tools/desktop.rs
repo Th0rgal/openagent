@@ -1034,3 +1034,86 @@ impl Tool for Scroll {
         ))
     }
 }
+
+/// Execute i3 window manager commands using i3-msg.
+pub struct I3Command;
+
+#[async_trait]
+impl Tool for I3Command {
+    fn name(&self) -> &str {
+        "desktop_i3_command"
+    }
+
+    fn description(&self) -> &str {
+        "Execute i3 window manager commands using i3-msg. Use this to control window layout and launch applications in the i3 environment.
+
+Common commands:
+- exec <app>: Launch an application (e.g., 'exec chromium', 'exec xterm -e fastfetch')
+- split h/v: Split current container horizontally/vertically for next window
+- focus left/right/up/down: Focus adjacent window
+- move left/right/up/down: Move focused window
+- resize grow/shrink width/height <px>: Resize window
+- layout tabbed/stacking/splitv/splith: Change container layout
+- fullscreen toggle: Toggle fullscreen
+- kill: Close focused window
+
+Layout tips for 'chrome left, terminal top-right, calculator bottom-right':
+1. exec chromium
+2. split h (prepare horizontal split for next window)
+3. focus right (if needed)
+4. split v (prepare vertical split on right side)
+5. exec xterm -e fastfetch
+6. focus down (if needed)
+7. exec xcalc"
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "display": {
+                    "type": "string",
+                    "description": "The display identifier (e.g., ':99')"
+                },
+                "command": {
+                    "type": "string",
+                    "description": "The i3 command to execute (e.g., 'exec chromium', 'split h', 'focus right')"
+                }
+            },
+            "required": ["display", "command"]
+        })
+    }
+
+    async fn execute(&self, args: Value, _working_dir: &Path) -> anyhow::Result<String> {
+        let display_id = args["display"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing 'display' argument"))?;
+
+        let command = args["command"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing 'command' argument"))?;
+
+        tracing::info!(display = %display_id, command = %command, "Executing i3 command");
+
+        let (stdout, stderr, exit_code) = run_with_display(
+            display_id,
+            "i3-msg",
+            &[command],
+            30,
+        )
+        .await?;
+
+        if exit_code != 0 {
+            return Err(anyhow::anyhow!("i3-msg failed: {} {}", stdout, stderr));
+        }
+
+        // Parse i3-msg JSON output if present
+        let result = if stdout.trim().starts_with('[') || stdout.trim().starts_with('{') {
+            stdout.trim().to_string()
+        } else {
+            format!("{{\"success\": true, \"output\": \"{}\"}}", stdout.trim().replace('"', "\\\""))
+        };
+
+        Ok(result)
+    }
+}
