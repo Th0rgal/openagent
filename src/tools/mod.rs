@@ -7,6 +7,7 @@
 //! and search anywhere on the machine. The `working_dir` parameter is the default directory
 //! for relative paths (typically `/root` in production).
 
+mod desktop;
 mod directory;
 mod file_ops;
 mod git;
@@ -96,6 +97,33 @@ impl ToolRegistry {
         // Frontend Tool UI (schemas for rich rendering in the dashboard)
         tools.insert("ui_optionList".to_string(), Arc::new(ui::UiOptionList));
         tools.insert("ui_dataTable".to_string(), Arc::new(ui::UiDataTable));
+
+        // Desktop automation (conditional on DESKTOP_ENABLED)
+        if std::env::var("DESKTOP_ENABLED")
+            .map(|v| v.to_lowercase() == "true" || v == "1")
+            .unwrap_or(false)
+        {
+            tools.insert(
+                "desktop_start_session".to_string(),
+                Arc::new(desktop::StartSession),
+            );
+            tools.insert(
+                "desktop_stop_session".to_string(),
+                Arc::new(desktop::StopSession),
+            );
+            tools.insert(
+                "desktop_screenshot".to_string(),
+                Arc::new(desktop::Screenshot),
+            );
+            tools.insert("desktop_type".to_string(), Arc::new(desktop::TypeText));
+            tools.insert("desktop_click".to_string(), Arc::new(desktop::Click));
+            tools.insert("desktop_get_text".to_string(), Arc::new(desktop::GetText));
+            tools.insert(
+                "desktop_mouse_move".to_string(),
+                Arc::new(desktop::MouseMove),
+            );
+            tools.insert("desktop_scroll".to_string(), Arc::new(desktop::Scroll));
+        }
 
         Self { tools }
     }

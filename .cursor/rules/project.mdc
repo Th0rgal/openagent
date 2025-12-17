@@ -37,7 +37,7 @@ src/
 ├── memory/           # Supabase + pgvector persistence
 ├── mcp/              # MCP server registry + config
 ├── llm/              # OpenRouter client
-├── tools/            # File ops, terminal, git, web, search
+├── tools/            # File ops, terminal, git, web, search, desktop
 ├── task/             # Task types + verification
 └── api/              # HTTP routes (axum)
 ```
@@ -80,6 +80,23 @@ Analyzes failure signals to decide action:
 | Budget exhausted + progress | files modified, high tool success | **Continue** or cheaper |
 | External error | API/network issues | **Retry** same config |
 | Infeasible | consistent failures | **Stop** |
+
+## Desktop Automation
+
+When `DESKTOP_ENABLED=true`, the agent has access to desktop automation tools:
+
+| Tool | Purpose |
+|------|---------|
+| `desktop_start_session` | Start Xvfb + i3 virtual desktop |
+| `desktop_stop_session` | Clean up desktop session |
+| `desktop_screenshot` | Capture screen (returns PNG path) |
+| `desktop_type` | Type text or send key combos |
+| `desktop_click` | Mouse click at coordinates |
+| `desktop_get_text` | Extract text via AT-SPI or OCR |
+| `desktop_mouse_move` | Move mouse without clicking |
+| `desktop_scroll` | Scroll wheel at position |
+
+Setup: See `docs/DESKTOP_SETUP.md` and run `scripts/install_desktop.sh` on server.
 
 ## After Significant Changes
 
