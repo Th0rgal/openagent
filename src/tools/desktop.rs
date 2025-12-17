@@ -430,22 +430,18 @@ impl Tool for TypeText {
                 },
                 "text": {
                     "type": "string",
-                    "description": "Text to type. For special keys, use key names: 'Return', 'Tab', 'Escape', 'BackSpace', 'Delete', 'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'Page_Up', 'Page_Down', 'F1'-'F12'"
+                    "description": "Text to type (provide either 'text' OR 'key', not both). For special keys, use key names: 'Return', 'Tab', 'Escape', 'BackSpace', 'Delete', 'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'Page_Up', 'Page_Down', 'F1'-'F12'"
                 },
                 "key": {
                     "type": "string",
-                    "description": "Send a key combination instead of typing text. Examples: 'Return', 'ctrl+a', 'alt+F4', 'ctrl+shift+t', 'super+Return'"
+                    "description": "Send a key combination instead of typing text (provide either 'text' OR 'key', not both). Examples: 'Return', 'ctrl+a', 'alt+F4', 'ctrl+shift+t', 'super+Return'"
                 },
                 "delay_ms": {
                     "type": "integer",
                     "description": "Delay between keystrokes in milliseconds (default: 12, increase for slow applications)"
                 }
             },
-            "required": ["display"],
-            "oneOf": [
-                { "required": ["text"] },
-                { "required": ["key"] }
-            ]
+            "required": ["display"]
         })
     }
 

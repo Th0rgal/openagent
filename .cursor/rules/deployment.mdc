@@ -48,9 +48,14 @@ Backend proxied at `agent-backend.thomas.md`:
 - WebSocket upgrade enabled
 - SSL via certbot
 
-## SSH Key
+## SSH Access
 
-VPS uses `~/.ssh/cursor` key for GitHub access. Config:
+**Local machine to VPS**: Use the identity file from `secrets.json`:
+```bash
+ssh -i ~/.ssh/agent.thomas.md root@95.216.112.253
+```
+
+**VPS to GitHub**: Uses `~/.ssh/cursor` key. Config on VPS:
 ```
 Host github.com
     IdentityFile ~/.ssh/cursor
