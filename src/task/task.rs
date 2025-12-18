@@ -38,6 +38,9 @@ pub struct TaskAnalysis {
 
     /// Actual usage aggregated over all LLM calls during execution
     pub actual_usage: Option<TokenUsageSummary>,
+    
+    /// Last output from executor (for verification)
+    pub last_output: Option<String>,
 }
 
 /// Aggregate token usage (LLM telemetry).
@@ -267,6 +270,16 @@ impl Task {
 
     pub fn analysis_mut(&mut self) -> &mut TaskAnalysis {
         &mut self.analysis
+    }
+
+    /// Get the last executor output (for verification).
+    pub fn last_output(&self) -> Option<&str> {
+        self.analysis.last_output.as_deref()
+    }
+    
+    /// Set the last executor output.
+    pub fn set_last_output(&mut self, output: String) {
+        self.analysis.last_output = Some(output);
     }
 
     pub fn parent_id(&self) -> Option<TaskId> {

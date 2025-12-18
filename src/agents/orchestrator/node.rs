@@ -440,6 +440,9 @@ Respond ONLY with the JSON object."#,
         }
         emit_ctx.emit_tree(root_tree.clone());
 
+        // Store the executor output for verification
+        task.set_last_output(result.output.clone());
+
         if !result.success {
             return AgentResult::failure(result.output, total_cost)
                 .with_data(json!({
@@ -677,6 +680,9 @@ impl Agent for NodeAgent {
         ctx.emit_phase("executing", Some("Running subtask..."), Some(&self.name));
         let result = self.task_executor.execute(task, ctx).await;
         total_cost += result.cost_cents;
+
+        // Store the executor output for verification
+        task.set_last_output(result.output.clone());
 
         if !result.success {
             return AgentResult::failure(result.output, total_cost)

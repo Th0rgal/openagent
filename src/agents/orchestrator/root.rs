@@ -675,6 +675,9 @@ impl Agent for RootAgent {
         }
         ctx.emit_tree(root_tree.clone());
 
+        // Store the executor output for verification
+        task.set_last_output(result.output.clone());
+
         // Step 3: Verify
         if let Some(node) = root_tree.children.iter_mut().find(|n| n.id == "verifier") {
             node.status = "running".to_string();

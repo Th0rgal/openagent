@@ -140,6 +140,7 @@ impl Verifier {
     /// # Parameters
     /// - `task`: The task that was executed
     /// - `success_criteria`: What success looks like
+    /// - `task_output`: The actual output produced by the executor
     /// - `ctx`: Agent context
     /// 
     /// # Returns
@@ -148,21 +149,27 @@ impl Verifier {
         &self,
         task: &Task,
         success_criteria: &str,
+        task_output: Option<&str>,
         ctx: &AgentContext,
     ) -> VerificationResult {
+        let output_section = task_output
+            .map(|o| format!("\n\nActual Output/Result:\n{}\n", o.chars().take(3000).collect::<String>()))
+            .unwrap_or_default();
+        
         let prompt = format!(
             r#"You are verifying if a task was completed correctly.
 
 Task: {}
 
 Success Criteria: {}
-
-Based on your assessment, respond with a JSON object:
+{output_section}
+Based on what was actually accomplished (shown in the output above), respond with a JSON object:
 {{
     "passed": true/false,
-    "reasoning": "explanation of why the task passed or failed"
+    "reasoning": "explanation of why the task passed or failed based on the actual output"
 }}
 
+Be lenient - if the core goal was achieved even if the format isn't perfect, pass it.
 Respond ONLY with the JSON object."#,
             task.description(),
             success_criteria
@@ -270,7 +277,9 @@ Respond ONLY with the JSON object."#,
             }
 
             VerificationCriteria::LlmBased { success_criteria } => {
-                self.verify_with_llm(task, success_criteria, ctx).await
+                // Get last output from task analysis if available
+                let last_output = task.last_output();
+                self.verify_with_llm(task, success_criteria, last_output, ctx).await
             }
 
             VerificationCriteria::Hybrid { programmatic, llm_fallback } => {
@@ -283,11 +292,13 @@ Respond ONLY with the JSON object."#,
                     ),
                     Ok(false) => {
                         // Fall back to LLM
-                        self.verify_with_llm(task, llm_fallback, ctx).await
+                        let last_output = task.last_output();
+                        self.verify_with_llm(task, llm_fallback, last_output, ctx).await
                     }
                     Err(_) => {
                         // Error in programmatic, fall back to LLM
-                        self.verify_with_llm(task, llm_fallback, ctx).await
+                        let last_output = task.last_output();
+                        self.verify_with_llm(task, llm_fallback, last_output, ctx).await
                     }
                 }
             }
