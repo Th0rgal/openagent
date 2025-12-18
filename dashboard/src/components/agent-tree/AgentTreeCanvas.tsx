@@ -563,14 +563,31 @@ export function AgentTreeCanvas({
     return () => observer.disconnect();
   }, []);
   
-  // Center tree on initial render or when tree changes
+  // Center tree on initial render or when tree changes, and auto-fit if needed
   useEffect(() => {
-    if (layout.width > 0 && layout.height > 0) {
-      const centerX = (dimensions.width - layout.width) / 2;
-      const centerY = 20;
-      setPan({ x: centerX, y: centerY });
+    if (layout.width > 0 && layout.height > 0 && dimensions.width > 0 && dimensions.height > 0) {
+      // Calculate zoom to fit the tree in view with some padding
+      const paddingX = 100;
+      const paddingY = 100;
+      const availableWidth = dimensions.width - paddingX;
+      const availableHeight = dimensions.height - paddingY;
+      
+      const scaleX = availableWidth / layout.width;
+      const scaleY = availableHeight / layout.height;
+      
+      // Use the smaller scale to fit both dimensions, but cap at 1 (don't zoom in)
+      const fitZoom = Math.min(1, Math.min(scaleX, scaleY));
+      
+      // Calculate pan to center the tree
+      const scaledWidth = layout.width * fitZoom;
+      const scaledHeight = layout.height * fitZoom;
+      const centerX = (dimensions.width - scaledWidth) / 2;
+      const centerY = (dimensions.height - scaledHeight) / 2;
+      
+      setZoom(fitZoom);
+      setPan({ x: centerX, y: Math.max(20, centerY) });
     }
-  }, [layout.width, layout.height, dimensions.width]);
+  }, [layout.width, layout.height, dimensions.width, dimensions.height]);
   
   // Pan handlers
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -591,11 +608,11 @@ export function AgentTreeCanvas({
     setIsDragging(false);
   }, []);
   
-  // Zoom handler
+  // Zoom handler - reduced sensitivity for smoother zooming
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setZoom(z => Math.min(2, Math.max(0.3, z * delta)));
+    const delta = e.deltaY > 0 ? 0.97 : 1.03; // Reduced from 0.9/1.1 for smoother zoom
+    setZoom(z => Math.min(2, Math.max(0.2, z * delta)));
   }, []);
   
   if (!tree) {
@@ -687,13 +704,27 @@ export function AgentTreeCanvas({
         </button>
         <button
           onClick={() => {
-            setZoom(1);
-            const centerX = (dimensions.width - layout.width) / 2;
-            setPan({ x: centerX, y: 20 });
+            // Fit to view
+            const paddingX = 100;
+            const paddingY = 100;
+            const availableWidth = dimensions.width - paddingX;
+            const availableHeight = dimensions.height - paddingY;
+            
+            const scaleX = availableWidth / layout.width;
+            const scaleY = availableHeight / layout.height;
+            const fitZoom = Math.min(1, Math.min(scaleX, scaleY));
+            
+            const scaledWidth = layout.width * fitZoom;
+            const scaledHeight = layout.height * fitZoom;
+            const centerX = (dimensions.width - scaledWidth) / 2;
+            const centerY = (dimensions.height - scaledHeight) / 2;
+            
+            setZoom(fitZoom);
+            setPan({ x: centerX, y: Math.max(20, centerY) });
           }}
           className="px-2 h-8 rounded-lg bg-black/40 backdrop-blur-sm border border-white/[0.06] text-white/60 hover:text-white hover:bg-white/[0.04] transition-colors text-xs"
         >
-          Reset
+          Fit
         </button>
       </div>
       
