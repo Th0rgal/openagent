@@ -369,6 +369,9 @@ Use `search_memory` when you encounter a problem you might have solved before or
         let mut files_modified = false;
         let mut last_tool_calls: Vec<String> = Vec::new();
         let mut repetitive_actions = false;
+        let mut repetition_count: u32 = 0;
+        const LOOP_WARNING_THRESHOLD: u32 = 3;
+        const LOOP_FORCE_COMPLETE_THRESHOLD: u32 = 5;
         let mut has_error_messages = false;
         let mut iterations_completed = 0u32;
 
@@ -576,13 +579,58 @@ Use `search_memory` when you encounter a problem you might have solved before or
                         reasoning: response.reasoning.clone(),
                     });
 
-                    // Check for repetitive actions
+                    // Check for repetitive actions (loop detection)
                     let current_calls: Vec<String> = tool_calls
                         .iter()
                         .map(|tc| format!("{}:{}", tc.function.name, tc.function.arguments))
                         .collect();
+                    
                     if current_calls == last_tool_calls && !current_calls.is_empty() {
                         repetitive_actions = true;
+                        repetition_count += 1;
+                        tracing::warn!(
+                            "Loop detected: same tool call repeated {} times: {:?}",
+                            repetition_count,
+                            current_calls.first().map(|s| s.chars().take(100).collect::<String>())
+                        );
+                        
+                        // Force completion if stuck in a loop for too long
+                        if repetition_count >= LOOP_FORCE_COMPLETE_THRESHOLD {
+                            tracing::error!("Force completing due to infinite loop (repeated {} times)", repetition_count);
+                            let signals = ExecutionSignals {
+                                iterations: iterations_completed,
+                                max_iterations: ctx.max_iterations as u32,
+                                successful_tool_calls,
+                                failed_tool_calls,
+                                files_modified,
+                                repetitive_actions: true,
+                                has_error_messages: true,
+                                partial_progress: files_modified || successful_tool_calls > 0,
+                                cost_spent_cents: total_cost_cents,
+                                budget_total_cents: task.budget().total_cents(),
+                                final_output: format!("Loop detected: repeated same action {} times. Please review results in working directory.", repetition_count),
+                                model_used: model.to_string(),
+                            };
+                            return ExecutionLoopResult {
+                                output: format!("Task stopped due to infinite loop. The agent repeated the same tool call {} times. Partial results may be in the working directory.", repetition_count),
+                                cost_cents: total_cost_cents,
+                                tool_log,
+                                usage,
+                                signals,
+                                success: false,
+                            };
+                        }
+                        
+                        // Inject a warning message after threshold to try to break the loop
+                        if repetition_count == LOOP_WARNING_THRESHOLD {
+                            messages.push(ChatMessage::new(
+                                Role::User,
+                                "[SYSTEM WARNING] You are repeating the same tool call multiple times. This suggests you may be stuck in a loop. Please either:\n1. Try a different approach\n2. Summarize your findings and complete the task\n3. If you've already found what you need, call complete_mission\n\nDo NOT repeat the same command again.".to_string()
+                            ));
+                        }
+                    } else {
+                        // Reset counter if a different action is taken
+                        repetition_count = 0;
                     }
                     last_tool_calls = current_calls;
 
