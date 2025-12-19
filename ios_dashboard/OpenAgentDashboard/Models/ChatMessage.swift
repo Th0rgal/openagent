@@ -11,6 +11,7 @@ enum ChatMessageType {
     case user
     case assistant(success: Bool, costCents: Int, model: String?)
     case thinking(done: Bool, startTime: Date)
+    case phase(phase: String, detail: String?, agent: String?)
     case toolUI(name: String)
     case system
     case error
@@ -51,9 +52,19 @@ struct ChatMessage: Identifiable {
         return false
     }
     
+    var isPhase: Bool {
+        if case .phase = type { return true }
+        return false
+    }
+    
     var thinkingDone: Bool {
         if case .thinking(let done, _) = type { return done }
         return false
+    }
+    
+    var thinkingStartTime: Date? {
+        if case .thinking(_, let startTime) = type { return startTime }
+        return nil
     }
     
     var displayModel: String? {
@@ -93,6 +104,49 @@ enum ControlRunState: String, Codable {
         case .idle: return "Idle"
         case .running: return "Running"
         case .waitingForTool: return "Waiting"
+        }
+    }
+}
+
+// MARK: - Execution Progress
+
+struct ExecutionProgress {
+    let total: Int
+    let completed: Int
+    let current: String?
+    let depth: Int
+    
+    var displayText: String {
+        "Subtask \(completed + 1)/\(total)"
+    }
+}
+
+// MARK: - Phase Labels
+
+enum AgentPhase: String {
+    case estimatingComplexity = "estimating_complexity"
+    case selectingModel = "selecting_model"
+    case splittingTask = "splitting_task"
+    case executing = "executing"
+    case verifying = "verifying"
+    
+    var label: String {
+        switch self {
+        case .estimatingComplexity: return "Analyzing task"
+        case .selectingModel: return "Selecting model"
+        case .splittingTask: return "Decomposing task"
+        case .executing: return "Executing"
+        case .verifying: return "Verifying"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .estimatingComplexity: return "brain"
+        case .selectingModel: return "cpu"
+        case .splittingTask: return "arrow.triangle.branch"
+        case .executing: return "play.circle"
+        case .verifying: return "checkmark.shield"
         }
     }
 }

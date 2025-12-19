@@ -17,6 +17,9 @@ struct ControlView: View {
     @State private var streamTask: Task<Void, Never>?
     @State private var showMissionMenu = false
     @State private var shouldScrollToBottom = false
+    @State private var progress: ExecutionProgress?
+    @State private var isAtBottom = true
+    @State private var copiedMessageId: String?
     
     @FocusState private var isInputFocused: Bool
     
@@ -59,6 +62,15 @@ struct ControlView: View {
                             Text("• \(queueLength) queued")
                                 .font(.caption2)
                                 .foregroundStyle(Theme.textTertiary)
+                        }
+                        
+                        // Progress indicator
+                        if let progress = progress, progress.total > 0 {
+                            Text("•")
+                                .foregroundStyle(Theme.textMuted)
+                            Text(progress.displayText)
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(Theme.success)
                         }
                     }
                 }
@@ -158,47 +170,150 @@ struct ControlView: View {
     // MARK: - Messages
     
     private var messagesView: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 16) {
-                    if messages.isEmpty && !isLoading {
-                        emptyStateView
-                    } else if isLoading {
-                        LoadingView(message: "Loading conversation...")
-                            .frame(height: 200)
-                    } else {
-                        ForEach(messages) { message in
-                            MessageBubble(message: message)
+        ZStack(alignment: .bottom) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 16) {
+                        if messages.isEmpty && !isLoading {
+                            // Show working indicator when agent is running but no messages yet
+                            if runState == .running {
+                                agentWorkingIndicator
+                            } else {
+                                emptyStateView
+                            }
+                        } else if isLoading {
+                            LoadingView(message: "Loading conversation...")
+                                .frame(height: 200)
+                        } else {
+                            // Show working indicator at top when running but no active streaming item
+                            if runState == .running && !hasActiveStreamingItem {
+                                agentWorkingIndicator
+                            }
+                            
+                            ForEach(messages) { message in
+                                MessageBubble(
+                                    message: message,
+                                    isCopied: copiedMessageId == message.id,
+                                    onCopy: { copyMessage(message) }
+                                )
                                 .id(message.id)
+                            }
                         }
+                        
+                        // Bottom anchor for scrolling past last message
+                        Color.clear
+                            .frame(height: 1)
+                            .id(bottomAnchorId)
                     }
-                    
-                    // Bottom anchor for scrolling past last message
-                    Color.clear
-                        .frame(height: 1)
-                        .id(bottomAnchorId)
+                    .padding()
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: ScrollOffsetPreferenceKey.self,
+                                value: geo.frame(in: .named("scroll")).maxY
+                            )
+                        }
+                    )
                 }
-                .padding()
-            }
-            .onTapGesture {
-                // Dismiss keyboard when tapping on messages area
-                isInputFocused = false
-            }
-            .onChange(of: messages.count) { _, _ in
-                scrollToBottom(proxy: proxy)
-            }
-            .onChange(of: shouldScrollToBottom) { _, shouldScroll in
-                if shouldScroll {
-                    scrollToBottom(proxy: proxy)
-                    shouldScrollToBottom = false
+                .coordinateSpace(name: "scroll")
+                .onPreferenceChange(ScrollOffsetPreferenceKey.self) { maxY in
+                    // Check if we're at the bottom (within 100 points)
+                    isAtBottom = maxY < UIScreen.main.bounds.height + 100
+                }
+                .onTapGesture {
+                    // Dismiss keyboard when tapping on messages area
+                    isInputFocused = false
+                }
+                .onChange(of: messages.count) { _, _ in
+                    if isAtBottom {
+                        scrollToBottom(proxy: proxy)
+                    }
+                }
+                .onChange(of: shouldScrollToBottom) { _, shouldScroll in
+                    if shouldScroll {
+                        scrollToBottom(proxy: proxy)
+                        shouldScrollToBottom = false
+                    }
+                }
+                .overlay(alignment: .bottom) {
+                    // Scroll to bottom button
+                    if !isAtBottom && !messages.isEmpty {
+                        Button {
+                            withAnimation(.spring(duration: 0.3)) {
+                                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+                            }
+                            isAtBottom = true
+                        } label: {
+                            Image(systemName: "arrow.down")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 36, height: 36)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                                .overlay(
+                                    Circle()
+                                        .stroke(Theme.border, lineWidth: 1)
+                                )
+                                .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
+                        }
+                        .padding(.bottom, 16)
+                        .transition(.scale.combined(with: .opacity))
+                    }
                 }
             }
         }
     }
     
+    private var hasActiveStreamingItem: Bool {
+        messages.contains { msg in
+            (msg.isThinking && !msg.thinkingDone) || msg.isPhase
+        }
+    }
+    
+    private var agentWorkingIndicator: some View {
+        HStack(spacing: 12) {
+            ProgressView()
+                .progressViewStyle(.circular)
+                .tint(Theme.accent)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Agent is working...")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Theme.textPrimary)
+                
+                Text("Updates will appear here as they arrive")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            
+            Spacer()
+        }
+        .padding(16)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Theme.accent.opacity(0.2), lineWidth: 1)
+        )
+        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+    }
+    
     private func scrollToBottom(proxy: ScrollViewProxy) {
         withAnimation {
             proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+        }
+    }
+    
+    private func copyMessage(_ message: ChatMessage) {
+        UIPasteboard.general.string = message.content
+        copiedMessageId = message.id
+        HapticService.lightTap()
+        
+        // Reset after delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            if copiedMessageId == message.id {
+                copiedMessageId = nil
+            }
         }
     }
     
@@ -442,7 +557,13 @@ struct ControlView: View {
         switch type {
         case "status":
             if let state = data["state"] as? String {
-                runState = ControlRunState(rawValue: state) ?? .idle
+                let newState = ControlRunState(rawValue: state) ?? .idle
+                runState = newState
+                
+                // Clear progress when idle
+                if newState == .idle {
+                    progress = nil
+                }
             }
             if let queue = data["queue_len"] as? Int {
                 queueLength = queue
@@ -462,8 +583,8 @@ struct ControlView: View {
                 let costCents = data["cost_cents"] as? Int ?? 0
                 let model = data["model"] as? String
                 
-                // Remove any incomplete thinking messages
-                messages.removeAll { $0.isThinking && !$0.thinkingDone }
+                // Remove any incomplete thinking messages and phase messages
+                messages.removeAll { ($0.isThinking && !$0.thinkingDone) || $0.isPhase }
                 
                 let message = ChatMessage(
                     id: id,
@@ -477,13 +598,17 @@ struct ControlView: View {
             if let content = data["content"] as? String {
                 let done = data["done"] as? Bool ?? false
                 
+                // Remove phase items when thinking starts
+                messages.removeAll { $0.isPhase }
+                
                 // Find existing thinking message or create new
                 if let index = messages.lastIndex(where: { $0.isThinking && !$0.thinkingDone }) {
+                    let existingStartTime = messages[index].thinkingStartTime ?? Date()
                     messages[index].content += "\n\n---\n\n" + content
                     if done {
                         messages[index] = ChatMessage(
                             id: messages[index].id,
-                            type: .thinking(done: true, startTime: Date()),
+                            type: .thinking(done: true, startTime: existingStartTime),
                             content: messages[index].content
                         )
                     }
@@ -495,6 +620,37 @@ struct ControlView: View {
                     )
                     messages.append(message)
                 }
+            }
+            
+        case "agent_phase":
+            let phase = data["phase"] as? String ?? ""
+            let detail = data["detail"] as? String
+            let agent = data["agent"] as? String
+            
+            // Remove existing phase messages
+            messages.removeAll { $0.isPhase }
+            
+            // Add new phase message
+            let message = ChatMessage(
+                id: "phase-\(Date().timeIntervalSince1970)",
+                type: .phase(phase: phase, detail: detail, agent: agent),
+                content: ""
+            )
+            messages.append(message)
+            
+        case "progress":
+            let total = data["total_subtasks"] as? Int ?? 0
+            let completed = data["completed_subtasks"] as? Int ?? 0
+            let current = data["current_subtask"] as? String
+            let depth = data["current_depth"] as? Int ?? 0
+            
+            if total > 0 {
+                progress = ExecutionProgress(
+                    total: total,
+                    completed: completed,
+                    current: current,
+                    depth: depth
+                )
             }
             
         case "error":
@@ -529,10 +685,21 @@ struct ControlView: View {
     }
 }
 
+// MARK: - Scroll Offset Preference Key
+
+private struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 // MARK: - Message Bubble
 
 private struct MessageBubble: View {
     let message: ChatMessage
+    var isCopied: Bool = false
+    var onCopy: (() -> Void)?
     
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -540,7 +707,10 @@ private struct MessageBubble: View {
                 Spacer(minLength: 60)
                 userBubble
             } else if message.isThinking {
-                thinkingBubble
+                ThinkingBubble(message: message)
+                Spacer(minLength: 60)
+            } else if message.isPhase {
+                PhaseBubble(message: message)
                 Spacer(minLength: 60)
             } else if message.isToolUI {
                 toolUIBubble
@@ -560,95 +730,266 @@ private struct MessageBubble: View {
     }
     
     private var userBubble: some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            Text(message.content)
-                .font(.body)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(Theme.accent)
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .clipShape(
-                    .rect(
-                        topLeadingRadius: 20,
-                        bottomLeadingRadius: 20,
-                        bottomTrailingRadius: 6,
-                        topTrailingRadius: 20
+        HStack(alignment: .top, spacing: 8) {
+            // Copy button
+            if !message.content.isEmpty {
+                CopyButton(isCopied: isCopied, onCopy: onCopy)
+            }
+            
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(message.content)
+                    .font(.body)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(Theme.accent)
+                    .clipShape(
+                        .rect(
+                            topLeadingRadius: 20,
+                            bottomLeadingRadius: 20,
+                            bottomTrailingRadius: 6,
+                            topTrailingRadius: 20
+                        )
                     )
-                )
+            }
         }
     }
     
     private var assistantBubble: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Status header for assistant messages
-            if case .assistant(let success, _, _) = message.type {
-                HStack(spacing: 6) {
-                    Image(systemName: success ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(success ? Theme.success : Theme.error)
-                    
-                    if let model = message.displayModel {
-                        Text(model)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(Theme.textTertiary)
-                    }
-                    
-                    if let cost = message.costFormatted {
-                        Text("•")
-                            .foregroundStyle(Theme.textMuted)
-                        Text(cost)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(Theme.success)
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 8) {
+                // Status header for assistant messages
+                if case .assistant(let success, _, _) = message.type {
+                    HStack(spacing: 6) {
+                        Image(systemName: success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(success ? Theme.success : Theme.error)
+                        
+                        if let model = message.displayModel {
+                            Text(model)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(Theme.textTertiary)
+                        }
+                        
+                        if let cost = message.costFormatted {
+                            Text("•")
+                                .foregroundStyle(Theme.textMuted)
+                            Text(cost)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(Theme.success)
+                        }
                     }
                 }
+                
+                MarkdownText(message.content)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(.ultraThinMaterial)
+                    .clipShape(
+                        .rect(
+                            topLeadingRadius: 20,
+                            bottomLeadingRadius: 6,
+                            bottomTrailingRadius: 20,
+                            topTrailingRadius: 20
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .stroke(Theme.border, lineWidth: 0.5)
+                    )
             }
             
-            MarkdownText(message.content)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(.ultraThinMaterial)
-                .clipShape(
-                    .rect(
-                        topLeadingRadius: 20,
-                        bottomLeadingRadius: 6,
-                        bottomTrailingRadius: 20,
-                        topTrailingRadius: 20
-                    )
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Theme.border, lineWidth: 0.5)
-                )
+            // Copy button
+            if !message.content.isEmpty {
+                CopyButton(isCopied: isCopied, onCopy: onCopy)
+            }
         }
     }
+}
+
+// MARK: - Copy Button
+
+private struct CopyButton: View {
+    let isCopied: Bool
+    let onCopy: (() -> Void)?
     
-    private var thinkingBubble: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "brain")
-                    .font(.caption)
-                    .foregroundStyle(Theme.accent)
-                    .symbolEffect(.pulse, options: message.thinkingDone ? .nonRepeating : .repeating)
-                
-                Text(message.thinkingDone ? "Thought" : "Thinking...")
-                    .font(.caption)
-                    .foregroundStyle(Theme.textSecondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Theme.accent.opacity(0.1))
-            .clipShape(Capsule())
+    var body: some View {
+        Button {
+            onCopy?()
+        } label: {
+            Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 12))
+                .foregroundStyle(isCopied ? Theme.success : Theme.textMuted)
+                .frame(width: 28, height: 28)
+                .background(Theme.backgroundSecondary)
+                .clipShape(Circle())
+        }
+        .opacity(0.7)
+    }
+}
+
+// MARK: - Phase Bubble
+
+private struct PhaseBubble: View {
+    let message: ChatMessage
+    
+    var body: some View {
+        if case .phase(let phase, let detail, let agent) = message.type {
+            let agentPhase = AgentPhase(rawValue: phase)
             
-            if !message.content.isEmpty {
+            HStack(spacing: 12) {
+                // Icon with pulse animation
+                Image(systemName: agentPhase?.icon ?? "gear")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+                    .symbolEffect(.pulse, options: .repeating)
+                    .frame(width: 32, height: 32)
+                    .background(Theme.accent.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(agentPhase?.label ?? phase.replacingOccurrences(of: "_", with: " ").capitalized)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(Theme.accent)
+                        
+                        if let agent = agent {
+                            Text(agent)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(Theme.textMuted)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Theme.backgroundTertiary)
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        }
+                    }
+                    
+                    if let detail = detail {
+                        Text(detail)
+                            .font(.caption)
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                }
+                
+                Spacer()
+                
+                // Spinner
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .scaleEffect(0.7)
+                    .tint(Theme.accent.opacity(0.5))
+            }
+            .padding(12)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Theme.accent.opacity(0.15), lineWidth: 1)
+            )
+            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+        }
+    }
+}
+
+// MARK: - Thinking Bubble
+
+private struct ThinkingBubble: View {
+    let message: ChatMessage
+    @State private var isExpanded: Bool = true
+    @State private var elapsedSeconds: Int = 0
+    @State private var hasAutoCollapsed = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Compact header button
+            Button {
+                withAnimation(.spring(duration: 0.25)) {
+                    isExpanded.toggle()
+                }
+                HapticService.selectionChanged()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "brain")
+                        .font(.caption)
+                        .foregroundStyle(Theme.accent)
+                        .symbolEffect(.pulse, options: message.thinkingDone ? .nonRepeating : .repeating)
+                    
+                    Text(message.thinkingDone ? "Thought for \(formattedDuration)" : "Thinking for \(formattedDuration)")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textSecondary)
+                    
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Theme.textMuted)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Theme.accent.opacity(0.1))
+                .clipShape(Capsule())
+            }
+            
+            // Expandable content
+            if isExpanded && !message.content.isEmpty {
                 Text(message.content)
                     .font(.caption)
                     .foregroundStyle(Theme.textTertiary)
-                    .lineLimit(message.thinkingDone ? 3 : nil)
+                    .lineLimit(message.thinkingDone ? 8 : nil)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.white.opacity(0.02))
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Theme.border, lineWidth: 0.5)
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .top)))
+            }
+        }
+        .onAppear {
+            startTimer()
+        }
+        .onChange(of: message.thinkingDone) { _, done in
+            if done && !hasAutoCollapsed {
+                // Auto-collapse after a brief delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    withAnimation(.spring(duration: 0.25)) {
+                        isExpanded = false
+                        hasAutoCollapsed = true
+                    }
+                }
+            }
+        }
+    }
+    
+    private var formattedDuration: String {
+        if elapsedSeconds < 60 {
+            return "\(elapsedSeconds)s"
+        } else {
+            let mins = elapsedSeconds / 60
+            let secs = elapsedSeconds % 60
+            return secs > 0 ? "\(mins)m \(secs)s" : "\(mins)m"
+        }
+    }
+    
+    private func startTimer() {
+        guard !message.thinkingDone else {
+            // Calculate elapsed from start time
+            if let startTime = message.thinkingStartTime {
+                elapsedSeconds = Int(Date().timeIntervalSince(startTime))
+            }
+            return
+        }
+        
+        // Update every second while thinking
+        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
+            if message.thinkingDone {
+                timer.invalidate()
+            } else if let startTime = message.thinkingStartTime {
+                elapsedSeconds = Int(Date().timeIntervalSince(startTime))
+            } else {
+                elapsedSeconds += 1
             }
         }
     }
