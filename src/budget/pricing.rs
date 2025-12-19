@@ -275,6 +275,31 @@ impl ModelPricing {
             // === Qwen ===
             "qwen/qwen-2.5-72b",
             "qwen/qwq-32b",
+            "qwen/qwen3-vl-235b-a22b-thinking",
+            
+            // === Test Models for Benchmarking ===
+            // MoonshotAI
+            "moonshotai/kimi-k2-thinking",
+            "moonshotai/kimi-k2",
+            // xAI Grok
+            "x-ai/grok-4.1-fast",
+            "x-ai/grok-4-fast",
+            "x-ai/grok-4",
+            "x-ai/grok-3",
+            // Google Gemini 3
+            "google/gemini-3-flash-preview",
+            "google/gemini-3-pro-preview",
+            // DeepSeek v3.2
+            "deepseek/deepseek-v3.2-speciale",
+            "deepseek/deepseek-v3.2",
+            "deepseek/deepseek-v3.1-terminus",
+            // Amazon Nova
+            "amazon/nova-pro-v1",
+            // Zhipu GLM
+            "z-ai/glm-4.6v",
+            "z-ai/glm-4.6",
+            "z-ai/glm-4.5v",
+            "z-ai/glm-4.5",
         ];
         
         // Patterns to exclude even if they match an allowed base
