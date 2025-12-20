@@ -76,12 +76,20 @@ impl Tool for ReadFile {
             let total_lines = lines.len();
             let start = start_line.unwrap_or(1).saturating_sub(1).min(total_lines);
             let end = end_line.unwrap_or(total_lines).min(total_lines);
-            
+
             // Ensure start <= end
-            let (start, end) = if start > end { (end, start) } else { (start, end) };
+            let (start, end) = if start > end {
+                (end, start)
+            } else {
+                (start, end)
+            };
 
             if start >= total_lines {
-                return Ok(format!("File has {} lines, requested start line {} is beyond end of file", total_lines, start + 1));
+                return Ok(format!(
+                    "File has {} lines, requested start line {} is beyond end of file",
+                    total_lines,
+                    start + 1
+                ));
             }
 
             let selected: Vec<String> = lines[start..end]
@@ -163,35 +171,39 @@ impl Tool for WriteFile {
 
         // Check for potential truncation indicators
         let mut warnings = Vec::new();
-        
+
         // Check if content appears truncated (common patterns)
         let content_trimmed = content.trim();
-        
+
         // Markdown with unclosed code blocks
         let code_block_count = content.matches("```").count();
         if code_block_count % 2 != 0 {
             warnings.push("Content has unclosed code block (odd number of ```)");
         }
-        
+
         // Sentence cut off mid-word (ends with letter, no punctuation)
         if !content_trimmed.is_empty() {
             let last_char = content_trimmed.chars().last().unwrap();
             if last_char.is_alphabetic() && !content_trimmed.ends_with("etc") {
                 let last_line = content_trimmed.lines().last().unwrap_or("");
                 // Check if last line looks incomplete (short and no punctuation)
-                if last_line.len() < 80 && !last_line.ends_with(|c: char| c.is_ascii_punctuation()) {
+                if last_line.len() < 80 && !last_line.ends_with(|c: char| c.is_ascii_punctuation())
+                {
                     warnings.push("Content may be truncated (ends mid-sentence)");
                 }
             }
         }
-        
+
         // Markdown headings without content after them
-        if content_trimmed.ends_with('#') || content_trimmed.ends_with("##") || content_trimmed.ends_with("###") {
+        if content_trimmed.ends_with('#')
+            || content_trimmed.ends_with("##")
+            || content_trimmed.ends_with("###")
+        {
             warnings.push("Content ends with empty heading");
         }
 
         let mut result = format!("Successfully wrote {} bytes to {}", content.len(), path);
-        
+
         if !warnings.is_empty() {
             result.push_str("\n\n⚠️ **POTENTIAL TRUNCATION WARNINGS:**\n");
             for warning in &warnings {
@@ -249,4 +261,3 @@ impl Tool for DeleteFile {
         Ok(format!("Successfully deleted {}", path))
     }
 }
-
