@@ -574,6 +574,11 @@ Use `search_memory` when you encounter a problem you might have solved before or
         const LOOP_FORCE_COMPLETE_THRESHOLD: u32 = 5;
         let mut has_error_messages = false;
         let mut iterations_completed = 0u32;
+        
+        // Track uploaded images that need to be included in the response
+        // When upload_image succeeds, we store the (url, markdown) so we can warn
+        // the agent if they try to complete without including the images.
+        let mut pending_uploads: Vec<(String, String)> = Vec::new(); // (url, markdown)
 
         // If we can fetch pricing, compute real costs from token usage.
         let pricing = ctx.pricing.get_pricing(model).await;
@@ -998,6 +1003,20 @@ Use `search_memory` when you encounter a problem you might have solved before or
                                 match self.execute_tool_call(tool_call, ctx).await {
                                     Ok(output) => {
                                         successful_tool_calls += 1;
+                                        
+                                        // Track uploaded images for validation
+                                        if tool_name == "upload_image" {
+                                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&output) {
+                                                if let (Some(url), Some(markdown)) = (
+                                                    parsed.get("url").and_then(|v| v.as_str()),
+                                                    parsed.get("markdown").and_then(|v| v.as_str()),
+                                                ) {
+                                                    tracing::debug!("Tracking pending upload: {}", url);
+                                                    pending_uploads.push((url.to_string(), markdown.to_string()));
+                                                }
+                                            }
+                                        }
+                                        
                                         (output.clone(), serde_json::Value::String(output))
                                     }
                                     Err(e) => {
@@ -1058,6 +1077,56 @@ Use `search_memory` when you encounter a problem you might have solved before or
                     // with actual content, but then returns empty on the next iteration.
                     let called_complete_mission = tool_calls.iter().any(|tc| tc.function.name == "complete_mission");
                     if called_complete_mission {
+                        // Check for missing uploaded images before completing
+                        if !pending_uploads.is_empty() {
+                            let content_text = response.content.as_deref().unwrap_or("");
+                            
+                            // Get summary from complete_mission args if available
+                            let summary_text = tool_calls.iter()
+                                .find(|tc| tc.function.name == "complete_mission")
+                                .and_then(|tc| serde_json::from_str::<serde_json::Value>(&tc.function.arguments).ok())
+                                .and_then(|args| args.get("summary").and_then(|s| s.as_str()).map(|s| s.to_string()))
+                                .unwrap_or_default();
+                            
+                            // Check which uploads are missing from the response
+                            let missing_uploads: Vec<_> = pending_uploads.iter()
+                                .filter(|(url, markdown)| {
+                                    !content_text.contains(url) && 
+                                    !content_text.contains(markdown) &&
+                                    !summary_text.contains(url) &&
+                                    !summary_text.contains(markdown)
+                                })
+                                .collect();
+                            
+                            if !missing_uploads.is_empty() {
+                                tracing::warn!(
+                                    "complete_mission called but {} uploaded image(s) not included in response",
+                                    missing_uploads.len()
+                                );
+                                
+                                // Build warning message with the missing images
+                                let missing_list: Vec<String> = missing_uploads.iter()
+                                    .map(|(_, markdown)| format!("  - {}", markdown))
+                                    .collect();
+                                
+                                let warning = format!(
+                                    "⚠️ STOP: You uploaded {} image(s) but did NOT include them in your response!\n\n\
+                                    The user will NOT see these images unless you include them.\n\n\
+                                    Missing images:\n{}\n\n\
+                                    Please include these markdown image links in your response text, \
+                                    then call complete_mission again.",
+                                    missing_uploads.len(),
+                                    missing_list.join("\n")
+                                );
+                                
+                                // Inject warning as a system message
+                                messages.push(ChatMessage::new(Role::User, warning));
+                                
+                                // Don't return early - let the agent try again
+                                continue;
+                            }
+                        }
+                        
                         if let Some(content) = response.content.as_ref().filter(|c| !c.trim().is_empty()) {
                             tracing::debug!("complete_mission called with content, returning early");
                             let signals = ExecutionSignals {

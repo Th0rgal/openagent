@@ -36,7 +36,19 @@ impl Tool for UploadImage {
     }
 
     fn description(&self) -> &str {
-        "Upload an image file to cloud storage and get a public URL. Returns a 'markdown' field that you MUST copy into your response text for the image to be visible. Example: if the tool returns {\"markdown\": \"![screenshot](https://...)\"}, include that exact markdown string in your message. Supports PNG, JPEG, GIF, WebP."
+        "Upload an image file to cloud storage and get a public URL.\n\n\
+        CRITICAL: After uploading, you MUST include the returned markdown in your response!\n\n\
+        The tool returns: {\"markdown\": \"![description](url)\", ...}\n\n\
+        You MUST:\n\
+        1. Copy the EXACT 'markdown' value from the result\n\
+        2. Include it in your message text (not just in complete_mission summary)\n\
+        3. Do this BEFORE calling complete_mission\n\n\
+        Example workflow:\n\
+        1. browser_screenshot → saves to /path/screenshot.png\n\
+        2. upload_image{path: \"/path/screenshot.png\"} → returns {\"markdown\": \"![image](https://...)\"}\n\
+        3. Include \"Here is the screenshot: ![image](https://...)\" in your response\n\n\
+        If you don't include the markdown, the user will NOT see the image!\n\n\
+        Supports: PNG, JPEG, GIF, WebP, SVG"
     }
 
     fn parameters_schema(&self) -> Value {

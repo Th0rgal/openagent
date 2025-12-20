@@ -97,18 +97,18 @@ src/
 - **Expensive models**: high token cost, low failure rate
 - **Optimal**: minimizes `E[total_cost] = Σ P(retry_n) × cost_n`
 
-Default ladder: `gemini-3-flash` → `qwen/qwen3-235b-a22b-instruct` → `deepseek/deepseek-v3.2`
+Default ladder: `qwen/qwen3-next-80b-a3b-thinking` → `qwen/qwen3-235b-a22b-instruct` → `deepseek/deepseek-v3.2`
 
 ### Model Preferences
 
 **NEVER use Claude models** (anthropic/claude-*) - they are prohibitively expensive.
 
 **Preferred models (in order):**
-1. `google/gemini-3-flash-preview` - Fast, cheap, good tool use
-2. `qwen/qwen3-235b-a22b-instruct` - Strong reasoning, affordable
-3. `deepseek/deepseek-v3.2` - Good value, capable
-4. `x-ai/grok-4.1-fast` - Fast alternative
-5. `mistralai/mistral-large-2512` - European provider option
+1. `qwen/qwen3-next-80b-a3b-thinking` - Strong reasoning with thinking, default
+2. `google/gemini-3-flash-preview` - Fast, cheap, good tool use
+3. `qwen/qwen3-235b-a22b-instruct` - Strong reasoning, affordable
+4. `deepseek/deepseek-v3.2` - Good value, capable
+5. `x-ai/grok-4.1-fast` - Fast alternative
 
 When implementing model selection or defaults, always prefer these models over Claude.
 
