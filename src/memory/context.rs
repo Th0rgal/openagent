@@ -158,28 +158,43 @@ impl<'a> ContextBuilder<'a> {
     }
 
     /// Build memory context (async, requires memory system).
+    /// 
+    /// If `skip_cross_mission_chunks` is true, past task chunks are not retrieved.
+    /// This prevents context contamination between parallel missions.
     pub async fn build_memory_context(
         &self,
         memory: &crate::memory::MemorySystem,
         task_description: &str,
     ) -> MemoryContext {
+        self.build_memory_context_with_options(memory, task_description, false).await
+    }
+
+    /// Build memory context with options for mission isolation.
+    pub async fn build_memory_context_with_options(
+        &self,
+        memory: &crate::memory::MemorySystem,
+        task_description: &str,
+        skip_cross_mission_chunks: bool,
+    ) -> MemoryContext {
         let mut ctx = MemoryContext::default();
 
-        // 1. Search for relevant past task chunks
-        if let Ok(chunks) = memory
-            .retriever
-            .search(
-                task_description,
-                Some(self.config.memory_chunk_limit),
-                Some(self.config.memory_chunk_threshold),
-                None,
-            )
-            .await
-        {
-            for chunk in chunks {
-                let text = truncate(&chunk.chunk_text, 300);
-                let cleaned = text.replace('\n', " ");
-                ctx.past_experience.push(cleaned.trim().to_string());
+        // 1. Search for relevant past task chunks (skip in mission mode to prevent contamination)
+        if !skip_cross_mission_chunks {
+            if let Ok(chunks) = memory
+                .retriever
+                .search(
+                    task_description,
+                    Some(self.config.memory_chunk_limit),
+                    Some(self.config.memory_chunk_threshold),
+                    None,
+                )
+                .await
+            {
+                for chunk in chunks {
+                    let text = truncate(&chunk.chunk_text, 300);
+                    let cleaned = text.replace('\n', " ");
+                    ctx.past_experience.push(cleaned.trim().to_string());
+                }
             }
         }
 

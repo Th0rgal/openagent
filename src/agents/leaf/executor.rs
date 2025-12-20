@@ -166,14 +166,22 @@ impl TaskExecutor {
     }
 
     /// Retrieve relevant memory context for the task using ContextBuilder.
+    /// 
+    /// In mission mode (ctx.mission_id.is_some()), cross-mission chunk retrieval
+    /// is skipped to prevent context contamination between parallel missions.
     async fn retrieve_memory_context(&self, task_description: &str, ctx: &AgentContext) -> String {
         let memory = match &ctx.memory {
             Some(m) => m,
             None => return String::new(),
         };
         
+        // In mission mode, skip cross-mission chunks to prevent contamination
+        let is_mission_mode = ctx.mission_id.is_some();
+        
         let builder = ContextBuilder::new(&ctx.config.context, &ctx.working_dir_str());
-        let memory_ctx = builder.build_memory_context(memory, task_description).await;
+        let memory_ctx = builder
+            .build_memory_context_with_options(memory, task_description, is_mission_mode)
+            .await;
         memory_ctx.format()
     }
 

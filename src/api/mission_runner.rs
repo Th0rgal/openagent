@@ -476,6 +476,7 @@ async fn run_mission_turn(
     ctx.resolver = Some(resolver);
     ctx.tree_snapshot = Some(tree_snapshot);
     ctx.progress_snapshot = Some(progress_snapshot);
+    ctx.mission_id = Some(mission_id);
 
     root_agent.execute(&mut task, &ctx).await
 }
