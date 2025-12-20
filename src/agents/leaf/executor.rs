@@ -175,12 +175,10 @@ impl TaskExecutor {
             None => return String::new(),
         };
         
-        // In mission mode, skip cross-mission chunks to prevent contamination
-        let is_mission_mode = ctx.mission_id.is_some();
-        
+        // In mission mode, filter memory to current mission to prevent contamination
         let builder = ContextBuilder::new(&ctx.config.context, &ctx.working_dir_str());
         let memory_ctx = builder
-            .build_memory_context_with_options(memory, task_description, is_mission_mode)
+            .build_memory_context_with_options(memory, task_description, ctx.mission_id)
             .await;
         memory_ctx.format()
     }
@@ -501,11 +499,13 @@ Use `search_memory` when you encounter a problem you might have solved before or
                 .await;
         }
 
-        // Try MCP tools
+        // Try MCP tools (tool names are prefixed, need to strip for actual call)
         if let Some(mcp) = &ctx.mcp {
             if let Some(mcp_tool) = mcp.find_tool(tool_name).await {
-                tracing::debug!("Routing tool call '{}' to MCP server", tool_name);
-                return mcp.call_tool(mcp_tool.mcp_id, tool_name, args).await;
+                // Strip the MCP prefix to get the original tool name for the call
+                let original_name = crate::mcp::McpRegistry::strip_prefix(tool_name);
+                tracing::debug!("Routing tool call '{}' -> '{}' to MCP server", tool_name, original_name);
+                return mcp.call_tool(mcp_tool.mcp_id, &original_name, args).await;
             }
         }
 

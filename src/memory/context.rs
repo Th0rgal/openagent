@@ -159,27 +159,33 @@ impl<'a> ContextBuilder<'a> {
 
     /// Build memory context (async, requires memory system).
     /// 
-    /// If `skip_cross_mission_chunks` is true, past task chunks are not retrieved.
-    /// This prevents context contamination between parallel missions.
+    /// This is the default mode that retrieves all available memory context.
+    /// For mission-isolated context, use `build_memory_context_with_options` with a mission_id.
     pub async fn build_memory_context(
         &self,
         memory: &crate::memory::MemorySystem,
         task_description: &str,
     ) -> MemoryContext {
-        self.build_memory_context_with_options(memory, task_description, false).await
+        self.build_memory_context_with_options(memory, task_description, None).await
     }
 
     /// Build memory context with options for mission isolation.
+    /// 
+    /// If `mission_id` is provided, memory is filtered to that mission only:
+    /// - Past task chunks are skipped (no cross-mission contamination)
+    /// - Mission summaries are filtered to the current mission only
+    /// - User facts are still included (intentionally shared)
     pub async fn build_memory_context_with_options(
         &self,
         memory: &crate::memory::MemorySystem,
         task_description: &str,
-        skip_cross_mission_chunks: bool,
+        mission_id: Option<uuid::Uuid>,
     ) -> MemoryContext {
         let mut ctx = MemoryContext::default();
+        let is_mission_mode = mission_id.is_some();
 
         // 1. Search for relevant past task chunks (skip in mission mode to prevent contamination)
-        if !skip_cross_mission_chunks {
+        if !is_mission_mode {
             if let Ok(chunks) = memory
                 .retriever
                 .search(
@@ -198,7 +204,7 @@ impl<'a> ContextBuilder<'a> {
             }
         }
 
-        // 2. Get user facts
+        // 2. Get user facts (always included - intentionally shared across missions)
         if let Ok(facts) = memory
             .supabase
             .get_all_user_facts(self.config.user_facts_limit)
@@ -210,15 +216,23 @@ impl<'a> ContextBuilder<'a> {
             }
         }
 
-        // 3. Get recent mission summaries
-        if let Ok(summaries) = memory
-            .supabase
-            .get_recent_mission_summaries(self.config.mission_summaries_limit)
-            .await
-        {
-            for summary in summaries {
-                ctx.mission_summaries.push((summary.success, summary.summary));
-            }
+        // 3. Get mission summaries (filtered by mission in mission mode)
+        let summaries = if let Some(mid) = mission_id {
+            // In mission mode: only get summaries from THIS mission
+            memory.supabase
+                .get_mission_summaries_for_mission(mid, self.config.mission_summaries_limit)
+                .await
+                .unwrap_or_default()
+        } else {
+            // Regular mode: get recent summaries from all missions
+            memory.supabase
+                .get_recent_mission_summaries(self.config.mission_summaries_limit)
+                .await
+                .unwrap_or_default()
+        };
+        
+        for summary in summaries {
+            ctx.mission_summaries.push((summary.success, summary.summary));
         }
 
         ctx

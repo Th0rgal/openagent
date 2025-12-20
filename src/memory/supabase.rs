@@ -841,5 +841,25 @@ impl SupabaseClient {
         
         Ok(resp.json().await?)
     }
+    
+    /// Get mission summaries for a specific mission only.
+    pub async fn get_mission_summaries_for_mission(&self, mission_id: uuid::Uuid, limit: usize) -> anyhow::Result<Vec<MissionSummary>> {
+        let resp = self.client
+            .get(format!(
+                "{}/mission_summaries?mission_id=eq.{}&order=created_at.desc&limit={}",
+                self.rest_url(), mission_id, limit
+            ))
+            .header("apikey", &self.service_role_key)
+            .header("Authorization", format!("Bearer {}", self.service_role_key))
+            .send()
+            .await?;
+        
+        if !resp.status().is_success() {
+            let text = resp.text().await?;
+            anyhow::bail!("Failed to get mission summaries for mission {}: {}", mission_id, text);
+        }
+        
+        Ok(resp.json().await?)
+    }
 }
 

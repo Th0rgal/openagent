@@ -22,6 +22,17 @@ use super::types::*;
 /// MCP protocol version we support
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 
+/// Sanitize MCP server name to create a valid function name prefix.
+/// 
+/// Converts names like "filesystem" or "My Server" to lowercase alphanumeric.
+fn sanitize_mcp_prefix(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        .collect::<String>()
+        .to_lowercase()
+        .replace('-', "_")
+}
+
 /// Handle for a stdio MCP process
 struct StdioProcess {
     child: Child,
@@ -714,6 +725,9 @@ impl McpRegistry {
     }
 
     /// List all tools from all connected MCPs.
+    /// 
+    /// Tool names are prefixed with the MCP server name to avoid conflicts
+    /// with built-in tools (e.g., `filesystem_read_file` instead of `read_file`).
     pub async fn list_tools(&self) -> Vec<McpTool> {
         let states = self.states.read().await;
         let disabled = self.disabled_tools.read().await;
@@ -721,13 +735,24 @@ impl McpRegistry {
         let mut tools = Vec::new();
         for state in states.values() {
             if state.config.enabled && state.status == McpStatus::Connected {
+                // Derive prefix from MCP server name (sanitized for function names)
+                let prefix = sanitize_mcp_prefix(&state.config.name);
+                
                 for descriptor in &state.config.tool_descriptors {
+                    // Prefix tool name with MCP server name to avoid conflicts
+                    let prefixed_name = format!("{}_{}", prefix, descriptor.name);
+                    let prefixed_description = format!(
+                        "[{}] {}",
+                        state.config.name,
+                        descriptor.description
+                    );
+                    
                     tools.push(McpTool {
-                        name: descriptor.name.clone(),
-                        description: descriptor.description.clone(),
+                        name: prefixed_name.clone(),
+                        description: prefixed_description,
                         parameters_schema: descriptor.input_schema.clone(),
                         mcp_id: state.config.id,
-                        enabled: !disabled.contains(&descriptor.name),
+                        enabled: !disabled.contains(&descriptor.name) && !disabled.contains(&prefixed_name),
                     });
                 }
             }
@@ -750,18 +775,24 @@ impl McpRegistry {
         !self.disabled_tools.read().await.contains(name)
     }
 
-    /// Find a tool by name and return its MCP ID if found.
+    /// Find a tool by name (prefixed) and return its MCP ID if found.
+    /// 
+    /// Tool names should be in prefixed format (e.g., `filesystem_read_file`).
     pub async fn find_tool(&self, name: &str) -> Option<McpTool> {
         let states = self.states.read().await;
         let disabled = self.disabled_tools.read().await;
 
         for state in states.values() {
             if state.config.enabled && state.status == McpStatus::Connected {
+                let prefix = sanitize_mcp_prefix(&state.config.name);
+                
                 for descriptor in &state.config.tool_descriptors {
-                    if descriptor.name == name && !disabled.contains(&descriptor.name) {
+                    let prefixed_name = format!("{}_{}", prefix, descriptor.name);
+                    
+                    if prefixed_name == name && !disabled.contains(&descriptor.name) && !disabled.contains(&prefixed_name) {
                         return Some(McpTool {
-                            name: descriptor.name.clone(),
-                            description: descriptor.description.clone(),
+                            name: prefixed_name,
+                            description: format!("[{}] {}", state.config.name, descriptor.description),
                             parameters_schema: descriptor.input_schema.clone(),
                             mcp_id: state.config.id,
                             enabled: true,
@@ -771,6 +802,18 @@ impl McpRegistry {
             }
         }
         None
+    }
+    
+    /// Get the original (unprefixed) tool name for an MCP call.
+    /// 
+    /// When calling the MCP server, we need to use the original tool name.
+    pub fn strip_prefix(prefixed_name: &str) -> String {
+        // Find the first underscore and return everything after it
+        if let Some(idx) = prefixed_name.find('_') {
+            prefixed_name[idx + 1..].to_string()
+        } else {
+            prefixed_name.to_string()
+        }
     }
 
     /// Get tool schemas in LLM-compatible format for all connected MCP tools.
