@@ -15,14 +15,14 @@ export default function SettingsPage() {
   // Form state
   const [apiUrl, setApiUrl] = useState(() => readSavedSettings().apiUrl ?? 'http://127.0.0.1:3000');
   const [defaultModel, setDefaultModel] = useState(
-    () => readSavedSettings().defaultModel ?? 'anthropic/claude-sonnet-4.5'
+    () => readSavedSettings().defaultModel ?? 'google/gemini-3-flash-preview'
   );
   const [defaultBudget, setDefaultBudget] = useState(() => readSavedSettings().defaultBudget ?? '1000');
   
   // Track original values for unsaved changes
   const [originalValues, setOriginalValues] = useState({
     apiUrl: readSavedSettings().apiUrl ?? 'http://127.0.0.1:3000',
-    defaultModel: readSavedSettings().defaultModel ?? 'anthropic/claude-sonnet-4.5',
+    defaultModel: readSavedSettings().defaultModel ?? 'google/gemini-3-flash-preview',
     defaultBudget: readSavedSettings().defaultBudget ?? '1000',
   });
   
@@ -254,11 +254,12 @@ export default function SettingsPage() {
                 onChange={(e) => setDefaultModel(e.target.value)}
                 className="w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2.5 text-sm text-white focus:border-indigo-500/50 focus:outline-none transition-colors"
               >
-                <option value="anthropic/claude-sonnet-4.5">Claude Sonnet 4.5 (Recommended)</option>
-                <option value="anthropic/claude-haiku-4.5">Claude Haiku 4.5 (Budget)</option>
-                <option value="anthropic/claude-opus-4.5">Claude Opus 4.5 (Premium)</option>
-                <option value="openai/gpt-4o">GPT-4o</option>
-                <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
+                <option value="google/gemini-3-flash-preview">Gemini 3 Flash (Recommended)</option>
+                <option value="qwen/qwen3-235b-a22b-instruct">Qwen 3 235B (Reasoning)</option>
+                <option value="deepseek/deepseek-v3.2">DeepSeek V3.2 (Value)</option>
+                <option value="x-ai/grok-4.1-fast">Grok 4.1 Fast</option>
+                <option value="openai/gpt-4.1">GPT-4.1</option>
+                <option value="openai/gpt-4.1-mini">GPT-4.1 Mini (Budget)</option>
               </select>
             </div>
           </div>

@@ -368,22 +368,26 @@ export default function ControlClient() {
   const [currentMission, setCurrentMission] = useState<Mission | null>(null);
   const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [missionLoading, setMissionLoading] = useState(false);
-  
+
   // New mission dialog state
   const [showNewMissionDialog, setShowNewMissionDialog] = useState(false);
   const [newMissionModel, setNewMissionModel] = useState("");
   const newMissionDialogRef = useRef<HTMLDivElement>(null);
 
   // Parallel missions state
-  const [runningMissions, setRunningMissions] = useState<RunningMissionInfo[]>([]);
+  const [runningMissions, setRunningMissions] = useState<RunningMissionInfo[]>(
+    []
+  );
   const [showParallelPanel, setShowParallelPanel] = useState(false);
-  
+
   // Track which mission's events we're viewing (for parallel missions)
   // This can differ from currentMission when viewing a parallel mission
   const [viewingMissionId, setViewingMissionId] = useState<string | null>(null);
-  
+
   // Store items per mission to preserve context when switching
-  const [missionItems, setMissionItems] = useState<Record<string, ChatItem[]>>({});
+  const [missionItems, setMissionItems] = useState<Record<string, ChatItem[]>>(
+    {}
+  );
 
   // Attachment state
   const [attachments, setAttachments] = useState<
@@ -391,7 +395,13 @@ export default function ControlClient() {
   >([]);
   const [uploadQueue, setUploadQueue] = useState<string[]>([]);
 
-  const isBusy = runState !== "idle";
+  // Check if the mission we're viewing is actually running (not just any mission)
+  const viewingMissionIsRunning = useMemo(() => {
+    if (!viewingMissionId) return runState !== "idle";
+    return runningMissions.some((m) => m.mission_id === viewingMissionId);
+  }, [viewingMissionId, runningMissions, runState]);
+
+  const isBusy = viewingMissionIsRunning;
 
   const streamCleanupRef = useRef<null | (() => void)>(null);
   const statusMenuRef = useRef<HTMLDivElement>(null);
@@ -400,16 +410,16 @@ export default function ControlClient() {
   const viewingMissionIdRef = useRef<string | null>(null);
   const runningMissionsRef = useRef<RunningMissionInfo[]>([]);
   const currentMissionRef = useRef<Mission | null>(null);
-  
+
   // Keep refs in sync with state
   useEffect(() => {
     viewingMissionIdRef.current = viewingMissionId;
   }, [viewingMissionId]);
-  
+
   useEffect(() => {
     runningMissionsRef.current = runningMissions;
   }, [runningMissions]);
-  
+
   useEffect(() => {
     currentMissionRef.current = currentMission;
   }, [currentMission]);
@@ -623,27 +633,30 @@ export default function ControlClient() {
   };
 
   // Handle switching which mission we're viewing
-  const handleViewMission = useCallback(async (missionId: string) => {
-    setViewingMissionId(missionId);
-    
-    // Always load fresh history from API when switching missions
-    // This ensures we don't show stale cached events
-    try {
-      const mission = await getMission(missionId);
-      const historyItems = missionHistoryToItems(mission);
-      setItems(historyItems);
-      // Update cache with fresh data
-      setMissionItems(prev => ({ ...prev, [missionId]: historyItems }));
-    } catch (err) {
-      console.error("Failed to load mission:", err);
-      // Fallback to cached items if API fails
-      if (missionItems[missionId]) {
-        setItems(missionItems[missionId]);
-      } else {
-        setItems([]);
+  const handleViewMission = useCallback(
+    async (missionId: string) => {
+      setViewingMissionId(missionId);
+
+      // Always load fresh history from API when switching missions
+      // This ensures we don't show stale cached events
+      try {
+        const mission = await getMission(missionId);
+        const historyItems = missionHistoryToItems(mission);
+        setItems(historyItems);
+        // Update cache with fresh data
+        setMissionItems((prev) => ({ ...prev, [missionId]: historyItems }));
+      } catch (err) {
+        console.error("Failed to load mission:", err);
+        // Fallback to cached items if API fails
+        if (missionItems[missionId]) {
+          setItems(missionItems[missionId]);
+        } else {
+          setItems([]);
+        }
       }
-    }
-  }, [missionItems, missionHistoryToItems]);
+    },
+    [missionItems, missionHistoryToItems]
+  );
 
   // Sync viewingMissionId with currentMission
   useEffect(() => {
@@ -663,6 +676,7 @@ export default function ControlClient() {
       setCurrentMission(mission);
       setViewingMissionId(mission.id); // Also update viewing to the new mission
       setItems([]);
+      setShowParallelPanel(true); // Show the missions panel so user can see the new mission
       router.replace(`/control?mission=${mission.id}`, { scroll: false });
       toast.success("New mission created");
     } catch (err) {
@@ -715,9 +729,12 @@ export default function ControlClient() {
 
       // Filter events by mission_id - only show events for the mission we're viewing
       const viewingId = viewingMissionIdRef.current;
-      const eventMissionId = isRecord(data) && data["mission_id"] ? String(data["mission_id"]) : null;
+      const eventMissionId =
+        isRecord(data) && data["mission_id"]
+          ? String(data["mission_id"])
+          : null;
       const currentMissionId = currentMissionRef.current?.id;
-      
+
       // If we're viewing a specific mission, filter events strictly
       if (viewingId) {
         // Event has a mission_id - must match viewing mission
@@ -1084,10 +1101,14 @@ export default function ControlClient() {
             </button>
             {showNewMissionDialog && (
               <div className="absolute right-0 top-full mt-1 w-72 rounded-lg border border-white/[0.06] bg-[#1a1a1a] p-4 shadow-xl z-10">
-                <h3 className="text-sm font-medium text-white mb-3">Create New Mission</h3>
+                <h3 className="text-sm font-medium text-white mb-3">
+                  Create New Mission
+                </h3>
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs text-white/50 mb-1">Model Override (optional)</label>
+                    <label className="block text-xs text-white/50 mb-1">
+                      Model Override (optional)
+                    </label>
                     <input
                       type="text"
                       value={newMissionModel}
@@ -1095,7 +1116,9 @@ export default function ControlClient() {
                       placeholder="e.g., deepseek/deepseek-v3.2"
                       className="w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-sm text-white placeholder-white/30 focus:border-indigo-500/50 focus:outline-none"
                     />
-                    <p className="text-xs text-white/30 mt-1">Leave empty to use default model</p>
+                    <p className="text-xs text-white/30 mt-1">
+                      Leave empty to use default model
+                    </p>
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -1125,7 +1148,7 @@ export default function ControlClient() {
           </div>
 
           {/* Parallel missions indicator */}
-          {runningMissions.length > 0 && (
+          {(runningMissions.length > 0 || currentMission) && (
             <button
               onClick={() => setShowParallelPanel(!showParallelPanel)}
               className={cn(
@@ -1136,7 +1159,9 @@ export default function ControlClient() {
               )}
             >
               <Layers className="h-4 w-4" />
-              <span className="font-medium tabular-nums">{runningMissions.length}</span>
+              <span className="font-medium tabular-nums">
+                {runningMissions.length}
+              </span>
               <span className="hidden sm:inline">Running</span>
             </button>
           )}
@@ -1184,7 +1209,7 @@ export default function ControlClient() {
       </div>
 
       {/* Running Missions Panel - Compact horizontal layout */}
-      {showParallelPanel && runningMissions.length > 0 && (
+      {showParallelPanel && (runningMissions.length > 0 || currentMission) && (
         <div className="mb-4 flex items-center gap-2 overflow-x-auto pb-1">
           <div className="flex items-center gap-1.5 shrink-0 text-white/40">
             <Layers className="h-3.5 w-3.5" />
@@ -1200,12 +1225,43 @@ export default function ControlClient() {
               <RefreshCw className="h-3 w-3" />
             </button>
           </div>
-          
+
+          {/* Show current mission first if it's not in running missions */}
+          {currentMission &&
+            !runningMissions.some(
+              (m) => m.mission_id === currentMission.id
+            ) && (
+              <div
+                onClick={() => handleViewMission(currentMission.id)}
+                className={cn(
+                  "flex items-center gap-2 rounded-lg border px-2.5 py-1.5 transition-colors cursor-pointer shrink-0",
+                  viewingMissionId === currentMission.id
+                    ? "border-indigo-500/30 bg-indigo-500/10"
+                    : "border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]"
+                )}
+              >
+                <div className="h-1.5 w-1.5 rounded-full shrink-0 bg-emerald-400" />
+                <span className="text-xs font-medium text-white truncate max-w-[140px]">
+                  {currentMission.model_override?.split("/").pop() || "Default"}
+                </span>
+                <span className="text-[10px] text-white/40 tabular-nums">
+                  {currentMission.id.slice(0, 8)}
+                </span>
+                {viewingMissionId === currentMission.id && (
+                  <Check className="h-3 w-3 text-indigo-400" />
+                )}
+              </div>
+            )}
+
           {runningMissions.map((mission) => {
             const isViewingMission = viewingMissionId === mission.mission_id;
-            const isStalled = mission.state === "running" && mission.seconds_since_activity > 60;
-            const isSeverlyStalled = mission.state === "running" && mission.seconds_since_activity > 120;
-            
+            const isStalled =
+              mission.state === "running" &&
+              mission.seconds_since_activity > 60;
+            const isSeverlyStalled =
+              mission.state === "running" &&
+              mission.seconds_since_activity > 120;
+
             return (
               <div
                 key={mission.mission_id}
@@ -1224,13 +1280,17 @@ export default function ControlClient() {
                 <div
                   className={cn(
                     "h-1.5 w-1.5 rounded-full shrink-0",
-                    isSeverlyStalled ? "bg-red-400" :
-                    isStalled ? "bg-amber-400 animate-pulse" :
-                    mission.state === "running" ? "bg-emerald-400 animate-pulse" : "bg-amber-400"
+                    isSeverlyStalled
+                      ? "bg-red-400"
+                      : isStalled
+                      ? "bg-amber-400 animate-pulse"
+                      : mission.state === "running"
+                      ? "bg-emerald-400 animate-pulse"
+                      : "bg-amber-400"
                   )}
                 />
                 <span className="text-xs font-medium text-white truncate max-w-[140px]">
-                  {mission.model_override?.split('/').pop() || "Default"}
+                  {mission.model_override?.split("/").pop() || "Default"}
                 </span>
                 <span className="text-[10px] text-white/40 tabular-nums">
                   {mission.mission_id.slice(0, 8)}

@@ -1,3 +1,6 @@
+reports/
+reports/**
+
 # Rust build artifacts
 /target/
 **/*.rs.bk

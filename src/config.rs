@@ -2,7 +2,7 @@
 //!
 //! Configuration can be set via environment variables:
 //! - `OPENROUTER_API_KEY` - Required. Your OpenRouter API key.
-//! - `DEFAULT_MODEL` - Optional. The default LLM model to use. Defaults to `qwen/qwen3-next-80b-a3b-thinking`.
+//! - `DEFAULT_MODEL` - Optional. The default LLM model to use. Defaults to `google/gemini-3-flash-preview`.
 //! - `WORKING_DIR` - Optional. Default working directory for relative paths. Defaults to `/root` in production, current directory in dev.
 //! - `HOST` - Optional. Server host. Defaults to `127.0.0.1`.
 //! - `PORT` - Optional. Server port. Defaults to `3000`.
@@ -21,15 +21,15 @@
 //! Note: The agent has **full system access**. It can read/write any file, execute any command,
 //! and search anywhere on the machine. The `WORKING_DIR` is just the default for relative paths.
 
+use base64::Engine;
 use std::path::PathBuf;
 use thiserror::Error;
-use base64::Engine;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("Missing required environment variable: {0}")]
     MissingEnvVar(String),
-    
+
     #[error("Invalid value for {0}: {1}")]
     InvalidValue(String, String),
 }
@@ -39,16 +39,16 @@ pub enum ConfigError {
 pub struct MemoryConfig {
     /// Supabase project URL
     pub supabase_url: Option<String>,
-    
+
     /// Supabase service role key (for full access)
     pub supabase_service_role_key: Option<String>,
-    
+
     /// Embedding model for vector storage
     pub embed_model: String,
-    
+
     /// Reranker model for precision retrieval
     pub rerank_model: Option<String>,
-    
+
     /// Embedding dimension (must match model output)
     pub embed_dimension: usize,
 }
@@ -66,7 +66,7 @@ pub struct ContextConfig {
     pub max_message_chars: usize,
     /// Maximum total characters for conversation context
     pub max_history_total_chars: usize,
-    
+
     // === Memory Retrieval ===
     /// Number of relevant past task chunks to retrieve
     pub memory_chunk_limit: usize,
@@ -76,15 +76,15 @@ pub struct ContextConfig {
     pub user_facts_limit: usize,
     /// Maximum mission summaries to inject
     pub mission_summaries_limit: usize,
-    
+
     // === Tool Results ===
     /// Maximum characters for tool result before truncation
     pub max_tool_result_chars: usize,
-    
+
     // === Context Files ===
     /// Maximum context files to list in session metadata
     pub max_context_files: usize,
-    
+
     // === Directory Structure ===
     /// Context directory name (user uploads)
     pub context_dir_name: String,
@@ -101,19 +101,19 @@ impl Default for ContextConfig {
             max_history_messages: 10,
             max_message_chars: 5000,
             max_history_total_chars: 30000,
-            
+
             // Memory retrieval
             memory_chunk_limit: 3,
             memory_chunk_threshold: 0.6,
             user_facts_limit: 10,
             mission_summaries_limit: 5,
-            
+
             // Tool results
             max_tool_result_chars: 15000,
-            
+
             // Context files
             max_context_files: 10,
-            
+
             // Directory structure
             context_dir_name: "context".to_string(),
             work_dir_name: "work".to_string(),
@@ -126,50 +126,66 @@ impl ContextConfig {
     /// Load from environment variables, falling back to defaults.
     pub fn from_env() -> Self {
         let mut config = Self::default();
-        
+
         if let Ok(v) = std::env::var("CONTEXT_MAX_HISTORY_MESSAGES") {
-            if let Ok(n) = v.parse() { config.max_history_messages = n; }
+            if let Ok(n) = v.parse() {
+                config.max_history_messages = n;
+            }
         }
         if let Ok(v) = std::env::var("CONTEXT_MAX_MESSAGE_CHARS") {
-            if let Ok(n) = v.parse() { config.max_message_chars = n; }
+            if let Ok(n) = v.parse() {
+                config.max_message_chars = n;
+            }
         }
         if let Ok(v) = std::env::var("CONTEXT_MAX_HISTORY_CHARS") {
-            if let Ok(n) = v.parse() { config.max_history_total_chars = n; }
+            if let Ok(n) = v.parse() {
+                config.max_history_total_chars = n;
+            }
         }
         if let Ok(v) = std::env::var("CONTEXT_MEMORY_CHUNK_LIMIT") {
-            if let Ok(n) = v.parse() { config.memory_chunk_limit = n; }
+            if let Ok(n) = v.parse() {
+                config.memory_chunk_limit = n;
+            }
         }
         if let Ok(v) = std::env::var("CONTEXT_MEMORY_THRESHOLD") {
-            if let Ok(n) = v.parse() { config.memory_chunk_threshold = n; }
+            if let Ok(n) = v.parse() {
+                config.memory_chunk_threshold = n;
+            }
         }
         if let Ok(v) = std::env::var("CONTEXT_USER_FACTS_LIMIT") {
-            if let Ok(n) = v.parse() { config.user_facts_limit = n; }
+            if let Ok(n) = v.parse() {
+                config.user_facts_limit = n;
+            }
         }
         if let Ok(v) = std::env::var("CONTEXT_MISSION_SUMMARIES_LIMIT") {
-            if let Ok(n) = v.parse() { config.mission_summaries_limit = n; }
+            if let Ok(n) = v.parse() {
+                config.mission_summaries_limit = n;
+            }
         }
         if let Ok(v) = std::env::var("CONTEXT_MAX_TOOL_RESULT_CHARS") {
-            if let Ok(n) = v.parse() { config.max_tool_result_chars = n; }
+            if let Ok(n) = v.parse() {
+                config.max_tool_result_chars = n;
+            }
         }
-        
+
         config
     }
-    
+
     /// Get the context directory path for a given working directory.
     pub fn context_dir(&self, working_dir: &str) -> String {
         self.resolve_subdir(working_dir, &self.context_dir_name)
     }
-    
+
     /// Get the tools directory path for a given working directory.
     pub fn tools_dir(&self, working_dir: &str) -> String {
         self.resolve_subdir(working_dir, &self.tools_dir_name)
     }
-    
+
     /// Get the work directory path for a given working directory.
     pub fn work_dir(&self, working_dir: &str) -> String {
         self.resolve_subdir(working_dir, &self.work_dir_name)
     }
-    
+
     /// Resolve a subdirectory path relative to working directory.
     fn resolve_subdir(&self, working_dir: &str, subdir: &str) -> String {
         if working_dir.contains("/root") {
@@ -206,29 +222,29 @@ impl MemoryConfig {
 pub struct Config {
     /// OpenRouter API key
     pub api_key: String,
-    
+
     /// Default LLM model identifier (OpenRouter format)
     pub default_model: String,
-    
+
     /// Default working directory for relative paths (agent has full system access regardless).
     /// In production, this is typically `/root`. The agent can still access any path on the system.
     pub working_dir: PathBuf,
-    
+
     /// Server host
     pub host: String,
-    
+
     /// Server port
     pub port: u16,
-    
+
     /// Maximum iterations for the agent loop
     pub max_iterations: usize,
-    
+
     /// Hours of inactivity after which an active mission is auto-closed (0 = disabled)
     pub stale_mission_hours: u64,
-    
+
     /// Maximum number of missions that can run in parallel (1 = sequential only)
     pub max_parallel_missions: usize,
-    
+
     /// Development mode (disables auth; more permissive defaults)
     pub dev_mode: bool,
 
@@ -240,7 +256,7 @@ pub struct Config {
 
     /// Memory/storage configuration
     pub memory: MemoryConfig,
-    
+
     /// Context injection configuration
     pub context: ContextConfig,
 }
@@ -271,7 +287,10 @@ impl Default for ConsoleSshConfig {
 
 impl ConsoleSshConfig {
     pub fn is_configured(&self) -> bool {
-        self.private_key.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false)
+        self.private_key
+            .as_ref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
     }
 }
 
@@ -314,10 +333,10 @@ impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         let api_key = std::env::var("OPENROUTER_API_KEY")
             .map_err(|_| ConfigError::MissingEnvVar("OPENROUTER_API_KEY".to_string()))?;
-        
+
         let default_model = std::env::var("DEFAULT_MODEL")
-            .unwrap_or_else(|_| "qwen/qwen3-next-80b-a3b-thinking".to_string());
-        
+            .unwrap_or_else(|_| "google/gemini-3-flash-preview".to_string());
+
         // WORKING_DIR: default working directory for relative paths.
         // In production (release build), default to /root. In dev, default to current directory.
         let working_dir = std::env::var("WORKING_DIR")
@@ -329,36 +348,43 @@ impl Config {
                     PathBuf::from("/root")
                 }
             });
-        
-        let host = std::env::var("HOST")
-            .unwrap_or_else(|_| "127.0.0.1".to_string());
-        
+
+        let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+
         let port = std::env::var("PORT")
             .unwrap_or_else(|_| "3000".to_string())
             .parse()
             .map_err(|e| ConfigError::InvalidValue("PORT".to_string(), format!("{}", e)))?;
-        
+
         let max_iterations = std::env::var("MAX_ITERATIONS")
             .unwrap_or_else(|_| "50".to_string())
             .parse()
-            .map_err(|e| ConfigError::InvalidValue("MAX_ITERATIONS".to_string(), format!("{}", e)))?;
+            .map_err(|e| {
+                ConfigError::InvalidValue("MAX_ITERATIONS".to_string(), format!("{}", e))
+            })?;
 
         // Hours of inactivity after which an active mission is auto-closed
         // Default: 24 hours. Set to 0 to disable.
         let stale_mission_hours = std::env::var("STALE_MISSION_HOURS")
             .unwrap_or_else(|_| "24".to_string())
             .parse()
-            .map_err(|e| ConfigError::InvalidValue("STALE_MISSION_HOURS".to_string(), format!("{}", e)))?;
+            .map_err(|e| {
+                ConfigError::InvalidValue("STALE_MISSION_HOURS".to_string(), format!("{}", e))
+            })?;
 
         // Maximum parallel missions (default: 1 = sequential)
         let max_parallel_missions = std::env::var("MAX_PARALLEL_MISSIONS")
             .unwrap_or_else(|_| "1".to_string())
             .parse()
-            .map_err(|e| ConfigError::InvalidValue("MAX_PARALLEL_MISSIONS".to_string(), format!("{}", e)))?;
+            .map_err(|e| {
+                ConfigError::InvalidValue("MAX_PARALLEL_MISSIONS".to_string(), format!("{}", e))
+            })?;
 
         let dev_mode = std::env::var("DEV_MODE")
             .ok()
-            .map(|v| parse_bool(&v).map_err(|e| ConfigError::InvalidValue("DEV_MODE".to_string(), e)))
+            .map(|v| {
+                parse_bool(&v).map_err(|e| ConfigError::InvalidValue("DEV_MODE".to_string(), e))
+            })
             .transpose()?
             // In debug builds, default to dev_mode=true; in release, default to false.
             .unwrap_or(cfg!(debug_assertions));
@@ -368,7 +394,11 @@ impl Config {
             jwt_secret: std::env::var("JWT_SECRET").ok(),
             jwt_ttl_days: std::env::var("JWT_TTL_DAYS")
                 .ok()
-                .map(|v| v.parse::<i64>().map_err(|e| ConfigError::InvalidValue("JWT_TTL_DAYS".to_string(), format!("{}", e))))
+                .map(|v| {
+                    v.parse::<i64>().map_err(|e| {
+                        ConfigError::InvalidValue("JWT_TTL_DAYS".to_string(), format!("{}", e))
+                    })
+                })
                 .transpose()?
                 .unwrap_or(30),
         };
@@ -382,17 +412,17 @@ impl Config {
                 return Err(ConfigError::MissingEnvVar("JWT_SECRET".to_string()));
             }
         }
-        
+
         // Memory configuration (optional)
         let embed_model = std::env::var("MEMORY_EMBED_MODEL")
             .unwrap_or_else(|_| "openai/text-embedding-3-small".to_string());
-        
+
         // Determine embed dimension from env or infer from model
         let embed_dimension = std::env::var("MEMORY_EMBED_DIMENSION")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or_else(|| infer_embed_dimension(&embed_model));
-        
+
         let memory = MemoryConfig {
             supabase_url: std::env::var("SUPABASE_URL").ok(),
             supabase_service_role_key: std::env::var("SUPABASE_SERVICE_ROLE_KEY").ok(),
@@ -405,15 +435,19 @@ impl Config {
             host: std::env::var("CONSOLE_SSH_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
             port: std::env::var("CONSOLE_SSH_PORT")
                 .ok()
-                .map(|v| v.parse::<u16>().map_err(|e| ConfigError::InvalidValue("CONSOLE_SSH_PORT".to_string(), format!("{}", e))))
+                .map(|v| {
+                    v.parse::<u16>().map_err(|e| {
+                        ConfigError::InvalidValue("CONSOLE_SSH_PORT".to_string(), format!("{}", e))
+                    })
+                })
                 .transpose()?
                 .unwrap_or(22),
             user: std::env::var("CONSOLE_SSH_USER").unwrap_or_else(|_| "root".to_string()),
             private_key: read_private_key_from_env()?,
         };
-        
+
         let context = ContextConfig::from_env();
-        
+
         Ok(Self {
             api_key,
             default_model,
@@ -430,13 +464,9 @@ impl Config {
             context,
         })
     }
-    
+
     /// Create a config with custom values (useful for testing).
-    pub fn new(
-        api_key: String,
-        default_model: String,
-        working_dir: PathBuf,
-    ) -> Self {
+    pub fn new(api_key: String, default_model: String, working_dir: PathBuf) -> Self {
         Self {
             api_key,
             default_model,
@@ -466,12 +496,12 @@ fn parse_bool(value: &str) -> Result<bool, String> {
 /// Infer embedding dimension from model name.
 fn infer_embed_dimension(model: &str) -> usize {
     let model_lower = model.to_lowercase();
-    
+
     // Qwen embedding models output 4096 dimensions
     if model_lower.contains("qwen") && model_lower.contains("embedding") {
         return 4096;
     }
-    
+
     // OpenAI text-embedding-3 models
     if model_lower.contains("text-embedding-3") {
         if model_lower.contains("large") {
@@ -479,17 +509,17 @@ fn infer_embed_dimension(model: &str) -> usize {
         }
         return 1536; // small
     }
-    
+
     // OpenAI ada
     if model_lower.contains("ada") {
         return 1536;
     }
-    
+
     // Cohere embed models
     if model_lower.contains("embed-english") || model_lower.contains("embed-multilingual") {
         return 1024;
     }
-    
+
     // Default fallback
     1536
 }
@@ -500,8 +530,9 @@ fn read_private_key_from_env() -> Result<Option<String>, ConfigError> {
         if path.trim().is_empty() {
             return Ok(None);
         }
-        let s = std::fs::read_to_string(path.trim())
-            .map_err(|e| ConfigError::InvalidValue("CONSOLE_SSH_PRIVATE_KEY_PATH".to_string(), format!("{}", e)))?;
+        let s = std::fs::read_to_string(path.trim()).map_err(|e| {
+            ConfigError::InvalidValue("CONSOLE_SSH_PRIVATE_KEY_PATH".to_string(), format!("{}", e))
+        })?;
         if s.trim().is_empty() {
             return Ok(None);
         }
@@ -515,9 +546,15 @@ fn read_private_key_from_env() -> Result<Option<String>, ConfigError> {
         }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(b64.trim().as_bytes())
-            .map_err(|e| ConfigError::InvalidValue("CONSOLE_SSH_PRIVATE_KEY_B64".to_string(), format!("{}", e)))?;
-        let s = String::from_utf8(bytes)
-            .map_err(|e| ConfigError::InvalidValue("CONSOLE_SSH_PRIVATE_KEY_B64".to_string(), format!("{}", e)))?;
+            .map_err(|e| {
+                ConfigError::InvalidValue(
+                    "CONSOLE_SSH_PRIVATE_KEY_B64".to_string(),
+                    format!("{}", e),
+                )
+            })?;
+        let s = String::from_utf8(bytes).map_err(|e| {
+            ConfigError::InvalidValue("CONSOLE_SSH_PRIVATE_KEY_B64".to_string(), format!("{}", e))
+        })?;
         return Ok(Some(s));
     }
 
@@ -527,4 +564,3 @@ fn read_private_key_from_env() -> Result<Option<String>, ConfigError> {
         _ => Ok(None),
     }
 }
-

@@ -282,6 +282,7 @@ export interface Mission {
   id: string;
   status: MissionStatus;
   title: string | null;
+  model_override: string | null;
   history: MissionHistoryEntry[];
   created_at: string;
   updated_at: string;
@@ -309,11 +310,14 @@ export async function getCurrentMission(): Promise<Mission | null> {
 }
 
 // Create a new mission
-export async function createMission(title?: string, modelOverride?: string): Promise<Mission> {
+export async function createMission(
+  title?: string,
+  modelOverride?: string
+): Promise<Mission> {
   const body: { title?: string; model_override?: string } = {};
   if (title) body.title = title;
   if (modelOverride) body.model_override = modelOverride;
-  
+
   const res = await apiFetch("/api/control/missions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -394,7 +398,12 @@ export async function setMissionStatus(
 export type ControlRunState = "idle" | "running" | "waiting_for_tool";
 
 export type ControlAgentEvent =
-  | { type: "status"; state: ControlRunState; queue_len: number; mission_id?: string }
+  | {
+      type: "status";
+      state: ControlRunState;
+      queue_len: number;
+      mission_id?: string;
+    }
   | { type: "user_message"; id: string; content: string; mission_id?: string }
   | {
       type: "assistant_message";
@@ -406,8 +415,20 @@ export type ControlAgentEvent =
       mission_id?: string;
     }
   | { type: "thinking"; content: string; done: boolean; mission_id?: string }
-  | { type: "tool_call"; tool_call_id: string; name: string; args: unknown; mission_id?: string }
-  | { type: "tool_result"; tool_call_id: string; name: string; result: unknown; mission_id?: string }
+  | {
+      type: "tool_call";
+      tool_call_id: string;
+      name: string;
+      args: unknown;
+      mission_id?: string;
+    }
+  | {
+      type: "tool_result";
+      tool_call_id: string;
+      name: string;
+      result: unknown;
+      mission_id?: string;
+    }
   | { type: "error"; message: string; mission_id?: string };
 
 export async function postControlMessage(
@@ -461,7 +482,9 @@ export async function getAgentTree(): Promise<AgentTreeNode | null> {
 }
 
 // Get tree for a specific mission (either live from memory or saved from database)
-export async function getMissionTree(missionId: string): Promise<AgentTreeNode | null> {
+export async function getMissionTree(
+  missionId: string
+): Promise<AgentTreeNode | null> {
   const res = await apiFetch(`/api/control/missions/${missionId}/tree`);
   if (!res.ok) throw new Error("Failed to fetch mission tree");
   return res.json();
@@ -545,7 +568,7 @@ export function streamControl(
           }
         }
       }
-      
+
       // Stream ended normally (server closed connection)
       onEvent({
         type: "error",
@@ -554,9 +577,10 @@ export function streamControl(
     } catch (err) {
       if (!controller.signal.aborted) {
         // Provide more specific error messages
-        const errorMessage = err instanceof Error 
-          ? `Stream connection failed: ${err.message}`
-          : "Stream connection failed";
+        const errorMessage =
+          err instanceof Error
+            ? `Stream connection failed: ${err.message}`
+            : "Stream connection failed";
         onEvent({
           type: "error",
           data: { message: errorMessage },

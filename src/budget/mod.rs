@@ -8,20 +8,31 @@
 //! - Benchmarks: model capability scores for task-aware selection
 //! - Resolver: auto-upgrade outdated model names to latest equivalents
 //! - Compatibility: track which models support proper function calling
+//! - Learned: model selection and budget estimation from historical outcomes
 
-mod budget;
-mod pricing;
 mod allocation;
-mod retry;
+mod budget;
 pub mod benchmarks;
-pub mod resolver;
 pub mod compatibility;
+pub mod learned;
+mod pricing;
+pub mod resolver;
+mod retry;
 
+pub use allocation::{allocate_budget, AllocationStrategy};
+pub use benchmarks::{load_benchmarks, BenchmarkRegistry, SharedBenchmarkRegistry, TaskType};
 pub use budget::{Budget, BudgetError};
+pub use compatibility::{
+    create_shared_registry, CompatibilityRegistry, ModelCompatibility, SharedCompatibilityRegistry,
+    ToolCallFormat,
+};
+pub use learned::{
+    estimate_budget_from_learned, select_model_from_learned, LearnedBudgetEstimate,
+    LearnedModelStats, LearnedSelectionConfig,
+};
 pub use pricing::{ModelPricing, PricingInfo};
-pub use allocation::{AllocationStrategy, allocate_budget};
-pub use retry::{ExecutionSignals, FailureAnalysis, FailureMode, RetryRecommendation, RetryConfig};
-pub use benchmarks::{TaskType, BenchmarkRegistry, SharedBenchmarkRegistry, load_benchmarks};
-pub use resolver::{ModelResolver, ModelFamily, ResolvedModel, SharedModelResolver, load_resolver};
-pub use compatibility::{CompatibilityRegistry, ModelCompatibility, ToolCallFormat, SharedCompatibilityRegistry, create_shared_registry};
+pub use resolver::{load_resolver, ModelFamily, ModelResolver, ResolvedModel, SharedModelResolver};
+pub use retry::{
+    ExecutionSignals, FailureAnalysis, FailureMode, RetryConfig, RetryRecommendation,
+};
 
