@@ -753,13 +753,13 @@ export default function ControlClient() {
 
   // Handle resuming an interrupted mission
   const handleResumeMission = async () => {
-    if (!currentMission || currentMission.status !== "interrupted") return;
+    if (!currentMission || !["interrupted", "blocked"].includes(currentMission.status)) return;
     try {
       setMissionLoading(true);
       const resumed = await resumeMission(currentMission.id);
       setCurrentMission(resumed);
       setShowStatusMenu(false);
-      toast.success("Mission resumed");
+      toast.success(currentMission.status === "blocked" ? "Continuing mission" : "Mission resumed");
     } catch (err) {
       console.error("Failed to resume mission:", err);
       toast.error("Failed to resume mission");
@@ -1439,16 +1439,36 @@ export default function ControlClient() {
                 ) : currentMission && currentMission.status !== "active" ? (
                   <>
                     <h2 className="text-lg font-medium text-white">
-                      {currentMission.status === "interrupted" ? "Mission Interrupted" : "No conversation history"}
+                      {currentMission.status === "interrupted" 
+                        ? "Mission Interrupted" 
+                        : currentMission.status === "blocked"
+                        ? "Iteration Limit Reached"
+                        : "No conversation history"}
                     </h2>
                     <p className="mt-2 text-sm text-white/40 max-w-sm">
                       {currentMission.status === "interrupted" ? (
                         <>This mission was interrupted (server shutdown or cancellation). Click the <strong className="text-amber-400">Resume</strong> button in the mission menu to continue where you left off.</>
+                      ) : currentMission.status === "blocked" ? (
+                        <>The agent reached its iteration limit (50). You can continue the mission to give it more iterations.</>
                       ) : (
                         <>This mission was {currentMission.status} without any messages.
                         {currentMission.status === "completed" && " You can reactivate it to continue."}</>
                       )}
                     </p>
+                    {currentMission.status === "blocked" && (
+                      <button
+                        onClick={handleResumeMission}
+                        disabled={missionLoading}
+                        className="mt-4 inline-flex items-center gap-2 rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-600 transition-colors disabled:opacity-50"
+                      >
+                        {missionLoading ? (
+                          <Loader className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <PlayCircle className="h-4 w-4" />
+                        )}
+                        Continue Mission
+                      </button>
+                    )}
                   </>
                 ) : (
                   <>
@@ -1732,6 +1752,32 @@ export default function ControlClient() {
                   </div>
                 );
               })}
+              
+              {/* Continue banner for blocked missions */}
+              {currentMission?.status === "blocked" && items.length > 0 && (
+                <div className="flex justify-center py-4">
+                  <div className="flex items-center gap-3 rounded-xl bg-amber-500/10 border border-amber-500/20 px-5 py-3">
+                    <Clock className="h-5 w-5 text-amber-400" />
+                    <div className="text-sm">
+                      <span className="text-amber-400 font-medium">Iteration limit reached</span>
+                      <span className="text-white/50 ml-1">— Agent used all 50 iterations</span>
+                    </div>
+                    <button
+                      onClick={handleResumeMission}
+                      disabled={missionLoading}
+                      className="ml-2 inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-medium text-black hover:bg-amber-400 transition-colors disabled:opacity-50"
+                    >
+                      {missionLoading ? (
+                        <Loader className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <PlayCircle className="h-3.5 w-3.5" />
+                      )}
+                      Continue
+                    </button>
+                  </div>
+                </div>
+              )}
+              
               <div ref={endRef} />
             </div>
           )}
