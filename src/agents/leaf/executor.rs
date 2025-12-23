@@ -1324,21 +1324,56 @@ If you cannot perform the requested analysis, use `complete_mission(blocked, rea
                     // with actual content, but then returns empty on the next iteration.
                     let called_complete_mission = tool_calls.iter().any(|tc| tc.function.name == "complete_mission");
                     if called_complete_mission {
+                        let content_text = response.content.as_deref().unwrap_or("");
+                        
+                        // Get summary from complete_mission args if available
+                        let summary_text = tool_calls.iter()
+                            .find(|tc| tc.function.name == "complete_mission")
+                            .and_then(|tc| serde_json::from_str::<serde_json::Value>(&tc.function.arguments).ok())
+                            .and_then(|args| args.get("summary").and_then(|s| s.as_str()).map(|s| s.to_string()))
+                            .unwrap_or_default();
+                        
+                        let combined_text = format!("{} {}", content_text, summary_text);
+                        
+                        // P1 FIX: Check for hallucinated Supabase URLs that weren't actually uploaded
+                        // LLMs sometimes generate plausible-looking URLs without actually uploading
+                        let supabase_url_pattern = regex::Regex::new(r"https://[a-z]+\.supabase\.co/storage/v1/object/public/images/[a-f0-9-]+\.png")
+                            .unwrap();
+                        let uploaded_urls: std::collections::HashSet<_> = pending_uploads.iter().map(|(url, _)| url.as_str()).collect();
+                        
+                        let hallucinated_urls: Vec<_> = supabase_url_pattern
+                            .find_iter(&combined_text)
+                            .map(|m| m.as_str())
+                            .filter(|url| !uploaded_urls.contains(url))
+                            .collect();
+                        
+                        if !hallucinated_urls.is_empty() {
+                            tracing::warn!(
+                                "Detected {} hallucinated image URL(s) in response: {:?}",
+                                hallucinated_urls.len(),
+                                hallucinated_urls
+                            );
+                            
+                            let warning = format!(
+                                "⚠️ ERROR: You referenced {} image URL(s) that were NOT actually uploaded!\n\n\
+                                These URLs don't exist:\n{}\n\n\
+                                You must use browser_screenshot or upload_image to create REAL images, \
+                                then include the ACTUAL URL returned by those tools. \
+                                Do NOT make up URLs.",
+                                hallucinated_urls.len(),
+                                hallucinated_urls.iter().map(|u| format!("  - {}", u)).collect::<Vec<_>>().join("\n")
+                            );
+                            
+                            messages.push(ChatMessage::new(Role::User, warning));
+                            continue;
+                        }
+                        
                         // Check for missing uploaded images before completing
                         if !pending_uploads.is_empty() {
-                            let content_text = response.content.as_deref().unwrap_or("");
-                            
-                            // Get summary from complete_mission args if available
-                            let summary_text = tool_calls.iter()
-                                .find(|tc| tc.function.name == "complete_mission")
-                                .and_then(|tc| serde_json::from_str::<serde_json::Value>(&tc.function.arguments).ok())
-                                .and_then(|args| args.get("summary").and_then(|s| s.as_str()).map(|s| s.to_string()))
-                                .unwrap_or_default();
-                            
                             // Check which uploads are missing from the response
                             let missing_uploads: Vec<_> = pending_uploads.iter()
                                 .filter(|(url, markdown)| {
-                                    !content_text.contains(url) && 
+                                    !content_text.contains(url) &&
                                     !content_text.contains(markdown) &&
                                     !summary_text.contains(url) &&
                                     !summary_text.contains(markdown)
