@@ -806,3 +806,42 @@ export function getModelDisplayName(modelId: string): string {
   // Fallback: strip provider prefix
   return modelId.includes("/") ? modelId.split("/").pop()! : modelId;
 }
+
+// Model categories for sorting
+const MODEL_CATEGORIES: Record<string, { order: number; label: string }> = {
+  "google": { order: 1, label: "Google" },
+  "deepseek": { order: 2, label: "DeepSeek" },
+  "qwen": { order: 3, label: "Qwen" },
+  "anthropic": { order: 4, label: "Anthropic" },
+  "mistralai": { order: 5, label: "Mistral" },
+  "openai": { order: 6, label: "OpenAI" },
+};
+
+// Models to exclude from the dropdown
+const EXCLUDED_MODEL_PATTERNS = [
+  /^meta-llama\//,      // All Llama models
+  /^openai\/o[0-9]/,    // OpenAI o-series (o1, o3, o4, etc.)
+];
+
+// Filter and sort models for the dropdown
+export function filterAndSortModels(models: string[]): string[] {
+  return models
+    // Filter out excluded models
+    .filter(model => !EXCLUDED_MODEL_PATTERNS.some(pattern => pattern.test(model)))
+    // Sort by category then alphabetically within category
+    .sort((a, b) => {
+      const providerA = a.split("/")[0];
+      const providerB = b.split("/")[0];
+      const catA = MODEL_CATEGORIES[providerA]?.order ?? 99;
+      const catB = MODEL_CATEGORIES[providerB]?.order ?? 99;
+      if (catA !== catB) return catA - catB;
+      // Within same category, sort by display name
+      return getModelDisplayName(a).localeCompare(getModelDisplayName(b));
+    });
+}
+
+// Get the category label for a model
+export function getModelCategory(modelId: string): string {
+  const provider = modelId.split("/")[0];
+  return MODEL_CATEGORIES[provider]?.label ?? "Other";
+}

@@ -22,6 +22,8 @@ import {
   cancelMission,
   listModels,
   getModelDisplayName,
+  filterAndSortModels,
+  getModelCategory,
   type ControlRunState,
   type Mission,
   type MissionStatus,
@@ -642,7 +644,7 @@ export default function ControlClient() {
   useEffect(() => {
     listModels()
       .then((data) => {
-        setAvailableModels(data.models);
+        setAvailableModels(filterAndSortModels(data.models));
       })
       .catch((err) => {
         console.error("Failed to fetch models:", err);
@@ -1201,11 +1203,25 @@ export default function ControlClient() {
                       <option value="" className="bg-[#1a1a1a]">
                         Auto (default)
                       </option>
-                      {availableModels.map((model) => (
-                        <option key={model} value={model} className="bg-[#1a1a1a]">
-                          {getModelDisplayName(model)}
-                        </option>
-                      ))}
+                      {/* Group models by category */}
+                      {(() => {
+                        const grouped = availableModels.reduce((acc, model) => {
+                          const cat = getModelCategory(model);
+                          if (!acc[cat]) acc[cat] = [];
+                          acc[cat].push(model);
+                          return acc;
+                        }, {} as Record<string, string[]>);
+                        
+                        return Object.entries(grouped).map(([category, models]) => (
+                          <optgroup key={category} label={category} className="bg-[#1a1a1a]">
+                            {models.map((model) => (
+                              <option key={model} value={model} className="bg-[#1a1a1a]">
+                                {getModelDisplayName(model)}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ));
+                      })()}
                     </select>
                     <p className="text-xs text-white/30 mt-1.5">
                       Auto uses the configured default model
