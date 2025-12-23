@@ -19,6 +19,11 @@ use tokio_util::io::ReaderStream;
 use super::routes::AppState;
 use super::ssh_util::{materialize_private_key, sftp_batch, ssh_exec, ssh_exec_with_stdin};
 
+/// Check if the SSH target is localhost (optimization to skip SFTP)
+fn is_localhost(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PathQuery {
     pub path: String,
@@ -96,7 +101,15 @@ pub async fn list(
 ) -> Result<Json<Vec<FsEntry>>, (StatusCode, String)> {
     let (cfg, key_file) = get_key_and_cfg(&state).await?;
 
-    // Avoid ssh quoting issues by piping the script on stdin.
+    // Optimization: if SSH target is localhost, read directory directly
+    if is_localhost(&cfg.host) {
+        let entries = list_directory_local(&q.path)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        return Ok(Json(entries));
+    }
+
+    // Remote listing via SSH + Python
     let out = ssh_exec_with_stdin(
         &cfg,
         key_file.path(),
@@ -112,11 +125,57 @@ pub async fn list(
     Ok(Json(parsed))
 }
 
+/// List directory contents locally (for localhost optimization)
+async fn list_directory_local(path: &str) -> anyhow::Result<Vec<FsEntry>> {
+    use std::os::unix::fs::MetadataExt;
+    
+    let mut entries = Vec::new();
+    let mut dir = tokio::fs::read_dir(path).await?;
+    
+    while let Some(entry) = dir.next_entry().await? {
+        let metadata = match entry.metadata().await {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        
+        let kind = if metadata.is_dir() {
+            "dir"
+        } else if metadata.is_symlink() {
+            "link"
+        } else if metadata.is_file() {
+            "file"
+        } else {
+            "other"
+        };
+        
+        let mtime = metadata.mtime();
+        
+        entries.push(FsEntry {
+            name: entry.file_name().to_string_lossy().to_string(),
+            path: entry.path().to_string_lossy().to_string(),
+            kind: kind.to_string(),
+            size: metadata.len(),
+            mtime,
+        });
+    }
+    
+    Ok(entries)
+}
+
 pub async fn mkdir(
     State(state): State<Arc<AppState>>,
     Json(req): Json<MkdirRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let (cfg, key_file) = get_key_and_cfg(&state).await?;
+    
+    // Optimization: if SSH target is localhost, create directory directly
+    if is_localhost(&cfg.host) {
+        tokio::fs::create_dir_all(&req.path)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        return Ok(Json(serde_json::json!({ "ok": true })));
+    }
+    
     ssh_exec(&cfg, key_file.path(), "mkdir", &vec!["-p".into(), req.path])
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -129,6 +188,21 @@ pub async fn rm(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let (cfg, key_file) = get_key_and_cfg(&state).await?;
     let recursive = req.recursive.unwrap_or(false);
+    
+    // Optimization: if SSH target is localhost, delete directly
+    if is_localhost(&cfg.host) {
+        if recursive {
+            tokio::fs::remove_dir_all(&req.path)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        } else {
+            tokio::fs::remove_file(&req.path)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+        return Ok(Json(serde_json::json!({ "ok": true })));
+    }
+    
     let mut args = vec![];
     if recursive {
         args.push("-rf".to_string());
@@ -148,6 +222,27 @@ pub async fn download(
 ) -> Result<Response, (StatusCode, String)> {
     let (cfg, key_file) = get_key_and_cfg(&state).await?;
 
+    let filename = q.path.split('/').last().unwrap_or("download");
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"{}\"", filename)
+            .parse()
+            .unwrap(),
+    );
+    headers.insert(header::CONTENT_TYPE, "application/octet-stream".parse().unwrap());
+
+    // Optimization: if SSH target is localhost, read file directly
+    if is_localhost(&cfg.host) {
+        let file = tokio::fs::File::open(&q.path)
+            .await
+            .map_err(|e| (StatusCode::NOT_FOUND, format!("File not found: {}", e)))?;
+        let stream = ReaderStream::new(file);
+        let body = Body::from_stream(stream);
+        return Ok((headers, body).into_response());
+    }
+
+    // Remote download via SFTP
     let tmp = std::env::temp_dir().join(format!("open_agent_dl_{}", uuid::Uuid::new_v4()));
     let batch = format!("get -p \"{}\" \"{}\"\n", q.path, tmp.to_string_lossy());
     sftp_batch(&cfg, key_file.path(), &batch)
@@ -159,16 +254,6 @@ pub async fn download(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
-
-    let filename = q.path.split('/').last().unwrap_or("download");
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"{}\"", filename)
-            .parse()
-            .unwrap(),
-    );
-    headers.insert(header::CONTENT_TYPE, "application/octet-stream".parse().unwrap());
 
     // Best-effort cleanup (delete after a short delay).
     let tmp_cleanup = tmp.clone();
@@ -220,21 +305,39 @@ pub async fn upload(
             format!("{}/{}", q.path, file_name)
         };
 
-        // Ensure the target directory exists (mkdir -p is idempotent)
+        // Ensure the target directory exists
         let target_dir = if q.path.ends_with('/') {
             q.path.trim_end_matches('/').to_string()
         } else {
             q.path.clone()
         };
-        ssh_exec(&cfg, key_file.path(), "mkdir", &["-p".into(), target_dir])
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create directory: {}", e)))?;
 
-        let batch = format!("put -p \"{}\" \"{}\"\n", tmp.to_string_lossy(), remote_path);
-        sftp_batch(&cfg, key_file.path(), &batch)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        let _ = tokio::fs::remove_file(tmp).await;
+        // Optimization: if SSH target is localhost, skip SFTP and use direct file operations
+        if is_localhost(&cfg.host) {
+            // Direct local file operations (much faster than SFTP to self)
+            tokio::fs::create_dir_all(&target_dir)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create directory: {}", e)))?;
+            
+            // Try rename first (fast), fall back to copy+delete if across filesystems
+            if tokio::fs::rename(&tmp, &remote_path).await.is_err() {
+                tokio::fs::copy(&tmp, &remote_path)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to copy file: {}", e)))?;
+                let _ = tokio::fs::remove_file(&tmp).await;
+            }
+        } else {
+            // Remote upload via SFTP
+            ssh_exec(&cfg, key_file.path(), "mkdir", &["-p".into(), target_dir])
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create directory: {}", e)))?;
+
+            let batch = format!("put -p \"{}\" \"{}\"\n", tmp.to_string_lossy(), remote_path);
+            sftp_batch(&cfg, key_file.path(), &batch)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            let _ = tokio::fs::remove_file(tmp).await;
+        }
 
         return Ok(Json(serde_json::json!({ "ok": true, "path": q.path, "name": file_name })));
     }
