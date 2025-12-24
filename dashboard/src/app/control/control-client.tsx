@@ -111,6 +111,7 @@ type ChatItem =
       result?: unknown;
       isUiTool: boolean;
       startTime: number;
+      endTime?: number;
     }
   | {
       kind: "system";
@@ -409,8 +410,9 @@ function ToolCallItem({
     return `${mins}m${secs > 0 ? ` ${secs}s` : ""}`;
   };
 
-  const duration = isDone
-    ? formatDuration(Math.floor((Date.now() - item.startTime) / 1000))
+  // Use endTime for completed tools, otherwise use elapsed time for running tools
+  const duration = isDone && item.endTime
+    ? formatDuration(Math.floor((item.endTime - item.startTime) / 1000))
     : formatDuration(elapsedSeconds);
 
   const argsStr = formatToolArgs(item.args);
@@ -1210,10 +1212,11 @@ export default function ControlClient() {
 
       if (event.type === "tool_result" && isRecord(data)) {
         const toolCallId = String(data["tool_call_id"] ?? "");
+        const endTime = Date.now();
         setItems((prev) =>
           prev.map((it) =>
             it.kind === "tool" && it.toolCallId === toolCallId
-              ? { ...it, result: data["result"] }
+              ? { ...it, result: data["result"], endTime }
               : it
           )
         );
