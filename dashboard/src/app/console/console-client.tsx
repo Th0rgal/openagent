@@ -211,6 +211,8 @@ function FilePreviewModal({
   const isImage = isImageFile(path);
 
   useEffect(() => {
+    let isStale = false;
+
     // Revoke previous blob URL if any
     if (blobUrlRef.current) {
       URL.revokeObjectURL(blobUrlRef.current);
@@ -234,11 +236,17 @@ function FilePreviewModal({
           if (!res.ok) throw new Error(await res.text());
           const blob = await res.blob();
           const blobUrl = URL.createObjectURL(blob);
+          // Check if effect was cleaned up while fetch was in-flight
+          if (isStale) {
+            URL.revokeObjectURL(blobUrl);
+            return;
+          }
           blobUrlRef.current = blobUrl;
           setImageBlobUrl(blobUrl);
           setContent("image");
         } else {
           const text = await fetchFileContent(path);
+          if (isStale) return;
           // Limit preview size
           if (text.length > 500000) {
             setContent(text.slice(0, 500000) + "\n\n... (file truncated, too large to preview)");
@@ -247,15 +255,19 @@ function FilePreviewModal({
           }
         }
       } catch (err) {
+        if (isStale) return;
         setError(err instanceof Error ? err.message : String(err));
       } finally {
-        setLoading(false);
+        if (!isStale) {
+          setLoading(false);
+        }
       }
     }
     void loadFile();
 
     // Cleanup blob URL on unmount or path change
     return () => {
+      isStale = true;
       if (blobUrlRef.current) {
         URL.revokeObjectURL(blobUrlRef.current);
         blobUrlRef.current = null;
