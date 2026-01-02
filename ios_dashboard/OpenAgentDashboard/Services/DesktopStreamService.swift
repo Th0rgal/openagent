@@ -51,7 +51,7 @@ final class DesktopStreamService {
 
         webSocket = session.webSocketTask(with: request)
         webSocket?.resume()
-        isConnected = true
+        // Note: isConnected will be set to true on first successful message receive
 
         // Start receiving frames
         receiveMessage()
@@ -131,6 +131,10 @@ final class DesktopStreamService {
 
                 switch result {
                 case .success(let message):
+                    // Mark as connected on first successful message
+                    if !self.isConnected {
+                        self.isConnected = true
+                    }
                     self.handleMessage(message)
                     // Continue receiving
                     self.receiveMessage()

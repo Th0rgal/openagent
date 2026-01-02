@@ -44,7 +44,7 @@ export function DesktopStream({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Build WebSocket URL
+  // Build WebSocket URL - only uses initial values to avoid reconnections on slider changes
   const buildWsUrl = useCallback(() => {
     const baseUrl =
       typeof window !== "undefined"
@@ -58,14 +58,15 @@ export function DesktopStream({
       .replace("https://", "wss://")
       .replace("http://", "ws://");
 
+    // Use initial values for URL params - runtime changes are sent via commands
     const params = new URLSearchParams({
       display: displayId,
-      fps: fps.toString(),
-      quality: quality.toString(),
+      fps: initialFps.toString(),
+      quality: initialQuality.toString(),
     });
 
     return `${wsUrl}/api/desktop/stream?${params}`;
-  }, [displayId, fps, quality]);
+  }, [displayId, initialFps, initialQuality]);
 
   // Connect to WebSocket
   const connect = useCallback(() => {

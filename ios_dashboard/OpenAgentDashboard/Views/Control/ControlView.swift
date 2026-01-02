@@ -876,10 +876,13 @@ struct ControlView: View {
 
         // Determine the run state for this mission from runningMissions
         if let runningInfo = runningMissions.first(where: { $0.missionId == id }) {
-            // This mission is in the running list
-            if runningInfo.isRunning {
+            // This mission is in the running list - map state string to enum properly
+            switch runningInfo.state {
+            case "running":
                 runState = .running
-            } else {
+            case "waiting_for_tool":
+                runState = .waitingForTool
+            default:
                 runState = .idle
             }
             queueLength = runningInfo.queueLen
