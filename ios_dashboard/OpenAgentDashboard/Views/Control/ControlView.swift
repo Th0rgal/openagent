@@ -235,7 +235,7 @@ struct ControlView: View {
         }
         .onDisappear {
             streamTask?.cancel()
-            connectionState = .connected
+            connectionState = .disconnected
             reconnectAttempt = 0
             pollingTask?.cancel()
         }
@@ -807,11 +807,15 @@ struct ControlView: View {
 
                 // Start streaming - this will block until the stream ends
                 // Use nonisolated(unsafe) to allow mutation from closure (we accept the risk for this simple boolean)
-                nonisolated(unsafe) var receivedEvent = false
+                // Track successful (non-error) events separately from all events
+                nonisolated(unsafe) var receivedSuccessfulEvent = false
 
                 let streamCompleted = await withCheckedContinuation { continuation in
                     let innerTask = api.streamControl { eventType, data in
-                        receivedEvent = true
+                        // Only count non-error events as successful for backoff reset
+                        if eventType != "error" {
+                            receivedSuccessfulEvent = true
+                        }
                         Task { @MainActor in
                             // Successfully received an event - we're connected
                             if !self.connectionState.isConnected {
@@ -829,8 +833,9 @@ struct ControlView: View {
                     }
                 }
 
-                // Reset backoff after successful connection (stream has ended, safe to read)
-                if receivedEvent {
+                // Reset backoff only after receiving successful (non-error) events
+                // This prevents error events from resetting backoff when server is unavailable
+                if receivedSuccessfulEvent {
                     currentBackoff = 1
                 }
 
