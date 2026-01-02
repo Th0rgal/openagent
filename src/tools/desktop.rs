@@ -173,7 +173,7 @@ impl Tool for StartSession {
         let launch_browser = args["launch_browser"].as_bool().unwrap_or(false);
         let browser_info = if launch_browser {
             let url = args["url"].as_str().unwrap_or("about:blank");
-            
+
             let chromium = Command::new("chromium")
                 .args([
                     "--no-sandbox",
@@ -190,11 +190,14 @@ impl Tool for StartSession {
                 .map_err(|e| anyhow::anyhow!("Failed to start Chromium: {}", e))?;
 
             let chromium_pid = chromium.id().unwrap_or(0);
-            
+
             // Wait for browser to load
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-            format!(", \"browser\": \"chromium\", \"browser_pid\": {}, \"url\": \"{}\"", chromium_pid, url)
+            format!(
+                ", \"browser\": \"chromium\", \"browser_pid\": {}, \"url\": \"{}\"",
+                chromium_pid, url
+            )
         } else {
             String::new()
         };
@@ -366,10 +369,13 @@ You MUST copy the returned markdown (e.g., '![screenshot](https://...)') directl
         }
 
         // Generate filename
-        let filename = args["filename"].as_str().map(|s| s.to_string()).unwrap_or_else(|| {
-            let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-            format!("screenshot_{}.png", timestamp)
-        });
+        let filename = args["filename"]
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+                format!("screenshot_{}.png", timestamp)
+            });
 
         // Ensure screenshots directory exists
         let screenshots_dir = working_dir.join("screenshots");
@@ -433,7 +439,9 @@ You MUST copy the returned markdown (e.g., '![screenshot](https://...)') directl
 
         // Auto-upload to Supabase if enabled and configured
         if should_upload {
-            if let Some((url, markdown)) = upload_screenshot_to_supabase(&filepath, description).await {
+            if let Some((url, markdown)) =
+                upload_screenshot_to_supabase(&filepath, description).await
+            {
                 // Include vision marker if return_image is true
                 // Format: [VISION_IMAGE:url] - this will be parsed by the executor to add the image to context
                 let vision_marker = if return_image {
@@ -441,7 +449,7 @@ You MUST copy the returned markdown (e.g., '![screenshot](https://...)') directl
                 } else {
                     String::new()
                 };
-                
+
                 // Return format that strongly encourages the LLM to include the markdown
                 return Ok(format!(
                     "Screenshot captured and uploaded successfully.\n\n\
@@ -458,32 +466,36 @@ You MUST copy the returned markdown (e.g., '![screenshot](https://...)') directl
         }
 
         Ok(json!({
-            "success": true, 
-            "path": filepath.display().to_string(), 
+            "success": true,
+            "path": filepath.display().to_string(),
             "size_bytes": metadata.len()
-        }).to_string())
+        })
+        .to_string())
     }
 }
 
 /// Helper to upload a screenshot to Supabase Storage
-async fn upload_screenshot_to_supabase(filepath: &std::path::PathBuf, description: &str) -> Option<(String, String)> {
+async fn upload_screenshot_to_supabase(
+    filepath: &std::path::PathBuf,
+    description: &str,
+) -> Option<(String, String)> {
     let supabase_url = std::env::var("SUPABASE_URL").ok()?;
     let service_role_key = std::env::var("SUPABASE_SERVICE_ROLE_KEY").ok()?;
-    
+
     if supabase_url.is_empty() || service_role_key.is_empty() {
         return None;
     }
-    
+
     let content = std::fs::read(filepath).ok()?;
     let file_id = uuid::Uuid::new_v4();
     let upload_path = format!("{}.png", file_id);
-    
+
     let storage_url = format!(
         "{}/storage/v1/object/images/{}",
         supabase_url.trim_end_matches('/'),
         upload_path
     );
-    
+
     let client = reqwest::Client::new();
     let resp = client
         .post(&storage_url)
@@ -495,21 +507,21 @@ async fn upload_screenshot_to_supabase(filepath: &std::path::PathBuf, descriptio
         .send()
         .await
         .ok()?;
-    
+
     if !resp.status().is_success() {
         return None;
     }
-    
+
     let public_url = format!(
         "{}/storage/v1/object/public/images/{}",
         supabase_url.trim_end_matches('/'),
         upload_path
     );
-    
+
     let markdown = format!("![{}]({})", description, public_url);
-    
+
     tracing::info!(url = %public_url, "Screenshot auto-uploaded to Supabase");
-    
+
     Some((public_url, markdown))
 }
 
@@ -861,7 +873,8 @@ except Exception as e:
         max_depth, max_depth
     );
 
-    let (stdout, stderr, exit_code) = run_with_display(display, "python3", &["-c", &python_script], 30).await?;
+    let (stdout, stderr, exit_code) =
+        run_with_display(display, "python3", &["-c", &python_script], 30).await?;
 
     if exit_code != 0 {
         return Err(anyhow::anyhow!("AT-SPI extraction failed: {}", stderr));
@@ -875,7 +888,7 @@ async fn get_ocr_text(display: &str, working_dir: &Path) -> anyhow::Result<Strin
     // Take a screenshot first
     let screenshots_dir = working_dir.join("screenshots");
     std::fs::create_dir_all(&screenshots_dir)?;
-    
+
     let screenshot_path = screenshots_dir.join("_ocr_temp.png");
 
     // Take screenshot
@@ -888,12 +901,20 @@ async fn get_ocr_text(display: &str, working_dir: &Path) -> anyhow::Result<Strin
     .await?;
 
     if exit_code != 0 {
-        return Err(anyhow::anyhow!("Failed to take screenshot for OCR: {}", stderr));
+        return Err(anyhow::anyhow!(
+            "Failed to take screenshot for OCR: {}",
+            stderr
+        ));
     }
 
     // Run tesseract
     let output = Command::new("tesseract")
-        .args([screenshot_path.to_string_lossy().as_ref(), "stdout", "-l", "eng"])
+        .args([
+            screenshot_path.to_string_lossy().as_ref(),
+            "stdout",
+            "-l",
+            "eng",
+        ])
         .output()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run tesseract: {}", e))?;
@@ -1034,7 +1055,7 @@ impl Tool for Scroll {
             if exit_code != 0 {
                 return Err(anyhow::anyhow!("xdotool mousemove failed: {}", stderr));
             }
-            
+
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
@@ -1054,7 +1075,7 @@ impl Tool for Scroll {
             if exit_code != 0 {
                 return Err(anyhow::anyhow!("xdotool scroll failed: {}", stderr));
             }
-            
+
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
 
@@ -1126,13 +1147,8 @@ Layout example (chrome left, terminal right):
 
         tracing::info!(display = %display_id, command = %command, "Executing i3 command");
 
-        let (stdout, stderr, exit_code) = run_with_display(
-            display_id,
-            "i3-msg",
-            &[command],
-            30,
-        )
-        .await?;
+        let (stdout, stderr, exit_code) =
+            run_with_display(display_id, "i3-msg", &[command], 30).await?;
 
         if exit_code != 0 {
             return Err(anyhow::anyhow!("i3-msg failed: {} {}", stdout, stderr));
@@ -1142,7 +1158,10 @@ Layout example (chrome left, terminal right):
         let result = if stdout.trim().starts_with('[') || stdout.trim().starts_with('{') {
             stdout.trim().to_string()
         } else {
-            format!("{{\"success\": true, \"output\": \"{}\"}}", stdout.trim().replace('"', "\\\""))
+            format!(
+                "{{\"success\": true, \"output\": \"{}\"}}",
+                stdout.trim().replace('"', "\\\"")
+            )
         };
 
         Ok(result)

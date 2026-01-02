@@ -286,7 +286,11 @@ impl Tool for SearchFileIndex {
         }
 
         if matches.is_empty() {
-            Ok(format!("No matches for '{}' in {}", query, index_path.to_string_lossy()))
+            Ok(format!(
+                "No matches for '{}' in {}",
+                query,
+                index_path.to_string_lossy()
+            ))
         } else if matches.len() >= limit {
             Ok(format!(
                 "{}\n\n... (showing first {} matches)",
@@ -328,4 +332,3 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 
     true
 }
-

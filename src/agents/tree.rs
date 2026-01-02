@@ -9,12 +9,12 @@ use super::{Agent, AgentId, AgentType};
 pub type AgentRef = Arc<dyn Agent>;
 
 /// The agent tree structure.
-/// 
+///
 /// # Structure
 /// - Root agent at the top
 /// - Node agents as intermediate orchestrators
 /// - Leaf agents doing specialized work
-/// 
+///
 /// # Invariants
 /// - Exactly one root agent
 /// - All non-root agents have a parent
@@ -22,10 +22,10 @@ pub type AgentRef = Arc<dyn Agent>;
 pub struct AgentTree {
     /// All agents indexed by ID
     agents: HashMap<AgentId, AgentRef>,
-    
+
     /// Parent-child relationships
     children: HashMap<AgentId, Vec<AgentId>>,
-    
+
     /// Root agent ID
     root_id: Option<AgentId>,
 }
@@ -41,10 +41,10 @@ impl AgentTree {
     }
 
     /// Set the root agent.
-    /// 
+    ///
     /// # Preconditions
     /// - No root agent currently set
-    /// 
+    ///
     /// # Errors
     /// Returns error if root already exists.
     pub fn set_root(&mut self, agent: AgentRef) -> Result<(), TreeError> {
@@ -60,7 +60,7 @@ impl AgentTree {
     }
 
     /// Add a child agent to a parent.
-    /// 
+    ///
     /// # Preconditions
     /// - Parent exists in the tree
     /// - Child is not already in the tree
@@ -70,7 +70,7 @@ impl AgentTree {
         }
 
         let child_id = *child.id();
-        
+
         if self.agents.contains_key(&child_id) {
             return Err(TreeError::AgentAlreadyExists(child_id));
         }
@@ -78,7 +78,7 @@ impl AgentTree {
         self.agents.insert(child_id, child);
         self.children.insert(child_id, Vec::new());
         self.children.get_mut(&parent_id).unwrap().push(child_id);
-        
+
         Ok(())
     }
 
@@ -140,11 +140,10 @@ impl Default for AgentTree {
 pub enum TreeError {
     #[error("Root agent already exists")]
     RootAlreadyExists,
-    
+
     #[error("Parent agent not found: {0}")]
     ParentNotFound(AgentId),
-    
+
     #[error("Agent already exists in tree: {0}")]
     AgentAlreadyExists(AgentId),
 }
-

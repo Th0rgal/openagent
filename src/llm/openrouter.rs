@@ -103,7 +103,10 @@ impl OpenRouterClient {
 
         // Debug: Log raw response for Gemini models to see thought_signature format
         if request.model.contains("gemini") {
-            tracing::info!("Gemini raw response body (first 2000 chars): {}", &body[..body.len().min(2000)]);
+            tracing::info!(
+                "Gemini raw response body (first 2000 chars): {}",
+                &body[..body.len().min(2000)]
+            );
         }
 
         let parsed: OpenRouterResponse = serde_json::from_str(&body).map_err(|e| {
@@ -118,10 +121,12 @@ impl OpenRouterClient {
 
         // Get reasoning using the flexible parser that handles both string and array formats
         let reasoning = choice.message.get_reasoning();
-        
+
         // Log if we received reasoning blocks (for debugging thinking models)
         if let Some(ref reasoning_blocks) = reasoning {
-            let has_thought_sig = reasoning_blocks.iter().any(|r| r.thought_signature.is_some());
+            let has_thought_sig = reasoning_blocks
+                .iter()
+                .any(|r| r.thought_signature.is_some());
             tracing::debug!(
                 "Received {} reasoning blocks from model (has_thought_signature: {})",
                 reasoning_blocks.len(),
@@ -134,13 +139,16 @@ impl OpenRouterClient {
                 }
             }
         }
-        
+
         // Post-process: For Gemini 3, copy reasoning_details.data to matching tool call's thought_signature
         let mut tool_calls = choice.message.tool_calls;
         if let (Some(ref mut tcs), Some(ref reasoning_blocks)) = (&mut tool_calls, &reasoning) {
             for tc in tcs.iter_mut() {
                 // Find matching reasoning block by tool call id
-                if let Some(rb) = reasoning_blocks.iter().find(|r| r.id.as_ref() == Some(&tc.id)) {
+                if let Some(rb) = reasoning_blocks
+                    .iter()
+                    .find(|r| r.id.as_ref() == Some(&tc.id))
+                {
                     if let Some(ref data) = rb.data {
                         // Copy the encrypted data to thought_signature on both levels for compatibility
                         if tc.thought_signature.is_none() {
@@ -157,7 +165,7 @@ impl OpenRouterClient {
                 }
             }
         }
-        
+
         // Log tool call thought_signature status after post-processing
         if let Some(ref tool_calls) = tool_calls {
             for tc in tool_calls {
@@ -191,7 +199,7 @@ impl OpenRouterClient {
                         request.model
                     )));
                 }
-                
+
                 // Check for XML-style tool calls (some models)
                 if content.contains("<function_call>") || content.contains("<tool_call>") {
                     tracing::warn!(
@@ -397,7 +405,7 @@ impl OpenRouterMessage {
                 return Some(details.clone());
             }
         }
-        
+
         // Fall back to reasoning field - could be string or array
         if let Some(ref reasoning) = self.reasoning {
             match reasoning {
@@ -416,7 +424,7 @@ impl OpenRouterMessage {
                 serde_json::Value::Array(arr) => {
                     // Array of reasoning blocks - try to parse
                     if let Ok(blocks) = serde_json::from_value::<Vec<ReasoningContent>>(
-                        serde_json::Value::Array(arr.clone())
+                        serde_json::Value::Array(arr.clone()),
                     ) {
                         return Some(blocks);
                     }
@@ -424,7 +432,7 @@ impl OpenRouterMessage {
                 _ => {}
             }
         }
-        
+
         None
     }
 }

@@ -72,18 +72,22 @@ impl Tool for SearchMemory {
 
     async fn execute(&self, args: Value, _working_dir: &Path) -> anyhow::Result<String> {
         let args: SearchMemoryArgs = serde_json::from_value(args)?;
-        
+
         let memory_guard = self.memory.read().await;
         let memory = memory_guard.as_ref().ok_or_else(|| {
             anyhow::anyhow!("Memory system not available. No historical data to search.")
         })?;
-        
+
         let search_type = args.search_type.as_deref().unwrap_or("all");
         let mut results = Vec::new();
-        
+
         // Search chunks (general memory)
         if search_type == "all" || search_type == "tasks" {
-            match memory.retriever.search(&args.query, Some(args.limit), None, None).await {
+            match memory
+                .retriever
+                .search(&args.query, Some(args.limit), None, None)
+                .await
+            {
                 Ok(chunks) => {
                     for chunk in chunks {
                         results.push(format!(
@@ -98,16 +102,24 @@ impl Tool for SearchMemory {
                 }
             }
         }
-        
+
         // Search similar task outcomes
         if search_type == "all" || search_type == "tasks" {
-            match memory.retriever.find_similar_tasks(&args.query, args.limit).await {
+            match memory
+                .retriever
+                .find_similar_tasks(&args.query, args.limit)
+                .await
+            {
                 Ok(outcomes) => {
                     for outcome in outcomes {
-                        let status = if outcome.success { "✅ Success" } else { "❌ Failed" };
+                        let status = if outcome.success {
+                            "✅ Success"
+                        } else {
+                            "❌ Failed"
+                        };
                         let model = outcome.selected_model.as_deref().unwrap_or("unknown");
                         let iterations = outcome.iterations.unwrap_or(0);
-                        
+
                         results.push(format!(
                             "📊 **Similar Past Task**: {}\n   Status: {} | Model: {} | Iterations: {}",
                             truncate(&outcome.task_description, 200),
@@ -120,10 +132,14 @@ impl Tool for SearchMemory {
                 }
             }
         }
-        
+
         // Search user facts
         if search_type == "all" || search_type == "facts" {
-            match memory.supabase.search_user_facts(&args.query, args.limit).await {
+            match memory
+                .supabase
+                .search_user_facts(&args.query, args.limit)
+                .await
+            {
                 Ok(facts) => {
                     for fact in facts {
                         let category = fact.category.as_deref().unwrap_or("general");
@@ -138,10 +154,14 @@ impl Tool for SearchMemory {
                 }
             }
         }
-        
+
         // Search mission summaries
         if search_type == "all" || search_type == "missions" {
-            match memory.supabase.search_mission_summaries(&args.query, args.limit).await {
+            match memory
+                .supabase
+                .search_mission_summaries(&args.query, args.limit)
+                .await
+            {
                 Ok(summaries) => {
                     for summary in summaries {
                         let status = if summary.success { "✅" } else { "❌" };
@@ -158,7 +178,7 @@ impl Tool for SearchMemory {
                 }
             }
         }
-        
+
         if results.is_empty() {
             Ok("No relevant memories found for this query.".to_string())
         } else {
@@ -218,23 +238,26 @@ impl Tool for StoreFact {
 
     async fn execute(&self, args: Value, _working_dir: &Path) -> anyhow::Result<String> {
         let args: StoreFactArgs = serde_json::from_value(args)?;
-        
+
         let memory_guard = self.memory.read().await;
-        let memory = memory_guard.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Memory system not available. Cannot store facts.")
-        })?;
-        
+        let memory = memory_guard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Memory system not available. Cannot store facts."))?;
+
         // Generate embedding for the fact
         let embedding = memory.embedder.embed(&args.fact).await.ok();
-        
+
         // Store the fact
-        memory.supabase.insert_user_fact(
-            &args.fact,
-            args.category.as_deref(),
-            embedding.as_deref(),
-            None, // mission_id - we don't track this currently
-        ).await?;
-        
+        memory
+            .supabase
+            .insert_user_fact(
+                &args.fact,
+                args.category.as_deref(),
+                embedding.as_deref(),
+                None, // mission_id - we don't track this currently
+            )
+            .await?;
+
         let category = args.category.as_deref().unwrap_or("general");
         Ok(format!("✅ Stored fact [{}]: {}", category, args.fact))
     }

@@ -1,39 +1,26 @@
 //! Agents module - task execution system.
 //!
 //! # Agent Types
-//! - **SimpleAgent**: Unified agent that directly executes tasks
-//! - **TaskExecutor**: Core execution loop with tools (used by SimpleAgent)
-//!
-//! # Legacy Types (deprecated, will be removed)
-//! - **RootAgent**: Complex orchestrator (replaced by SimpleAgent)
-//! - **NodeAgent**: Recursive splitter (removed - lost context)
-//! - **ComplexityEstimator**: LLM-based estimation (unreliable)
-//! - **ModelSelector**: U-curve optimization (over-engineered)
-//! - **Verifier**: LLM self-verification (rubber-stamped everything)
+//! - **OpenCodeAgent**: Delegates task execution to an OpenCode server (Claude Max)
 //!
 //! # Design Principles
-//! - Direct execution without orchestration overhead
-//! - User controls task granularity (no auto-splitting)
-//! - Blocker detection via system prompt rules
-//! - Mission completion via complete_mission tool
+//! - OpenCode handles all task execution
+//! - Real-time event streaming (thinking, tool calls, results)
+//! - Integration with Claude Max subscriptions
 
 mod context;
 pub mod improvements;
-pub mod leaf;
 mod opencode;
-pub mod orchestrator; // TODO: Remove after migration
-mod simple;
 mod tree;
 pub mod tuning;
 mod types;
 
-pub use simple::SimpleAgent;
 pub use opencode::OpenCodeAgent;
 
 pub use context::AgentContext;
 pub use improvements::{
-    BlockerDetection, BlockerType, ExecutionThresholds, ToolCategory, ToolFailureTracker,
-    generate_pivot_prompt, generate_tool_failure_prompt, smart_truncate_result,
+    generate_pivot_prompt, generate_tool_failure_prompt, smart_truncate_result, BlockerDetection,
+    BlockerType, ExecutionThresholds, ToolCategory, ToolFailureTracker,
 };
 pub use tree::{AgentRef, AgentTree};
 pub use tuning::TuningParams;

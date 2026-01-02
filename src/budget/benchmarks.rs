@@ -51,10 +51,11 @@ impl TaskType {
     /// Infer task type from task description.
     pub fn infer_from_description(description: &str) -> Self {
         let desc_lower = description.to_lowercase();
-        
+
         // Helper: check if word exists as a whole word (not substring)
         let has_word = |word: &str| {
-            desc_lower.split(|c: char| !c.is_alphanumeric())
+            desc_lower
+                .split(|c: char| !c.is_alphanumeric())
                 .any(|w| w == word)
         };
 

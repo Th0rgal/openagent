@@ -632,6 +632,3 @@ Note: GitHub code search requires authentication. Set GH_TOKEN env var."
         Ok(format!("## Search results for '{}'\n\n{}", query, stdout))
     }
 }
-
-
-

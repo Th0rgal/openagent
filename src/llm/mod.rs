@@ -82,53 +82,46 @@ pub enum MessageContent {
 }
 
 /// Reasoning content block from "thinking" models (e.g., Gemini 3, Claude with extended thinking).
-/// 
+///
 /// These blocks contain the model's internal reasoning and must be preserved in subsequent
 /// requests when using tool calls. The `thought_signature` is an encrypted hash that allows
 /// the model to resume its chain of thought.
-/// 
+///
 /// For Gemini 3 via OpenRouter, the signature is in the `data` field of `reasoning_details`,
 /// which corresponds to a tool call `id`. We copy this to `thought_signature` on the matching
 /// tool call during post-processing.
-/// 
+///
 /// Reference: https://openrouter.ai/docs/use-cases/reasoning-tokens
 /// Reference: https://ai.google.dev/gemini-api/docs/thought-signatures
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReasoningContent {
     /// The reasoning/thinking content (may be redacted or empty for some models).
     /// OpenRouter uses both `content` and `text` fields depending on the model.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        alias = "text"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "text")]
     pub content: Option<String>,
-    
+
     /// Encrypted thought signature for resuming reasoning (required for Gemini 3).
     /// This MUST be preserved and sent back in subsequent requests for tool call continuations.
     /// Supports both snake_case and camelCase for compatibility with different API formats.
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        alias = "thoughtSignature"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "thoughtSignature")]
     pub thought_signature: Option<String>,
-    
+
     /// Type of reasoning block (e.g., "thinking", "reasoning.text", "reasoning.encrypted")
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub reasoning_type: Option<String>,
-    
+
     /// Format of the reasoning content (e.g., "unknown", "google-gemini-v1")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
-    
+
     /// Index of the reasoning block (for ordered reasoning)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<u32>,
-    
+
     /// ID matching a tool call (Gemini 3 format via OpenRouter)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    
+
     /// Encrypted reasoning data (Gemini 3 format) - this is the actual thought_signature
     /// that must be sent back with the matching tool call.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -141,7 +134,7 @@ impl ReasoningContent {
     pub fn needs_preservation(&self) -> bool {
         self.thought_signature.is_some() || self.data.is_some()
     }
-    
+
     /// Get the effective thought signature (from thought_signature or data field).
     pub fn get_thought_signature(&self) -> Option<&str> {
         self.thought_signature.as_deref().or(self.data.as_deref())
@@ -229,7 +222,7 @@ impl ChatMessage {
     }
 
     /// Attach reasoning content to this message (for thinking models).
-    /// 
+    ///
     /// This should be called when preserving an assistant message that included
     /// reasoning blocks, so they can be sent back in subsequent requests.
     pub fn with_reasoning(mut self, reasoning: Vec<ReasoningContent>) -> Self {
@@ -241,9 +234,9 @@ impl ChatMessage {
 
     /// Check if this message has reasoning content that needs preservation.
     pub fn has_reasoning(&self) -> bool {
-        self.reasoning.as_ref().map_or(false, |r| {
-            r.iter().any(|rc| rc.needs_preservation())
-        })
+        self.reasoning
+            .as_ref()
+            .map_or(false, |r| r.iter().any(|rc| rc.needs_preservation()))
     }
 }
 
@@ -256,10 +249,7 @@ pub struct ToolCall {
     pub function: FunctionCall,
     /// Thought signature for Gemini 3 models (may be at this level instead of function level).
     /// Supports both snake_case and camelCase for compatibility with different API formats.
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        alias = "thoughtSignature"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "thoughtSignature")]
     pub thought_signature: Option<String>,
 }
 
@@ -273,10 +263,7 @@ pub struct FunctionCall {
     /// Thought signature for Gemini 3 models. Must be preserved and sent back with tool results.
     /// When present, this allows Gemini to resume its chain of thought after a tool call.
     /// Supports both snake_case and camelCase for compatibility with different API formats.
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        alias = "thoughtSignature"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "thoughtSignature")]
     pub thought_signature: Option<String>,
 }
 

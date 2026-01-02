@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        State,
+    },
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -57,7 +60,8 @@ pub async fn console_ws(
     }
 
     // Select a stable subprotocol if client offered it.
-    ws.protocols(["openagent"]).on_upgrade(move |socket| handle_console(socket, state))
+    ws.protocols(["openagent"])
+        .on_upgrade(move |socket| handle_console(socket, state))
 }
 
 async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
@@ -66,7 +70,9 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
         Some(k) if !k.trim().is_empty() => k,
         _ => {
             let _ = socket
-                .send(Message::Text("Console SSH is not configured on the server.".into()))
+                .send(Message::Text(
+                    "Console SSH is not configured on the server.".into(),
+                ))
                 .await;
             let _ = socket.close().await;
             return;
@@ -225,6 +231,3 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
     let _ = reader_task.await;
     let _ = send_task.await;
 }
-
-
-

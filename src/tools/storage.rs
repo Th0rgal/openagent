@@ -14,11 +14,11 @@ use super::Tool;
 fn get_supabase_config() -> Option<(String, String)> {
     let url = std::env::var("SUPABASE_URL").ok()?;
     let key = std::env::var("SUPABASE_SERVICE_ROLE_KEY").ok()?;
-    
+
     if url.is_empty() || key.is_empty() {
         return None;
     }
-    
+
     Some((url, key))
 }
 
@@ -73,65 +73,67 @@ impl Tool for UploadImage {
             .ok_or_else(|| anyhow::anyhow!(
                 "Supabase not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables."
             ))?;
-        
+
         let path_arg = args["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'path' argument"))?;
-        
+
         let description = args["description"].as_str().unwrap_or("image");
-        
+
         // Resolve path (relative to working_dir or absolute)
         let file_path = if Path::new(path_arg).is_absolute() {
             std::path::PathBuf::from(path_arg)
         } else {
             working_dir.join(path_arg)
         };
-        
+
         // Verify file exists
         if !file_path.exists() {
             return Err(anyhow::anyhow!("File not found: {}", file_path.display()));
         }
-        
+
         // Read file content
         let content = std::fs::read(&file_path)?;
-        
+
         // Determine content type from extension
         let extension = file_path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("png")
             .to_lowercase();
-        
+
         let content_type = match extension.as_str() {
             "png" => "image/png",
             "jpg" | "jpeg" => "image/jpeg",
             "gif" => "image/gif",
             "webp" => "image/webp",
             "svg" => "image/svg+xml",
-            _ => return Err(anyhow::anyhow!(
-                "Unsupported image format: {}. Supported: png, jpg, jpeg, gif, webp, svg",
-                extension
-            )),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Unsupported image format: {}. Supported: png, jpg, jpeg, gif, webp, svg",
+                    extension
+                ))
+            }
         };
-        
+
         // Generate a unique path for the uploaded file
         let file_id = uuid::Uuid::new_v4();
         let upload_path = format!("{}.{}", file_id, extension);
-        
+
         tracing::info!(
             local_path = %file_path.display(),
             upload_path = %upload_path,
             size = content.len(),
             "Uploading image to Supabase Storage"
         );
-        
+
         // Upload to Supabase Storage
         let storage_url = format!(
             "{}/storage/v1/object/images/{}",
             supabase_url.trim_end_matches('/'),
             upload_path
         );
-        
+
         let client = reqwest::Client::new();
         let resp = client
             .post(&storage_url)
@@ -142,7 +144,7 @@ impl Tool for UploadImage {
             .body(content)
             .send()
             .await?;
-        
+
         let status = resp.status();
         if !status.is_success() {
             let error_text = resp.text().await.unwrap_or_default();
@@ -152,14 +154,14 @@ impl Tool for UploadImage {
                 error_text
             ));
         }
-        
+
         // Construct public URL
         let public_url = format!(
             "{}/storage/v1/object/public/images/{}",
             supabase_url.trim_end_matches('/'),
             upload_path
         );
-        
+
         // Return markdown-ready format
         Ok(json!({
             "success": true,
@@ -167,14 +169,15 @@ impl Tool for UploadImage {
             "markdown": format!("![{}]({})", description, public_url),
             "path": upload_path,
             "size_bytes": std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0)
-        }).to_string())
+        })
+        .to_string())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_content_type_detection() {
         let tool = UploadImage;

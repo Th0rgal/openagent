@@ -19,8 +19,8 @@ use axum::{
 use chrono::{Duration, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
 
-use super::types::{LoginRequest, LoginResponse};
 use super::routes::AppState;
+use super::types::{LoginRequest, LoginResponse};
 use crate::config::Config;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -103,12 +103,12 @@ pub async fn login(
         return Err((StatusCode::UNAUTHORIZED, "Invalid password".to_string()));
     }
 
-    let secret = state
-        .config
-        .auth
-        .jwt_secret
-        .as_deref()
-        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_SECRET not configured".to_string()))?;
+    let secret = state.config.auth.jwt_secret.as_deref().ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "JWT_SECRET not configured".to_string(),
+        )
+    })?;
 
     let (token, exp) = issue_jwt(secret, state.config.auth.jwt_ttl_days)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -130,7 +130,11 @@ pub async fn require_auth(
     let secret = match state.config.auth.jwt_secret.as_deref() {
         Some(s) => s,
         None => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "JWT_SECRET not configured").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "JWT_SECRET not configured",
+            )
+                .into_response();
         }
     };
 
@@ -154,5 +158,3 @@ pub async fn require_auth(
         Err(_) => (StatusCode::UNAUTHORIZED, "Invalid or expired token").into_response(),
     }
 }
-
-

@@ -38,7 +38,7 @@ pub struct TaskAnalysis {
 
     /// Actual usage aggregated over all LLM calls during execution
     pub actual_usage: Option<TokenUsageSummary>,
-    
+
     /// Last output from executor (for verification)
     pub last_output: Option<String>,
 }
@@ -81,7 +81,7 @@ impl TokenUsageSummary {
 }
 
 /// Unique identifier for a task.
-/// 
+///
 /// # Properties
 /// - Globally unique within an execution context
 /// - Immutable once created
@@ -90,7 +90,7 @@ pub struct TaskId(Uuid);
 
 impl TaskId {
     /// Create a new unique task ID.
-    /// 
+    ///
     /// # Postcondition
     /// Returns a fresh ID that has never been used before in this process.
     pub fn new() -> Self {
@@ -116,7 +116,7 @@ impl std::fmt::Display for TaskId {
 }
 
 /// Status of a task in its lifecycle.
-/// 
+///
 /// # State Machine
 /// ```text
 /// Pending -> Running -> Completed
@@ -139,18 +139,21 @@ pub enum TaskStatus {
 
 impl TaskStatus {
     /// Check if the task is in a terminal state.
-    /// 
+    ///
     /// # Returns
     /// `true` if the task is Completed, Failed, or Cancelled.
-    /// 
+    ///
     /// # Property
     /// `is_terminal() => !can_transition()`
     pub fn is_terminal(&self) -> bool {
-        matches!(self, TaskStatus::Completed | TaskStatus::Failed { .. } | TaskStatus::Cancelled)
+        matches!(
+            self,
+            TaskStatus::Completed | TaskStatus::Failed { .. } | TaskStatus::Cancelled
+        )
     }
 
     /// Check if the task is still active (can make progress).
-    /// 
+    ///
     /// # Returns
     /// `true` if the task is Pending or Running.
     pub fn is_active(&self) -> bool {
@@ -159,11 +162,11 @@ impl TaskStatus {
 }
 
 /// A task to be executed by an agent.
-/// 
+///
 /// # Invariants
 /// - `budget.allocated_cents <= budget.total_cents`
 /// - If `parent_id.is_some()`, this is a subtask
-/// 
+///
 /// # Design for Provability
 /// - All fields are immutable after construction (except status via explicit transitions)
 /// - Budget constraints are checked at construction time
@@ -171,37 +174,37 @@ impl TaskStatus {
 pub struct Task {
     /// Unique identifier for this task
     id: TaskId,
-    
+
     /// Human-readable description of what to accomplish
     description: String,
-    
+
     /// How to verify the task was completed correctly
     verification: VerificationCriteria,
-    
+
     /// Budget constraints for this task
     budget: Budget,
-    
+
     /// Analysis and telemetry (optional)
     analysis: TaskAnalysis,
 
     /// Parent task ID if this is a subtask
     parent_id: Option<TaskId>,
-    
+
     /// Current status
     status: TaskStatus,
 }
 
 impl Task {
     /// Create a new task with the given parameters.
-    /// 
+    ///
     /// # Preconditions
     /// - `budget.allocated_cents <= budget.total_cents`
     /// - `description` is non-empty
-    /// 
+    ///
     /// # Postconditions
     /// - Returns a task with `status == Pending`
     /// - `task.id` is a fresh unique identifier
-    /// 
+    ///
     /// # Errors
     /// Returns `Err` if preconditions are violated.
     pub fn new(
@@ -212,9 +215,9 @@ impl Task {
         if description.is_empty() {
             return Err(TaskError::EmptyDescription);
         }
-        
+
         // Budget invariant is enforced by Budget::new()
-        
+
         Ok(Self {
             id: TaskId::new(),
             description,
@@ -227,7 +230,7 @@ impl Task {
     }
 
     /// Create a subtask with a parent reference.
-    /// 
+    ///
     /// # Preconditions
     /// - Same as `new()`
     /// - `parent_id` refers to an existing task
@@ -276,7 +279,7 @@ impl Task {
     pub fn last_output(&self) -> Option<&str> {
         self.analysis.last_output.as_deref()
     }
-    
+
     /// Set the last executor output.
     pub fn set_last_output(&mut self, output: String) {
         self.analysis.last_output = Some(output);
@@ -298,10 +301,10 @@ impl Task {
     // State transitions - explicit and validated
 
     /// Transition the task to Running state.
-    /// 
+    ///
     /// # Precondition
     /// `self.status == Pending`
-    /// 
+    ///
     /// # Errors
     /// Returns `Err` if the task is not in Pending state.
     pub fn start(&mut self) -> Result<(), TaskError> {
@@ -318,7 +321,7 @@ impl Task {
     }
 
     /// Transition the task to Completed state.
-    /// 
+    ///
     /// # Precondition
     /// `self.status == Running`
     pub fn complete(&mut self) -> Result<(), TaskError> {
@@ -335,7 +338,7 @@ impl Task {
     }
 
     /// Transition the task to Failed state.
-    /// 
+    ///
     /// # Precondition
     /// `self.status == Running`
     pub fn fail(&mut self, reason: String) -> Result<(), TaskError> {
@@ -352,7 +355,7 @@ impl Task {
     }
 
     /// Transition the task to Cancelled state.
-    /// 
+    ///
     /// # Precondition
     /// `self.status.is_active()`
     pub fn cancel(&mut self) -> Result<(), TaskError> {
@@ -373,11 +376,10 @@ impl Task {
 pub enum TaskError {
     #[error("Task description cannot be empty")]
     EmptyDescription,
-    
+
     #[error("Invalid state transition from {from} to {to}")]
     InvalidTransition { from: String, to: String },
-    
+
     #[error("Budget error: {0}")]
     BudgetError(String),
 }
-

@@ -128,10 +128,7 @@ impl ToolCategory {
             }
 
             // Network/API calls
-            name if name.contains("http")
-                || name.contains("fetch")
-                || name.contains("curl") =>
-            {
+            name if name.contains("http") || name.contains("fetch") || name.contains("curl") => {
                 Self::Network
             }
 
@@ -354,9 +351,7 @@ impl BlockerDetection {
             return Self {
                 is_blocker: true,
                 blocker_type: Some(mismatch),
-                message: Some(
-                    "Project type doesn't match the requested analysis type".to_string(),
-                ),
+                message: Some("Project type doesn't match the requested analysis type".to_string()),
             };
         }
 
@@ -386,7 +381,9 @@ impl BlockerDetection {
                 blocker_type: Some(BlockerType::RateLimited {
                     service: "external API".to_string(),
                 }),
-                message: Some("Rate limited - wait and retry or try alternative approach".to_string()),
+                message: Some(
+                    "Rate limited - wait and retry or try alternative approach".to_string(),
+                ),
             };
         }
 
@@ -487,7 +484,10 @@ impl ToolFailureTracker {
 
     /// Get failure count for a category.
     pub fn failure_count(&self, category: &ToolCategory) -> u32 {
-        self.failures.get(category).map(|v| v.len() as u32).unwrap_or(0)
+        self.failures
+            .get(category)
+            .map(|v| v.len() as u32)
+            .unwrap_or(0)
     }
 
     /// Check if a category has exceeded the failure threshold.
@@ -505,11 +505,15 @@ impl ToolFailureTracker {
         }
 
         // Add cross-category suggestions based on what hasn't been tried
-        if !self.failures.contains_key(&ToolCategory::Browser) && matches!(category, ToolCategory::Network) {
+        if !self.failures.contains_key(&ToolCategory::Browser)
+            && matches!(category, ToolCategory::Network)
+        {
             suggestions.push("Try browser automation tools (browser_navigate, browser_get_content) for dynamic content".to_string());
         }
 
-        if !self.failures.contains_key(&ToolCategory::Search) && matches!(category, ToolCategory::FileOps) {
+        if !self.failures.contains_key(&ToolCategory::Search)
+            && matches!(category, ToolCategory::FileOps)
+        {
             suggestions.push("Try grep_search to find the file you're looking for".to_string());
         }
 

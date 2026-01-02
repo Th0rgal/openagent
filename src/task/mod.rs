@@ -5,13 +5,14 @@
 //! - Invariants are documented and enforced in constructors
 //! - Pure functions are separated from IO operations
 
-pub mod task;
-mod subtask;
-mod verification;
 pub mod deliverables;
+mod subtask;
+pub mod task;
+mod verification;
 
-pub use task::{Task, TaskId, TaskStatus, TaskError, TaskAnalysis, TokenUsageSummary};
+pub use deliverables::{extract_deliverables, Deliverable, DeliverableSet};
 pub use subtask::{Subtask, SubtaskPlan, SubtaskPlanError};
-pub use verification::{VerificationCriteria, VerificationResult, VerificationMethod, ProgrammaticCheck};
-pub use deliverables::{Deliverable, DeliverableSet, extract_deliverables};
-
+pub use task::{Task, TaskAnalysis, TaskError, TaskId, TaskStatus, TokenUsageSummary};
+pub use verification::{
+    ProgrammaticCheck, VerificationCriteria, VerificationMethod, VerificationResult,
+};

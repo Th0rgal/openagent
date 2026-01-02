@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 use crate::agents::{AgentContext, AgentRef, TerminalReason};
 use crate::budget::{Budget, ModelPricing};
-use crate::config::{AgentBackend, Config};
+use crate::config::Config;
 use crate::llm::OpenRouterClient;
 use crate::mcp::McpRegistry;
 use crate::memory::{ContextBuilder, MemorySystem, MissionMessage};
@@ -459,7 +459,11 @@ async fn set_and_emit_status(
         s.state = state;
         s.queue_len = queue_len;
     }
-    let _ = events.send(AgentEvent::Status { state, queue_len, mission_id: None });
+    let _ = events.send(AgentEvent::Status {
+        state,
+        queue_len,
+        mission_id: None,
+    });
 }
 
 /// Enqueue a user message for the global control session.
@@ -585,7 +589,14 @@ pub async fn list_missions(
                 history,
                 created_at: m.created_at.clone(),
                 updated_at: m.updated_at.clone(),
-                interrupted_at: if matches!(status, MissionStatus::Interrupted | MissionStatus::Blocked) { Some(m.updated_at) } else { None },
+                interrupted_at: if matches!(
+                    status,
+                    MissionStatus::Interrupted | MissionStatus::Blocked
+                ) {
+                    Some(m.updated_at)
+                } else {
+                    None
+                },
                 resumable: matches!(status, MissionStatus::Interrupted | MissionStatus::Blocked),
             }
         })
@@ -632,7 +643,11 @@ pub async fn get_mission(
         history,
         created_at: db_mission.created_at.clone(),
         updated_at: db_mission.updated_at.clone(),
-        interrupted_at: if matches!(status, MissionStatus::Interrupted | MissionStatus::Blocked) { Some(db_mission.updated_at) } else { None },
+        interrupted_at: if matches!(status, MissionStatus::Interrupted | MissionStatus::Blocked) {
+            Some(db_mission.updated_at)
+        } else {
+            None
+        },
         resumable: matches!(status, MissionStatus::Interrupted | MissionStatus::Blocked),
     }))
 }
@@ -786,8 +801,15 @@ pub async fn get_current_mission(
                         history,
                         created_at: m.created_at.clone(),
                         updated_at: m.updated_at.clone(),
-                        interrupted_at: if status == MissionStatus::Interrupted { Some(m.updated_at) } else { None },
-                        resumable: matches!(status, MissionStatus::Interrupted | MissionStatus::Blocked),
+                        interrupted_at: if status == MissionStatus::Interrupted {
+                            Some(m.updated_at)
+                        } else {
+                            None
+                        },
+                        resumable: matches!(
+                            status,
+                            MissionStatus::Interrupted | MissionStatus::Blocked
+                        ),
                     })))
                 }
                 None => Ok(Json(None)),
@@ -818,7 +840,7 @@ pub async fn get_mission_tree(
         let tree = state.control.current_tree.read().await.clone();
         return Ok(Json(tree));
     }
-    
+
     // Otherwise, fetch from database
     let mem = state.memory.as_ref().ok_or_else(|| {
         (
@@ -826,18 +848,18 @@ pub async fn get_mission_tree(
             "Memory not configured".to_string(),
         )
     })?;
-    
+
     let db_mission = mem
         .supabase
         .get_mission(mission_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     match db_mission {
         Some(m) => {
             // Parse final_tree from JSON if it exists
-            let tree: Option<AgentTreeNode> = m.final_tree
-                .and_then(|v| serde_json::from_value(v).ok());
+            let tree: Option<AgentTreeNode> =
+                m.final_tree.and_then(|v| serde_json::from_value(v).ok());
             Ok(Json(tree))
         }
         None => Err((StatusCode::NOT_FOUND, "Mission not found".to_string())),
@@ -857,7 +879,7 @@ pub async fn list_running_missions(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<super::mission_runner::RunningMissionInfo>>, (StatusCode, String)> {
     let (tx, rx) = oneshot::channel();
-    
+
     state
         .control
         .cmd_tx
@@ -869,14 +891,14 @@ pub async fn list_running_missions(
                 "control session unavailable".to_string(),
             )
         })?;
-    
+
     let running = rx.await.map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "Failed to receive response".to_string(),
         )
     })?;
-    
+
     Ok(Json(running))
 }
 
@@ -896,7 +918,7 @@ pub async fn start_mission_parallel(
     Json(req): Json<StartParallelRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let (tx, rx) = oneshot::channel();
-    
+
     state
         .control
         .cmd_tx
@@ -913,7 +935,7 @@ pub async fn start_mission_parallel(
                 "control session unavailable".to_string(),
             )
         })?;
-    
+
     rx.await
         .map_err(|_| {
             (
@@ -931,7 +953,7 @@ pub async fn cancel_mission(
     Path(mission_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let (tx, rx) = oneshot::channel();
-    
+
     state
         .control
         .cmd_tx
@@ -946,7 +968,7 @@ pub async fn cancel_mission(
                 "control session unavailable".to_string(),
             )
         })?;
-    
+
     rx.await
         .map_err(|_| {
             (
@@ -975,7 +997,7 @@ pub async fn resume_mission(
 ) -> Result<Json<Mission>, (StatusCode, String)> {
     let clean_workspace = body.map(|b| b.clean_workspace).unwrap_or(false);
     let (tx, rx) = oneshot::channel();
-    
+
     state
         .control
         .cmd_tx
@@ -991,7 +1013,7 @@ pub async fn resume_mission(
                 "control session unavailable".to_string(),
             )
         })?;
-    
+
     rx.await
         .map_err(|_| {
             (
@@ -1280,15 +1302,15 @@ async fn stale_mission_cleanup_loop(
 ) {
     // Check every hour
     let check_interval = std::time::Duration::from_secs(3600);
-    
+
     tracing::info!(
         "Stale mission cleanup task started: closing missions inactive for {} hours",
         stale_hours
     );
-    
+
     loop {
         tokio::time::sleep(check_interval).await;
-        
+
         match memory.supabase.get_stale_active_missions(stale_hours).await {
             Ok(stale_missions) => {
                 for mission in stale_missions {
@@ -1298,8 +1320,12 @@ async fn stale_mission_cleanup_loop(
                         mission.title.as_deref().unwrap_or("Untitled"),
                         mission.updated_at
                     );
-                    
-                    if let Err(e) = memory.supabase.update_mission_status(mission.id, "completed").await {
+
+                    if let Err(e) = memory
+                        .supabase
+                        .update_mission_status(mission.id, "completed")
+                        .await
+                    {
                         tracing::warn!("Failed to auto-close stale mission {}: {}", mission.id, e);
                     } else {
                         // Notify listeners
@@ -1351,8 +1377,10 @@ async fn control_actor_loop(
     let mut running_mission_id: Option<Uuid> = None;
 
     // Parallel mission runners - each runs independently
-    let mut parallel_runners: std::collections::HashMap<Uuid, super::mission_runner::MissionRunner> =
-        std::collections::HashMap::new();
+    let mut parallel_runners: std::collections::HashMap<
+        Uuid,
+        super::mission_runner::MissionRunner,
+    > = std::collections::HashMap::new();
 
     // Helper to extract file paths from text (for mission summaries)
     fn extract_file_paths(text: &str) -> Vec<String> {
@@ -1443,13 +1471,21 @@ async fn control_actor_loop(
             history,
             created_at: db_mission.created_at.clone(),
             updated_at: db_mission.updated_at.clone(),
-            interrupted_at: if matches!(status, MissionStatus::Interrupted | MissionStatus::Blocked) { Some(db_mission.updated_at) } else { None },
+            interrupted_at: if matches!(status, MissionStatus::Interrupted | MissionStatus::Blocked)
+            {
+                Some(db_mission.updated_at)
+            } else {
+                None
+            },
             resumable: matches!(status, MissionStatus::Interrupted | MissionStatus::Blocked),
         })
     }
 
     // Helper to create a new mission
-    async fn create_new_mission(memory: &Option<MemorySystem>, model_override: Option<&str>) -> Result<Mission, String> {
+    async fn create_new_mission(
+        memory: &Option<MemorySystem>,
+        model_override: Option<&str>,
+    ) -> Result<Mission, String> {
         create_new_mission_with_title(memory, None, model_override).await
     }
 
@@ -1487,63 +1523,78 @@ async fn control_actor_loop(
         clean_workspace: bool,
     ) -> Result<(Mission, String), String> {
         let mission = load_mission_from_db(memory, mission_id).await?;
-        
+
         // Check if mission can be resumed (interrupted or blocked)
-        if !matches!(mission.status, MissionStatus::Interrupted | MissionStatus::Blocked) {
+        if !matches!(
+            mission.status,
+            MissionStatus::Interrupted | MissionStatus::Blocked
+        ) {
             return Err(format!(
                 "Mission {} cannot be resumed (status: {})",
                 mission_id, mission.status
             ));
         }
-        
+
         // Clean workspace if requested
         let short_id = &mission_id.to_string()[..8];
-        let mission_dir = config.working_dir.join("work").join(format!("mission-{}", short_id));
-        
+        let mission_dir = config
+            .working_dir
+            .join("work")
+            .join(format!("mission-{}", short_id));
+
         if clean_workspace && mission_dir.exists() {
-            tracing::info!("Cleaning workspace for mission {} at {:?}", mission_id, mission_dir);
+            tracing::info!(
+                "Cleaning workspace for mission {} at {:?}",
+                mission_id,
+                mission_dir
+            );
             if let Err(e) = std::fs::remove_dir_all(&mission_dir) {
                 tracing::warn!("Failed to clean workspace: {}", e);
             }
             // Recreate the directory
             let _ = std::fs::create_dir_all(&mission_dir);
         }
-        
+
         // Build resume context
         let mut resume_parts = Vec::new();
-        
+
         // Add resumption notice based on status
         let resume_reason = match mission.status {
             MissionStatus::Blocked => "reached its iteration limit",
             _ => "was interrupted",
         };
-        
+
         let workspace_note = if clean_workspace {
             " (workspace cleaned)"
         } else {
             ""
         };
-        
+
         if let Some(interrupted_at) = &mission.interrupted_at {
             resume_parts.push(format!(
                 "**MISSION RESUMED**{}\nThis mission {} at {} and is now being continued.",
                 workspace_note, resume_reason, interrupted_at
             ));
         } else {
-            resume_parts.push(format!("**MISSION RESUMED**{}\nThis mission {} and is now being continued.", workspace_note, resume_reason));
+            resume_parts.push(format!(
+                "**MISSION RESUMED**{}\nThis mission {} and is now being continued.",
+                workspace_note, resume_reason
+            ));
         }
-        
+
         // Add history summary
         if !mission.history.is_empty() {
             resume_parts.push("\n## Previous Conversation Summary".to_string());
-            
+
             // Include the original user request
             if let Some(first_user) = mission.history.iter().find(|h| h.role == "user") {
                 resume_parts.push(format!("\n**Original Request:**\n{}", first_user.content));
             }
-            
+
             // Include last assistant response (what was being worked on)
-            if let Some(last_assistant) = mission.history.iter().rev().find(|h| h.role == "assistant") {
+            if let Some(last_assistant) =
+                mission.history.iter().rev().find(|h| h.role == "assistant")
+            {
                 let truncated = if last_assistant.content.len() > 2000 {
                     format!("{}...", &last_assistant.content[..2000])
                 } else {
@@ -1552,11 +1603,11 @@ async fn control_actor_loop(
                 resume_parts.push(format!("\n**Last Progress:**\n{}", truncated));
             }
         }
-        
+
         // Scan work directory for artifacts (use mission_dir defined earlier)
         if mission_dir.exists() {
             resume_parts.push("\n## Work Directory Contents".to_string());
-            
+
             let mut files_found = Vec::new();
             if let Ok(entries) = std::fs::read_dir(&mission_dir) {
                 for entry in entries.filter_map(|e| e.ok()) {
@@ -1564,7 +1615,11 @@ async fn control_actor_loop(
                     if path.is_dir() {
                         let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
                         // Skip common non-artifact directories
-                        if dir_name == "venv" || dir_name == ".venv" || dir_name == ".open_agent" || dir_name == "temp" {
+                        if dir_name == "venv"
+                            || dir_name == ".venv"
+                            || dir_name == ".open_agent"
+                            || dir_name == "temp"
+                        {
                             continue;
                         }
                         // List files in subdirectory
@@ -1572,7 +1627,8 @@ async fn control_actor_loop(
                             for subentry in subentries.filter_map(|e| e.ok()) {
                                 let subpath = subentry.path();
                                 if subpath.is_file() {
-                                    let rel_path = subpath.strip_prefix(&mission_dir)
+                                    let rel_path = subpath
+                                        .strip_prefix(&mission_dir)
                                         .map(|p| p.display().to_string())
                                         .unwrap_or_else(|_| subpath.display().to_string());
                                     files_found.push(rel_path);
@@ -1580,23 +1636,29 @@ async fn control_actor_loop(
                             }
                         }
                     } else if path.is_file() {
-                        let rel_path = path.strip_prefix(&mission_dir)
+                        let rel_path = path
+                            .strip_prefix(&mission_dir)
                             .map(|p| p.display().to_string())
                             .unwrap_or_else(|_| path.display().to_string());
                         files_found.push(rel_path);
                     }
                 }
             }
-            
+
             if !files_found.is_empty() {
-                resume_parts.push(format!("Files created:\n{}", 
-                    files_found.iter().map(|f| format!("- {}", f)).collect::<Vec<_>>().join("\n")
+                resume_parts.push(format!(
+                    "Files created:\n{}",
+                    files_found
+                        .iter()
+                        .map(|f| format!("- {}", f))
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 ));
             } else {
                 resume_parts.push("No output files created yet.".to_string());
             }
         }
-        
+
         // Add instructions
         resume_parts.push("\n## Instructions".to_string());
         resume_parts.push(
@@ -1604,9 +1666,9 @@ async fn control_actor_loop(
             then continue working towards completing the original request. Do not repeat work that was already done."
                 .to_string()
         );
-        
+
         let resume_prompt = resume_parts.join("\n");
-        
+
         Ok((mission, resume_prompt))
     }
 
@@ -1766,7 +1828,7 @@ async fn control_actor_loop(
                                     }
                                 }
                             }
-                            
+
                             let result = mem.supabase.update_mission_status(id, &new_status.to_string()).await
                                 .map_err(|e| e.to_string());
                             if result.is_ok() {
@@ -1809,7 +1871,7 @@ async fn control_actor_loop(
                                     continue;
                                 }
                             };
-                            
+
                             // Request model takes priority over DB model
                             let model_override = model.or(db_model);
 
@@ -1818,10 +1880,10 @@ async fn control_actor_loop(
                                 mission_id,
                                 model_override.clone(),
                             );
-                            
+
                             // Queue the initial message
                             runner.queue_message(Uuid::new_v4(), content, model_override);
-                            
+
                             // Start execution
                             let started = runner.start_next(
                                 config.clone(),
@@ -1837,7 +1899,7 @@ async fn control_actor_loop(
                                 mission_cmd_tx.clone(),
                                 Arc::new(RwLock::new(Some(mission_id))), // Each runner tracks its own mission
                             );
-                            
+
                             if started {
                                 tracing::info!("Mission {} started in parallel (model: {:?})", mission_id, runner.model_override);
                                 parallel_runners.insert(mission_id, runner);
@@ -1865,7 +1927,7 @@ async fn control_actor_loop(
                                 // Cancel the current execution
                                 if let Some(token) = &running_cancel {
                                     token.cancel();
-                                    let _ = events_tx.send(AgentEvent::Error { 
+                                    let _ = events_tx.send(AgentEvent::Error {
                                         message: format!("Mission {} cancelled", mission_id),
                                         mission_id: Some(mission_id),
                                     });
@@ -1911,7 +1973,7 @@ async fn control_actor_loop(
                             Ok((mission, resume_prompt)) => {
                                 // First persist current mission history (if any)
                                 persist_mission_history(&memory, &current_mission, &history).await;
-                                
+
                                 // Load the mission's history into current state
                                 history = mission.history.iter()
                                     .map(|e| (e.role.clone(), e.content.clone()))
@@ -1922,11 +1984,11 @@ async fn control_actor_loop(
                                 if let Some(mem) = &memory {
                                     let _ = mem.supabase.update_mission_status(mission_id, "active").await;
                                 }
-                                
+
                                 // Queue the resume prompt as a message
                                 let msg_id = Uuid::new_v4();
                                 queue.push_back((msg_id, resume_prompt, mission.model_override.clone()));
-                                
+
                                 // Start execution if not already running
                                 if running.is_none() {
                                     if let Some((mid, msg, model_override)) = queue.pop_front() {
@@ -2026,7 +2088,7 @@ async fn control_actor_loop(
                                 }
                             }
                         }
-                        
+
                         // Handle parallel missions
                         for (mission_id, runner) in parallel_runners.iter_mut() {
                             // Persist history for parallel mission
@@ -2038,16 +2100,16 @@ async fn control_actor_loop(
                                     })
                                     .collect();
                                 let _ = mem.supabase.update_mission_history(*mission_id, &messages).await;
-                                
+
                                 if let Ok(()) = mem.supabase.update_mission_status(*mission_id, "interrupted").await {
                                     interrupted_ids.push(*mission_id);
                                     tracing::info!("Marked parallel mission {} as interrupted", mission_id);
                                 }
                             }
-                            
+
                             runner.cancel();
                         }
-                        
+
                         let _ = respond.send(interrupted_ids);
                     }
                 }
@@ -2078,7 +2140,7 @@ async fn control_actor_loop(
                                             }
                                         }
                                     }
-                                    
+
                                     if let Ok(()) = mem.supabase.update_mission_status(id, &new_status.to_string()).await {
                                         // Generate and store mission summary
                                         if let Some(ref summary_text) = summary {
@@ -2208,7 +2270,7 @@ async fn control_actor_loop(
                                             .ok()
                                             .flatten()
                                             .map(|m| m.status);
-                                        
+
                                         if current_status.as_deref() == Some("active") {
                                             // Determine status based on terminal reason
                                             let (status, new_status) = match agent_result.terminal_reason {
@@ -2226,7 +2288,7 @@ async fn control_actor_loop(
                                                     ("failed", MissionStatus::Failed)
                                                 }
                                             };
-                                            
+
                                             tracing::info!(
                                                 "Auto-completing mission {} with status '{}' (terminal_reason: {:?})",
                                                 mission_id, status, agent_result.terminal_reason
@@ -2238,7 +2300,7 @@ async fn control_actor_loop(
                                                 let _ = events_tx.send(AgentEvent::MissionStatusChanged {
                                                     mission_id,
                                                     status: new_status,
-                                                    summary: Some(format!("Auto-completed: {}", 
+                                                    summary: Some(format!("Auto-completed: {}",
                                                         agent_result.output.chars().take(100).collect::<String>())),
                                                 });
                                             }
@@ -2322,7 +2384,7 @@ async fn control_actor_loop(
             // Poll parallel runners for completion
             _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
                 let mut completed_missions = Vec::new();
-                
+
                 for (mission_id, runner) in parallel_runners.iter_mut() {
                     if runner.check_finished() {
                         if let Some((msg_id, user_msg, result)) = runner.poll_completion().await {
@@ -2330,7 +2392,7 @@ async fn control_actor_loop(
                                 "Parallel mission {} completed (success: {}, cost: {} cents)",
                                 mission_id, result.success, result.cost_cents
                             );
-                            
+
                             // Emit completion event with mission_id
                             let _ = events_tx.send(AgentEvent::AssistantMessage {
                                 id: msg_id,
@@ -2340,7 +2402,7 @@ async fn control_actor_loop(
                                 model: result.model_used.clone(),
                                 mission_id: Some(*mission_id),
                             });
-                            
+
                             // Persist history for this mission
                             if let Some(mem) = &memory {
                                 let messages: Vec<MissionMessage> = runner.history.iter()
@@ -2353,7 +2415,7 @@ async fn control_actor_loop(
                                     tracing::warn!("Failed to persist parallel mission history: {}", e);
                                 }
                             }
-                            
+
                             // If runner has no more queued messages, mark for cleanup
                             if runner.queue.is_empty() && !runner.is_running() {
                                 completed_missions.push(*mission_id);
@@ -2361,7 +2423,7 @@ async fn control_actor_loop(
                         }
                     }
                 }
-                
+
                 // Remove completed runners
                 for mid in completed_missions {
                     parallel_runners.remove(&mid);
@@ -2401,12 +2463,7 @@ async fn run_single_control_turn(
     convo.push_str(&history_context);
     convo.push_str("User:\n");
     convo.push_str(&user_message);
-    let instructions = if config.agent_backend == AgentBackend::OpenCode {
-        "\n\nInstructions:\n- Continue the conversation helpfully.\n- Use available tools as needed.\n- For large data processing tasks (>10KB), prefer executing scripts rather than inline processing.\n"
-    } else {
-        "\n\nInstructions:\n- Continue the conversation helpfully.\n- You may use tools to gather information or make changes.\n- When appropriate, use Tool UI tools (ui_*) for structured output or to ask for user selections.\n- For large data processing tasks (>10KB), use run_command to execute Python scripts rather than processing inline.\n- When you have fully completed the user's goal or determined it cannot be completed, use the complete_mission tool to mark the mission status.\n"
-    };
-    convo.push_str(instructions);
+    convo.push_str("\n\nInstructions:\n- Continue the conversation helpfully.\n- Use available tools as needed.\n- For large data processing tasks (>10KB), prefer executing scripts rather than inline processing.\n");
 
     let budget = Budget::new(1000);
     let verification = VerificationCriteria::None;

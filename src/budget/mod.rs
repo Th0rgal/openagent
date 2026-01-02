@@ -11,8 +11,8 @@
 //! - Learned: model selection and budget estimation from historical outcomes
 
 mod allocation;
-mod budget;
 pub mod benchmarks;
+mod budget;
 pub mod compatibility;
 pub mod learned;
 mod pricing;
@@ -32,7 +32,4 @@ pub use learned::{
 };
 pub use pricing::{ModelPricing, PricingInfo};
 pub use resolver::{load_resolver, ModelFamily, ModelResolver, ResolvedModel, SharedModelResolver};
-pub use retry::{
-    ExecutionSignals, FailureAnalysis, FailureMode, RetryConfig, RetryRecommendation,
-};
-
+pub use retry::{ExecutionSignals, FailureAnalysis, FailureMode, RetryConfig, RetryRecommendation};

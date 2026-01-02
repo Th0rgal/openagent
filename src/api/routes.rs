@@ -21,9 +21,9 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
-use crate::agents::{AgentContext, AgentRef, OpenCodeAgent, SimpleAgent};
+use crate::agents::{AgentContext, AgentRef, OpenCodeAgent};
 use crate::budget::ModelPricing;
-use crate::config::{AgentBackend, Config};
+use crate::config::Config;
 use crate::llm::OpenRouterClient;
 use crate::mcp::McpRegistry;
 use crate::memory::{self, MemorySystem};
@@ -56,10 +56,8 @@ pub struct AppState {
 
 /// Start the HTTP server.
 pub async fn serve(config: Config) -> anyhow::Result<()> {
-    let root_agent: AgentRef = match config.agent_backend {
-        AgentBackend::OpenCode => Arc::new(OpenCodeAgent::new(config.clone())),
-        AgentBackend::Local => Arc::new(SimpleAgent::new()),
-    };
+    // Always use OpenCode backend
+    let root_agent: AgentRef = Arc::new(OpenCodeAgent::new(config.clone()));
 
     // Initialize memory system (optional - needs Supabase config)
     let memory = memory::init_memory(&config.memory, &config.api_key).await;
@@ -76,13 +74,19 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
 
     // Load benchmark registry for task-aware model selection
     let benchmarks = crate::budget::load_benchmarks(&config.working_dir.to_string_lossy());
-    
+
     // Load model resolver for auto-upgrading outdated model names
     let resolver = crate::budget::load_resolver(&config.working_dir.to_string_lossy());
 
     // Spawn the single global control session actor.
-    let control_state =
-        control::spawn_control_session(config.clone(), Arc::clone(&root_agent), memory.clone(), Arc::clone(&benchmarks), Arc::clone(&resolver), Arc::clone(&mcp));
+    let control_state = control::spawn_control_session(
+        config.clone(),
+        Arc::clone(&root_agent),
+        memory.clone(),
+        Arc::clone(&benchmarks),
+        Arc::clone(&resolver),
+        Arc::clone(&mcp),
+    );
 
     let state = Arc::new(AppState {
         config: config.clone(),
@@ -125,20 +129,50 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         // Mission management endpoints
         .route("/api/control/missions", get(control::list_missions))
         .route("/api/control/missions", post(control::create_mission))
-        .route("/api/control/missions/current", get(control::get_current_mission))
+        .route(
+            "/api/control/missions/current",
+            get(control::get_current_mission),
+        )
         .route("/api/control/missions/:id", get(control::get_mission))
-        .route("/api/control/missions/:id/tree", get(control::get_mission_tree))
-        .route("/api/control/missions/:id/load", post(control::load_mission))
-        .route("/api/control/missions/:id/status", post(control::set_mission_status))
-        .route("/api/control/missions/:id/cancel", post(control::cancel_mission))
-        .route("/api/control/missions/:id/resume", post(control::resume_mission))
-        .route("/api/control/missions/:id/parallel", post(control::start_mission_parallel))
-        .route("/api/control/missions/:id", axum::routing::delete(control::delete_mission))
+        .route(
+            "/api/control/missions/:id/tree",
+            get(control::get_mission_tree),
+        )
+        .route(
+            "/api/control/missions/:id/load",
+            post(control::load_mission),
+        )
+        .route(
+            "/api/control/missions/:id/status",
+            post(control::set_mission_status),
+        )
+        .route(
+            "/api/control/missions/:id/cancel",
+            post(control::cancel_mission),
+        )
+        .route(
+            "/api/control/missions/:id/resume",
+            post(control::resume_mission),
+        )
+        .route(
+            "/api/control/missions/:id/parallel",
+            post(control::start_mission_parallel),
+        )
+        .route(
+            "/api/control/missions/:id",
+            axum::routing::delete(control::delete_mission),
+        )
         // Mission cleanup
-        .route("/api/control/missions/cleanup", post(control::cleanup_empty_missions))
+        .route(
+            "/api/control/missions/cleanup",
+            post(control::cleanup_empty_missions),
+        )
         // Parallel execution endpoints
         .route("/api/control/running", get(control::list_running_missions))
-        .route("/api/control/parallel/config", get(control::get_parallel_config))
+        .route(
+            "/api/control/parallel/config",
+            get(control::get_parallel_config),
+        )
         // Memory endpoints
         .route("/api/runs", get(list_runs))
         .route("/api/runs/:id", get(get_run))
@@ -165,7 +199,8 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         // Tools management endpoints
         .route("/api/tools", get(mcp_api::list_tools))
         .route("/api/tools/:name/toggle", post(mcp_api::toggle_tool))
-        // Model management endpoints
+        // Provider and model management endpoints
+        .route("/api/providers", get(super::providers::list_providers))
         .route("/api/models", get(list_models))
         .route("/api/models/refresh", post(refresh_models))
         .route("/api/models/families", get(list_model_families))
@@ -186,7 +221,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     tracing::info!("Server listening on {}", addr);
-    
+
     // Setup graceful shutdown on SIGTERM/SIGINT
     let shutdown_state = Arc::clone(&state);
     axum::serve(listener, app)
@@ -223,27 +258,36 @@ async fn shutdown_signal(state: Arc<AppState>) {
     }
 
     tracing::info!("Shutdown signal received, marking running missions as interrupted...");
-    
+
     // Send graceful shutdown command to control session
     let (tx, rx) = tokio::sync::oneshot::channel();
-    if let Err(e) = state.control.cmd_tx.send(control::ControlCommand::GracefulShutdown { respond: tx }).await {
+    if let Err(e) = state
+        .control
+        .cmd_tx
+        .send(control::ControlCommand::GracefulShutdown { respond: tx })
+        .await
+    {
         tracing::error!("Failed to send shutdown command: {}", e);
         return;
     }
-    
+
     match rx.await {
         Ok(interrupted_ids) => {
             if interrupted_ids.is_empty() {
                 tracing::info!("No running missions to interrupt");
             } else {
-                tracing::info!("Marked {} missions as interrupted: {:?}", interrupted_ids.len(), interrupted_ids);
+                tracing::info!(
+                    "Marked {} missions as interrupted: {:?}",
+                    interrupted_ids.len(),
+                    interrupted_ids
+                );
             }
         }
         Err(e) => {
             tracing::error!("Failed to receive shutdown response: {}", e);
         }
     }
-    
+
     tracing::info!("Graceful shutdown complete");
 }
 
@@ -462,23 +506,27 @@ async fn run_agent_task(
         // Record tool call events from result data
         if let Some(data) = &result.data {
             let recorder = crate::memory::EventRecorder::new(run_id);
-            
+
             // RootAgent wraps executor data under "execution" field
             let exec_data = data.get("execution").unwrap_or(data);
-            
-            tracing::debug!("Recording events for run {}, exec_data keys: {:?}", 
-                run_id, 
+
+            tracing::debug!(
+                "Recording events for run {}, exec_data keys: {:?}",
+                run_id,
                 exec_data.as_object().map(|o| o.keys().collect::<Vec<_>>())
             );
-            
+
             // Record each tool call as an event
             if let Some(tools_used) = exec_data.get("tools_used") {
                 if let Some(arr) = tools_used.as_array() {
                     tracing::debug!("Recording {} tool call events", arr.len());
                     for tool_entry in arr {
                         let tool_str = tool_entry.as_str().unwrap_or("");
-                        let event = crate::memory::RecordedEvent::new("TaskExecutor", crate::memory::EventKind::ToolCall)
-                            .with_preview(tool_str);
+                        let event = crate::memory::RecordedEvent::new(
+                            "TaskExecutor",
+                            crate::memory::EventKind::ToolCall,
+                        )
+                        .with_preview(tool_str);
                         if let Err(e) = mem.writer.record_event(&recorder, event).await {
                             tracing::warn!("Failed to record tool call event: {}", e);
                         }
@@ -489,25 +537,30 @@ async fn run_agent_task(
             }
 
             // Record final response as an event
-            let prompt_tokens = exec_data.get("usage")
+            let prompt_tokens = exec_data
+                .get("usage")
                 .and_then(|u| u.get("prompt_tokens"))
                 .and_then(|v| v.as_i64())
                 .map(|v| v as i32)
                 .unwrap_or(0);
-            let completion_tokens = exec_data.get("usage")
+            let completion_tokens = exec_data
+                .get("usage")
                 .and_then(|u| u.get("completion_tokens"))
                 .and_then(|v| v.as_i64())
                 .map(|v| v as i32)
                 .unwrap_or(0);
-            
-            let response_event = crate::memory::RecordedEvent::new("TaskExecutor", crate::memory::EventKind::LlmResponse)
-                .with_preview(&if result.output.len() > 1000 {
-                    let safe_end = crate::memory::safe_truncate_index(&result.output, 1000);
-                    result.output[..safe_end].to_string()
-                } else {
-                    result.output.clone()
-                })
-                .with_tokens(prompt_tokens, completion_tokens, result.cost_cents as i32);
+
+            let response_event = crate::memory::RecordedEvent::new(
+                "TaskExecutor",
+                crate::memory::EventKind::LlmResponse,
+            )
+            .with_preview(&if result.output.len() > 1000 {
+                let safe_end = crate::memory::safe_truncate_index(&result.output, 1000);
+                result.output[..safe_end].to_string()
+            } else {
+                result.output.clone()
+            })
+            .with_tokens(prompt_tokens, completion_tokens, result.cost_cents as i32);
             if let Err(e) = mem.writer.record_event(&recorder, response_event).await {
                 tracing::warn!("Failed to record response event: {}", e);
             }
@@ -552,7 +605,7 @@ async fn run_agent_task(
             if let Some(data) = &result.data {
                 // Try to get execution data (may be nested under "execution" from RootAgent)
                 let exec_data = data.get("execution").unwrap_or(data);
-                
+
                 // Update iterations count from execution signals
                 if let Some(signals) = exec_data.get("execution_signals") {
                     if let Some(iterations) = signals.get("iterations").and_then(|v| v.as_u64()) {
@@ -810,12 +863,10 @@ async fn search_memory(
 // ============================================================================
 
 /// List all model families with their latest versions.
-async fn list_model_families(
-    State(state): State<Arc<AppState>>,
-) -> Json<serde_json::Value> {
+async fn list_model_families(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let resolver = state.resolver.read().await;
     let families = resolver.families();
-    
+
     let family_list: Vec<serde_json::Value> = families
         .iter()
         .map(|(name, family)| {
@@ -827,7 +878,7 @@ async fn list_model_families(
             })
         })
         .collect();
-    
+
     Json(serde_json::json!({
         "families": family_list,
         "count": family_list.len()
@@ -848,7 +899,7 @@ async fn list_models(
     Query(params): Query<ListModelsQuery>,
 ) -> Json<serde_json::Value> {
     let resolver = state.resolver.read().await;
-    
+
     let models: Vec<&str> = if let Some(tier) = &params.tier {
         resolver.models_by_tier(tier)
     } else if params.latest_only.unwrap_or(false) {
@@ -857,7 +908,7 @@ async fn list_models(
         // Return all latest models by default
         resolver.latest_models()
     };
-    
+
     Json(serde_json::json!({
         "models": models,
         "count": models.len()
@@ -874,7 +925,7 @@ struct RefreshModelsResponse {
 }
 
 /// Refresh model data by reloading from disk.
-/// 
+///
 /// This reloads the models_with_benchmarks.json file to pick up any updates.
 /// To fully refresh from OpenRouter API and benchmarks, run the merge_benchmarks.py script.
 async fn refresh_models(
@@ -882,18 +933,18 @@ async fn refresh_models(
 ) -> Result<Json<RefreshModelsResponse>, (StatusCode, String)> {
     let working_dir = state.config.working_dir.to_string_lossy().to_string();
     let path = format!("{}/models_with_benchmarks.json", working_dir);
-    
+
     // Reload resolver from disk
     match crate::budget::ModelResolver::load_from_file(&path) {
         Ok(new_resolver) => {
             let families_count = new_resolver.families().len();
-            
+
             // Update the shared resolver
             {
                 let mut resolver = state.resolver.write().await;
                 *resolver = new_resolver;
             }
-            
+
             // Also reload benchmarks from disk
             match crate::budget::BenchmarkRegistry::load_from_file(&path) {
                 Ok(new_benchmarks) => {
@@ -910,7 +961,7 @@ async fn refresh_models(
                     tracing::warn!("Failed to reload benchmarks: {}", e);
                 }
             }
-            
+
             Ok(Json(RefreshModelsResponse {
                 success: true,
                 message: format!("Model data refreshed from {}", path),

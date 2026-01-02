@@ -18,7 +18,11 @@ pub struct OpenCodeClient {
 }
 
 impl OpenCodeClient {
-    pub fn new(base_url: impl Into<String>, default_agent: Option<String>, permissive: bool) -> Self {
+    pub fn new(
+        base_url: impl Into<String>,
+        default_agent: Option<String>,
+        permissive: bool,
+    ) -> Self {
         let mut base_url = base_url.into();
         while base_url.ends_with('/') {
             base_url.pop();
@@ -35,7 +39,11 @@ impl OpenCodeClient {
         &self.base_url
     }
 
-    pub async fn create_session(&self, directory: &str, title: Option<&str>) -> anyhow::Result<OpenCodeSession> {
+    pub async fn create_session(
+        &self,
+        directory: &str,
+        title: Option<&str>,
+    ) -> anyhow::Result<OpenCodeSession> {
         let mut url = format!("{}/session", self.base_url);
         if !directory.is_empty() {
             url.push_str("?directory=");
@@ -85,7 +93,10 @@ impl OpenCodeClient {
         content: &str,
         model: Option<&str>,
         agent: Option<&str>,
-    ) -> anyhow::Result<(mpsc::Receiver<OpenCodeEvent>, tokio::task::JoinHandle<anyhow::Result<OpenCodeMessageResponse>>)> {
+    ) -> anyhow::Result<(
+        mpsc::Receiver<OpenCodeEvent>,
+        tokio::task::JoinHandle<anyhow::Result<OpenCodeMessageResponse>>,
+    )> {
         let session_id = session_id.to_string();
         let directory = directory.to_string();
         let content = content.to_string();
@@ -127,8 +138,10 @@ impl OpenCodeClient {
                                 let event_str = buffer[..pos].to_string();
                                 buffer = buffer[pos + 2..].to_string();
 
-                                if let Some(event) = parse_sse_event(&event_str, &session_id_clone) {
-                                    let is_complete = matches!(event, OpenCodeEvent::MessageComplete { .. });
+                                if let Some(event) = parse_sse_event(&event_str, &session_id_clone)
+                                {
+                                    let is_complete =
+                                        matches!(event, OpenCodeEvent::MessageComplete { .. });
                                     if event_tx.send(event).await.is_err() {
                                         return; // Receiver dropped
                                     }
@@ -153,7 +166,13 @@ impl OpenCodeClient {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
             let result = client
-                .send_message_internal(&session_id, &directory, &content, model.as_deref(), agent.as_deref())
+                .send_message_internal(
+                    &session_id,
+                    &directory,
+                    &content,
+                    model.as_deref(),
+                    agent.as_deref(),
+                )
                 .await;
 
             // Cancel SSE task after message completes
@@ -235,7 +254,8 @@ impl OpenCodeClient {
         model: Option<&str>,
         agent: Option<&str>,
     ) -> anyhow::Result<OpenCodeMessageResponse> {
-        self.send_message_internal(session_id, directory, content, model, agent).await
+        self.send_message_internal(session_id, directory, content, model, agent)
+            .await
     }
 
     pub async fn abort_session(&self, session_id: &str, directory: &str) -> anyhow::Result<()> {
@@ -331,15 +351,21 @@ fn parse_sse_event(event_str: &str, session_id: &str) -> Option<OpenCodeEvent> {
 
         // Tool call events
         "tool.call" | "tool.calling" | "message.tool_call" => {
-            let tool_call_id = props.get("id").or(props.get("toolCallID"))
+            let tool_call_id = props
+                .get("id")
+                .or(props.get("toolCallID"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let name = props.get("name").or(props.get("tool"))
+            let name = props
+                .get("name")
+                .or(props.get("tool"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let args = props.get("args").or(props.get("input"))
+            let args = props
+                .get("args")
+                .or(props.get("input"))
                 .cloned()
                 .unwrap_or(json!({}));
 
@@ -352,15 +378,21 @@ fn parse_sse_event(event_str: &str, session_id: &str) -> Option<OpenCodeEvent> {
 
         // Tool result events
         "tool.result" | "tool.completed" | "message.tool_result" => {
-            let tool_call_id = props.get("id").or(props.get("toolCallID"))
+            let tool_call_id = props
+                .get("id")
+                .or(props.get("toolCallID"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let name = props.get("name").or(props.get("tool"))
+            let name = props
+                .get("name")
+                .or(props.get("tool"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let result = props.get("result").or(props.get("output"))
+            let result = props
+                .get("result")
+                .or(props.get("output"))
                 .cloned()
                 .unwrap_or(json!({}));
 
@@ -380,7 +412,9 @@ fn parse_sse_event(event_str: &str, session_id: &str) -> Option<OpenCodeEvent> {
 
         // Error events
         "error" | "message.error" => {
-            let message = props.get("message").or(props.get("error"))
+            let message = props
+                .get("message")
+                .or(props.get("error"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unknown error")
                 .to_string();

@@ -91,4 +91,3 @@ impl Tool for UiDataTable {
         Ok(serde_json::to_string(&args).unwrap_or_else(|_| args.to_string()))
     }
 }
-

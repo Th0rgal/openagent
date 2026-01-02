@@ -1066,3 +1066,30 @@ export function getModelCategory(modelId: string): string {
   const provider = modelId.split("/")[0];
   return MODEL_CATEGORIES[provider]?.label ?? "Other";
 }
+
+// ==================== Providers ====================
+
+export interface ProviderModel {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export interface Provider {
+  id: string;
+  name: string;
+  billing: "subscription" | "pay-per-token";
+  description: string;
+  models: ProviderModel[];
+}
+
+export interface ProvidersResponse {
+  providers: Provider[];
+}
+
+// List available providers and their models
+export async function listProviders(): Promise<ProvidersResponse> {
+  const res = await apiFetch("/api/providers");
+  if (!res.ok) throw new Error("Failed to fetch providers");
+  return res.json();
+}

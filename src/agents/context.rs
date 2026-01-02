@@ -10,42 +10,42 @@ use crate::config::Config;
 use crate::llm::LlmClient;
 use crate::mcp::McpRegistry;
 use crate::memory::MemorySystem;
-use crate::tools::ToolRegistry;
 use crate::tools::mission::MissionControl;
+use crate::tools::ToolRegistry;
 use tokio::sync::broadcast;
 
 /// Shared context passed to all agents during execution.
-/// 
+///
 /// # Thread Safety
 /// Context is wrapped in Arc for sharing across async tasks.
 /// Individual components use interior mutability where needed.
-/// 
+///
 /// # System Access
 /// The agent has **full system access** - it can read/write any file, execute any command,
 /// and search anywhere on the machine. The `working_dir` is just the default for relative paths.
 pub struct AgentContext {
     /// Application configuration
     pub config: Config,
-    
+
     /// LLM client for model calls
     pub llm: Arc<dyn LlmClient>,
-    
+
     /// Tool registry for task execution
     pub tools: ToolRegistry,
-    
+
     /// Model pricing information
     pub pricing: Arc<ModelPricing>,
-    
+
     /// Default working directory for relative paths.
     /// The agent can still access any path on the system using absolute paths.
     pub working_dir: PathBuf,
-    
+
     /// Maximum depth for recursive task splitting
     pub max_split_depth: usize,
-    
+
     /// Maximum iterations per agent
     pub max_iterations: usize,
-    
+
     /// Memory system for persistent storage (optional)
     pub memory: Option<MemorySystem>,
 
@@ -72,13 +72,13 @@ pub struct AgentContext {
 
     /// Snapshot of current agent tree (for refresh resilience on frontend).
     pub tree_snapshot: Option<Arc<tokio::sync::RwLock<Option<crate::api::control::AgentTreeNode>>>>,
-    
+
     /// Current execution progress (for progress indicator).
     pub progress_snapshot: Option<Arc<tokio::sync::RwLock<crate::api::control::ExecutionProgress>>>,
-    
+
     /// Mission ID for tagging events (used in parallel mission execution).
     pub mission_id: Option<Uuid>,
-    
+
     /// MCP registry for dynamic tool discovery and execution.
     pub mcp: Option<Arc<McpRegistry>>,
 }
@@ -114,7 +114,7 @@ impl AgentContext {
             mcp: None,
         }
     }
-    
+
     /// Create a new agent context with memory system.
     pub fn with_memory(
         config: Config,
@@ -148,7 +148,7 @@ impl AgentContext {
     }
 
     /// Create a child context with reduced split depth.
-    /// 
+    ///
     /// # Postcondition
     /// `child.max_split_depth == self.max_split_depth - 1`
     pub fn child_context(&self) -> Self {
@@ -184,7 +184,7 @@ impl AgentContext {
     pub fn working_dir_str(&self) -> String {
         self.working_dir.to_string_lossy().to_string()
     }
-    
+
     /// Check if memory is available.
     pub fn has_memory(&self) -> bool {
         self.memory.is_some()
@@ -221,19 +221,28 @@ impl AgentContext {
                 *snapshot.write().await = Some(tree_clone);
             });
         }
-        
+
         // Send SSE event
         if let Some(ref events) = self.control_events {
-            let _ = events.send(crate::api::control::AgentEvent::AgentTree { tree, mission_id: self.mission_id });
+            let _ = events.send(crate::api::control::AgentEvent::AgentTree {
+                tree,
+                mission_id: self.mission_id,
+            });
         }
     }
-    
+
     /// Update execution progress and emit event.
-    pub fn emit_progress(&self, total: usize, completed: usize, current: Option<String>, depth: u8) {
+    pub fn emit_progress(
+        &self,
+        total: usize,
+        completed: usize,
+        current: Option<String>,
+        depth: u8,
+    ) {
         // Clone current for use in multiple places
         let current_for_snapshot = current.clone();
         let current_for_event = current;
-        
+
         if let Some(ref snapshot) = self.progress_snapshot {
             let snapshot = Arc::clone(snapshot);
             tokio::spawn(async move {
@@ -244,7 +253,7 @@ impl AgentContext {
                 p.current_depth = depth;
             });
         }
-        
+
         // Send SSE event for progress
         if let Some(ref events) = self.control_events {
             let _ = events.send(crate::api::control::AgentEvent::Progress {
@@ -257,4 +266,3 @@ impl AgentContext {
         }
     }
 }
-

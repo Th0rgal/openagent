@@ -15,9 +15,7 @@ pub enum Deliverable {
         description: Option<String>,
     },
     /// A directory that should be created.
-    Directory {
-        path: PathBuf,
-    },
+    Directory { path: PathBuf },
     /// A report or document (may be in final message or a file).
     Report {
         topic: String,
@@ -39,9 +37,10 @@ impl Deliverable {
     pub async fn exists(&self) -> bool {
         match self {
             Deliverable::File { path, .. } => tokio::fs::metadata(path).await.is_ok(),
-            Deliverable::Directory { path } => {
-                tokio::fs::metadata(path).await.map(|m| m.is_dir()).unwrap_or(false)
-            }
+            Deliverable::Directory { path } => tokio::fs::metadata(path)
+                .await
+                .map(|m| m.is_dir())
+                .unwrap_or(false),
             Deliverable::Report { expected_path, .. } => {
                 if let Some(path) = expected_path {
                     tokio::fs::metadata(path).await.is_ok()
@@ -113,7 +112,14 @@ pub fn extract_deliverables(message: &str) -> DeliverableSet {
     let mut requires_report = false;
 
     // Check for research/analysis keywords
-    let research_keywords = ["research", "analyze", "investigate", "study", "explore", "find out"];
+    let research_keywords = [
+        "research",
+        "analyze",
+        "investigate",
+        "study",
+        "explore",
+        "find out",
+    ];
     for keyword in &research_keywords {
         if message.to_lowercase().contains(keyword) {
             is_research_task = true;
@@ -138,7 +144,10 @@ pub fn extract_deliverables(message: &str) -> DeliverableSet {
 
     for cap in verb_path_pattern.captures_iter(message) {
         let path = PathBuf::from(&cap[1]);
-        if !deliverables.iter().any(|d: &Deliverable| d.path() == Some(&path)) {
+        if !deliverables
+            .iter()
+            .any(|d: &Deliverable| d.path() == Some(&path))
+        {
             deliverables.push(Deliverable::File {
                 path,
                 description: None,
@@ -148,13 +157,15 @@ pub fn extract_deliverables(message: &str) -> DeliverableSet {
 
     // Pattern 2: Explicit file paths in the message (especially in /root/work)
     // Matches: /root/work/project/output/REPORT.md
-    let explicit_path_pattern = Regex::new(
-        r"(/root/[\w/.+-]+\.(?:md|json|txt|py|sh|yaml|yml|csv|html|xml))"
-    ).unwrap();
+    let explicit_path_pattern =
+        Regex::new(r"(/root/[\w/.+-]+\.(?:md|json|txt|py|sh|yaml|yml|csv|html|xml))").unwrap();
 
     for cap in explicit_path_pattern.captures_iter(message) {
         let path = PathBuf::from(&cap[1]);
-        if !deliverables.iter().any(|d: &Deliverable| d.path() == Some(&path)) {
+        if !deliverables
+            .iter()
+            .any(|d: &Deliverable| d.path() == Some(&path))
+        {
             deliverables.push(Deliverable::File {
                 path,
                 description: None,
@@ -163,13 +174,15 @@ pub fn extract_deliverables(message: &str) -> DeliverableSet {
     }
 
     // Pattern 3: "Deliverable:" or "Output:" sections
-    let deliverable_section_pattern = Regex::new(
-        r"(?i)(?:deliverable|output|result)s?:\s*\n(?:[-*]\s*)?(/[\w/.+-]+)"
-    ).unwrap();
+    let deliverable_section_pattern =
+        Regex::new(r"(?i)(?:deliverable|output|result)s?:\s*\n(?:[-*]\s*)?(/[\w/.+-]+)").unwrap();
 
     for cap in deliverable_section_pattern.captures_iter(message) {
         let path = PathBuf::from(&cap[1]);
-        if !deliverables.iter().any(|d: &Deliverable| d.path() == Some(&path)) {
+        if !deliverables
+            .iter()
+            .any(|d: &Deliverable| d.path() == Some(&path))
+        {
             deliverables.push(Deliverable::File {
                 path,
                 description: None,
@@ -178,22 +191,29 @@ pub fn extract_deliverables(message: &str) -> DeliverableSet {
     }
 
     // Pattern 4: Directory patterns like "clone to /path/dir"
-    let dir_pattern = Regex::new(
-        r"(?i)(?:clone|download|extract)(?:\s+\w+)*?\s+(?:to|into)\s+(/[\w/.+-]+)"
-    ).unwrap();
+    let dir_pattern =
+        Regex::new(r"(?i)(?:clone|download|extract)(?:\s+\w+)*?\s+(?:to|into)\s+(/[\w/.+-]+)")
+            .unwrap();
 
     for cap in dir_pattern.captures_iter(message) {
         let path = PathBuf::from(&cap[1]);
         // If it doesn't have an extension, treat as directory
         if path.extension().is_none() {
-            if !deliverables.iter().any(|d: &Deliverable| d.path() == Some(&path)) {
+            if !deliverables
+                .iter()
+                .any(|d: &Deliverable| d.path() == Some(&path))
+            {
                 deliverables.push(Deliverable::Directory { path });
             }
         }
     }
 
     // If requires_report but no explicit path found, add a generic report expectation
-    if requires_report && !deliverables.iter().any(|d| matches!(d, Deliverable::Report { .. })) {
+    if requires_report
+        && !deliverables
+            .iter()
+            .any(|d| matches!(d, Deliverable::Report { .. }))
+    {
         // Look for a topic
         let topic = if let Some(cap) = Regex::new(r"(?i)(?:about|on|regarding)\s+(.+?)(?:\.|,|$)")
             .unwrap()
@@ -251,7 +271,9 @@ mod tests {
         let msg = "The final report should be saved to /root/work/analysis/findings.md";
         let result = extract_deliverables(msg);
         assert!(result.deliverables.iter().any(|d| {
-            d.path().map(|p| p.to_str().unwrap().contains("findings.md")).unwrap_or(false)
+            d.path()
+                .map(|p| p.to_str().unwrap().contains("findings.md"))
+                .unwrap_or(false)
         }));
     }
 

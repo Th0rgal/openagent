@@ -182,7 +182,9 @@ impl McpServerConfig {
         Self {
             id: Uuid::new_v4(),
             name,
-            transport: McpTransport::Http { endpoint: endpoint.clone() },
+            transport: McpTransport::Http {
+                endpoint: endpoint.clone(),
+            },
             endpoint, // Keep for backwards compat
             description: None,
             enabled: true,
@@ -292,7 +294,9 @@ impl AddMcpRequest {
         if let Some(transport) = &self.transport {
             transport.clone()
         } else if let Some(endpoint) = &self.endpoint {
-            McpTransport::Http { endpoint: endpoint.clone() }
+            McpTransport::Http {
+                endpoint: endpoint.clone(),
+            }
         } else {
             McpTransport::default()
         }

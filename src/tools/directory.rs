@@ -1,7 +1,7 @@
 //! Directory operation tools: list directory, search files by name.
 //!
 //! ## Workspace-First Design
-//! 
+//!
 //! These tools work relative to the workspace by default:
 //! - `src/` → lists `{workspace}/src/`
 //! - `/var/log` → absolute path for system directories
@@ -53,7 +53,11 @@ impl Tool for ListDirectory {
         let resolution = resolve_path(path, working_dir);
 
         if !resolution.resolved.exists() {
-            return Err(anyhow::anyhow!("Directory not found: {} (resolved to: {})", path, resolution.resolved.display()));
+            return Err(anyhow::anyhow!(
+                "Directory not found: {} (resolved to: {})",
+                path,
+                resolution.resolved.display()
+            ));
         }
 
         if !resolution.resolved.is_dir() {
@@ -134,7 +138,11 @@ impl Tool for SearchFiles {
         let full_path = resolution.resolved;
 
         if !full_path.exists() {
-            return Err(anyhow::anyhow!("Directory not found: {} (resolved to: {})", path, full_path.display()));
+            return Err(anyhow::anyhow!(
+                "Directory not found: {} (resolved to: {})",
+                path,
+                full_path.display()
+            ));
         }
 
         // Convert glob pattern to simple matching
@@ -149,10 +157,7 @@ impl Tool for SearchFiles {
                 continue;
             }
 
-            let file_name = entry
-                .file_name()
-                .to_string_lossy()
-                .to_lowercase();
+            let file_name = entry.file_name().to_string_lossy().to_lowercase();
 
             let matched = if is_glob {
                 // Simple glob matching
@@ -215,4 +220,3 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 
     true
 }
-

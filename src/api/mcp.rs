@@ -99,28 +99,26 @@ pub async fn refresh_mcp(
         .get(id)
         .await
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("MCP {} not found", id)))?;
-    
+
     // Spawn refresh in background (don't wait for completion)
     let mcp = Arc::clone(&state.mcp);
     tokio::spawn(async move {
         let _ = mcp.refresh(id).await;
     });
-    
+
     // Return current state with a status indicating refresh is in progress
     Ok(Json(current_state))
 }
 
 /// Refresh all MCP servers.
 /// This spawns refreshes in the background and returns immediately.
-pub async fn refresh_all_mcps(
-    State(state): State<Arc<AppState>>,
-) -> Json<serde_json::Value> {
+pub async fn refresh_all_mcps(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     // Spawn refresh_all in background
     let mcp = Arc::clone(&state.mcp);
     tokio::spawn(async move {
         mcp.refresh_all().await;
     });
-    
+
     Json(serde_json::json!({ "success": true, "message": "Refresh started in background" }))
 }
 
@@ -145,11 +143,9 @@ pub enum ToolSource {
 }
 
 /// List all available tools (built-in + MCP).
-pub async fn list_tools(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<ToolInfo>> {
+pub async fn list_tools(State(state): State<Arc<AppState>>) -> Json<Vec<ToolInfo>> {
     let mut tools = Vec::new();
-    
+
     // Add built-in tools from the ToolRegistry
     let builtin_tools = crate::tools::ToolRegistry::new().list_tools();
     for t in builtin_tools {
@@ -160,29 +156,32 @@ pub async fn list_tools(
             enabled: state.mcp.is_tool_enabled(&t.name).await,
         });
     }
-    
+
     // Add MCP tools
     let mcp_tools = state.mcp.list_tools().await;
     let mcp_states = state.mcp.list().await;
-    
+
     for t in mcp_tools {
         let mcp_name = mcp_states
             .iter()
             .find(|s| s.config.id == t.mcp_id)
             .map(|s| s.config.name.clone())
             .unwrap_or_default();
-        
+
         tools.push(ToolInfo {
             name: t.name.clone(),
             description: t.description.clone(),
-            source: ToolSource::Mcp { id: t.mcp_id, name: mcp_name },
+            source: ToolSource::Mcp {
+                id: t.mcp_id,
+                name: mcp_name,
+            },
             enabled: t.enabled,
         });
     }
-    
+
     // Sort by name for stable ordering
     tools.sort_by(|a, b| a.name.cmp(&b.name));
-    
+
     Json(tools)
 }
 

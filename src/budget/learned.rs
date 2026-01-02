@@ -223,17 +223,20 @@ pub fn get_best_models_by_task_type(
             .or_insert((stat.selected_model.clone(), score));
     }
 
-    best_by_type
-        .into_iter()
-        .map(|(k, (v, _))| (k, v))
-        .collect()
+    best_by_type.into_iter().map(|(k, (v, _))| (k, v)).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_stats(model: &str, task_type: &str, tasks: i64, success: f64, cost: f64) -> LearnedModelStats {
+    fn make_stats(
+        model: &str,
+        task_type: &str,
+        tasks: i64,
+        success: f64,
+        cost: f64,
+    ) -> LearnedModelStats {
         LearnedModelStats {
             selected_model: model.to_string(),
             task_type: Some(task_type.to_string()),
@@ -253,7 +256,7 @@ mod tests {
         // This strongly rewards lower cost while accounting for success rate
         let stats = vec![
             make_stats("model-a", "code", 10, 0.95, 30.0), // Highest success, low-moderate cost -> score = 0.95/ln(31) = 0.277
-            make_stats("model-b", "code", 10, 0.8, 20.0),  // Lower success, low cost -> score = 0.8/ln(21) = 0.263
+            make_stats("model-b", "code", 10, 0.8, 20.0), // Lower success, low cost -> score = 0.8/ln(21) = 0.263
             make_stats("model-c", "code", 10, 0.95, 200.0), // Highest success, high cost -> score = 0.95/ln(201) = 0.179
         ];
 
@@ -270,7 +273,7 @@ mod tests {
             ..Default::default()
         };
         let stats = vec![
-            make_stats("model-a", "code", 5, 0.9, 50.0),  // Not enough samples
+            make_stats("model-a", "code", 5, 0.9, 50.0), // Not enough samples
             make_stats("model-b", "code", 10, 0.8, 50.0), // Enough samples
         ];
 
@@ -303,7 +306,7 @@ mod tests {
         }];
 
         let budget = estimate_budget_from_learned("code", 0.5, &estimates, &config, 100);
-        
+
         // Should be P80 * 1.2 = 60 * 1.2 = 72
         assert_eq!(budget, 72);
     }

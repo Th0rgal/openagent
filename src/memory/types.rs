@@ -165,7 +165,7 @@ pub struct ContextPack {
 }
 
 /// Task outcome record for learning from execution history.
-/// 
+///
 /// Captures predictions vs actuals to enable data-driven optimization
 /// of complexity estimation, model selection, and budget allocation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,29 +173,29 @@ pub struct DbTaskOutcome {
     pub id: Option<Uuid>,
     pub run_id: Uuid,
     pub task_id: Uuid,
-    
+
     // Predictions (what we estimated before execution)
     pub predicted_complexity: Option<f64>,
     pub predicted_tokens: Option<i64>,
     pub predicted_cost_cents: Option<i64>,
     pub selected_model: Option<String>,
-    
+
     // Actuals (what happened during execution)
     pub actual_tokens: Option<i64>,
     pub actual_cost_cents: Option<i64>,
     pub success: bool,
     pub iterations: Option<i32>,
     pub tool_calls_count: Option<i32>,
-    
+
     // Metadata for similarity search
     pub task_description: String,
     /// Category of task (inferred or explicit)
     pub task_type: Option<String>,
-    
+
     // Computed ratios for quick stats
     pub cost_error_ratio: Option<f64>,
     pub token_error_ratio: Option<f64>,
-    
+
     pub created_at: Option<String>,
 }
 
@@ -222,14 +222,14 @@ impl DbTaskOutcome {
             }
             _ => None,
         };
-        
+
         let token_error_ratio = match (actual_tokens, predicted_tokens) {
             (Some(actual), Some(predicted)) if predicted > 0 => {
                 Some(actual as f64 / predicted as f64)
             }
             _ => None,
         };
-        
+
         Self {
             id: None,
             run_id,
@@ -302,7 +302,7 @@ impl std::fmt::Display for MissionStatus {
 
 impl std::str::FromStr for MissionStatus {
     type Err = String;
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "active" => Ok(Self::Active),
@@ -345,7 +345,7 @@ impl ContextPack {
         if self.chunks.is_empty() {
             return String::new();
         }
-        
+
         let mut out = String::from("## Relevant Context from Memory\n\n");
         for (i, chunk) in self.chunks.iter().enumerate() {
             out.push_str(&format!(
@@ -391,4 +391,3 @@ pub struct SessionMetadata {
     pub recent_tool_calls: u32,
     pub context_files: Vec<String>,
 }
-

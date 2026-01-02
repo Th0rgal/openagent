@@ -39,7 +39,7 @@ impl McpConfigStore {
     /// Save current configs to disk.
     async fn save(&self) -> anyhow::Result<()> {
         let configs = self.configs.read().await;
-        
+
         // Ensure directory exists
         if let Some(parent) = self.config_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -57,39 +57,48 @@ impl McpConfigStore {
 
     /// Get a specific MCP configuration by ID.
     pub async fn get(&self, id: Uuid) -> Option<McpServerConfig> {
-        self.configs.read().await.iter().find(|c| c.id == id).cloned()
+        self.configs
+            .read()
+            .await
+            .iter()
+            .find(|c| c.id == id)
+            .cloned()
     }
 
     /// Add a new MCP configuration.
     pub async fn add(&self, config: McpServerConfig) -> anyhow::Result<McpServerConfig> {
         {
             let mut configs = self.configs.write().await;
-            
+
             // Check for duplicate name
             if configs.iter().any(|c| c.name == config.name) {
                 anyhow::bail!("MCP with name '{}' already exists", config.name);
             }
-            
+
             configs.push(config.clone());
         }
-        
+
         self.save().await?;
         Ok(config)
     }
 
     /// Update an existing MCP configuration.
-    pub async fn update(&self, id: Uuid, updates: impl FnOnce(&mut McpServerConfig)) -> anyhow::Result<McpServerConfig> {
+    pub async fn update(
+        &self,
+        id: Uuid,
+        updates: impl FnOnce(&mut McpServerConfig),
+    ) -> anyhow::Result<McpServerConfig> {
         let updated = {
             let mut configs = self.configs.write().await;
             let config = configs
                 .iter_mut()
                 .find(|c| c.id == id)
                 .ok_or_else(|| anyhow::anyhow!("MCP {} not found", id))?;
-            
+
             updates(config);
             config.clone()
         };
-        
+
         self.save().await?;
         Ok(updated)
     }
@@ -104,7 +113,7 @@ impl McpConfigStore {
                 .ok_or_else(|| anyhow::anyhow!("MCP {} not found", id))?;
             configs.remove(idx);
         }
-        
+
         self.save().await?;
         Ok(())
     }

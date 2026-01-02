@@ -1,7 +1,7 @@
 //! File operation tools: read, write, delete files.
 //!
 //! ## Workspace-First Design
-//! 
+//!
 //! These tools work relative to the workspace by default:
 //! - `output/report.md` → writes to `{workspace}/output/report.md`
 //! - `/etc/hosts` → absolute path for system access (escape hatch)
@@ -55,7 +55,11 @@ impl Tool for ReadFile {
         let resolution = resolve_path(path, working_dir);
 
         if !resolution.resolved.exists() {
-            return Err(anyhow::anyhow!("File not found: {} (resolved to: {})", path, resolution.resolved.display()));
+            return Err(anyhow::anyhow!(
+                "File not found: {} (resolved to: {})",
+                path,
+                resolution.resolved.display()
+            ));
         }
 
         // Try to read as UTF-8 text, detect binary files
@@ -64,7 +68,9 @@ impl Tool for ReadFile {
             Ok(text) => text,
             Err(_) => {
                 // Binary file detected - don't try to display content
-                let ext = resolution.resolved.extension()
+                let ext = resolution
+                    .resolved
+                    .extension()
                     .map(|e| e.to_string_lossy().to_lowercase())
                     .unwrap_or_default();
                 return Ok(format!(
@@ -221,7 +227,11 @@ impl Tool for WriteFile {
         } else {
             resolution.resolved.display().to_string()
         };
-        let mut result = format!("Successfully wrote {} bytes to {}", content.len(), path_display);
+        let mut result = format!(
+            "Successfully wrote {} bytes to {}",
+            content.len(),
+            path_display
+        );
 
         if !warnings.is_empty() {
             result.push_str("\n\n⚠️ **POTENTIAL TRUNCATION WARNINGS:**\n");
@@ -272,11 +282,18 @@ impl Tool for DeleteFile {
         let resolution = resolve_path(path, working_dir);
 
         if !resolution.resolved.exists() {
-            return Err(anyhow::anyhow!("File not found: {} (resolved to: {})", path, resolution.resolved.display()));
+            return Err(anyhow::anyhow!(
+                "File not found: {} (resolved to: {})",
+                path,
+                resolution.resolved.display()
+            ));
         }
 
         tokio::fs::remove_file(&resolution.resolved).await?;
 
-        Ok(format!("Successfully deleted {}", resolution.resolved.display()))
+        Ok(format!(
+            "Successfully deleted {}",
+            resolution.resolved.display()
+        ))
     }
 }

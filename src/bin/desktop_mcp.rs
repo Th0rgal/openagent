@@ -99,7 +99,11 @@ enum ToolContent {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "image")]
-    Image { data: String, #[serde(rename = "mimeType")] mime_type: String },
+    Image {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
 }
 
 // =============================================================================
@@ -144,9 +148,7 @@ fn get_working_dir() -> PathBuf {
 /// Helper to kill a process by PID (best effort)
 fn kill_process(pid: u32) {
     use std::process::Command;
-    let _ = Command::new("kill")
-        .args(["-9", &pid.to_string()])
-        .output();
+    let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
 }
 
 fn tool_start_session(args: &Value) -> Result<String, String> {
@@ -203,9 +205,15 @@ fn tool_start_session(args: &Value) -> Result<String, String> {
     }
 
     // Optionally launch browser
-    let launch_browser = args.get("launch_browser").and_then(|v| v.as_bool()).unwrap_or(false);
+    let launch_browser = args
+        .get("launch_browser")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let (browser_pid, browser_info) = if launch_browser {
-        let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("about:blank");
+        let url = args
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("about:blank");
 
         let chromium = match std::process::Command::new("chromium")
             .args([
@@ -232,7 +240,13 @@ fn tool_start_session(args: &Value) -> Result<String, String> {
         let chromium_pid = chromium.id();
         std::thread::sleep(std::time::Duration::from_secs(2));
 
-        (Some(chromium_pid), format!(", \"browser\": \"chromium\", \"browser_pid\": {}, \"url\": \"{}\"", chromium_pid, url))
+        (
+            Some(chromium_pid),
+            format!(
+                ", \"browser\": \"chromium\", \"browser_pid\": {}, \"url\": \"{}\"",
+                chromium_pid, url
+            ),
+        )
     } else {
         (None, String::new())
     };
@@ -250,7 +264,10 @@ fn tool_start_session(args: &Value) -> Result<String, String> {
     if let Some(pid) = browser_pid {
         session_info["browser_pid"] = json!(pid);
     }
-    if let Err(e) = std::fs::write(&session_file, serde_json::to_string_pretty(&session_info).unwrap()) {
+    if let Err(e) = std::fs::write(
+        &session_file,
+        serde_json::to_string_pretty(&session_info).unwrap(),
+    ) {
         if let Some(pid) = browser_pid {
             kill_process(pid);
         }
@@ -275,7 +292,8 @@ fn tool_start_session(args: &Value) -> Result<String, String> {
 // -----------------------------------------------------------------------------
 
 fn tool_stop_session(args: &Value) -> Result<String, String> {
-    let display_id = args.get("display")
+    let display_id = args
+        .get("display")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'display' argument")?;
 
@@ -294,7 +312,9 @@ fn tool_stop_session(args: &Value) -> Result<String, String> {
                 for pid_key in ["xvfb_pid", "i3_pid", "browser_pid"] {
                     if let Some(pid) = session_info.get(pid_key).and_then(|v| v.as_u64()) {
                         let pid = pid as i32;
-                        unsafe { libc::kill(pid, libc::SIGTERM); }
+                        unsafe {
+                            libc::kill(pid, libc::SIGTERM);
+                        }
                         killed_pids.push(pid);
                     }
                 }
@@ -325,19 +345,24 @@ fn tool_stop_session(args: &Value) -> Result<String, String> {
 // -----------------------------------------------------------------------------
 
 fn tool_screenshot(args: &Value) -> Result<(String, Option<String>), String> {
-    let display_id = args.get("display")
+    let display_id = args
+        .get("display")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'display' argument")?;
 
     // Wait before taking screenshot if specified
-    let wait_seconds = args.get("wait_seconds").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let wait_seconds = args
+        .get("wait_seconds")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
     if wait_seconds > 0.0 {
         std::thread::sleep(std::time::Duration::from_secs_f64(wait_seconds));
     }
 
     // Generate filename
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let filename = args.get("filename")
+    let filename = args
+        .get("filename")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("screenshot_{}.png", timestamp));
@@ -384,15 +409,21 @@ fn tool_screenshot(args: &Value) -> Result<(String, Option<String>), String> {
         return Err("Screenshot file was not created".to_string());
     }
 
-    let metadata = std::fs::metadata(&filepath)
-        .map_err(|e| format!("Failed to read file metadata: {}", e))?;
+    let metadata =
+        std::fs::metadata(&filepath).map_err(|e| format!("Failed to read file metadata: {}", e))?;
 
     // Check if we should return the image data
-    let return_image = args.get("return_image").and_then(|v| v.as_bool()).unwrap_or(false);
+    let return_image = args
+        .get("return_image")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let image_data = if return_image {
-        let data = std::fs::read(&filepath)
-            .map_err(|e| format!("Failed to read screenshot: {}", e))?;
-        Some(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data))
+        let data =
+            std::fs::read(&filepath).map_err(|e| format!("Failed to read screenshot: {}", e))?;
+        Some(base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            &data,
+        ))
     } else {
         None
     };
@@ -411,7 +442,8 @@ fn tool_screenshot(args: &Value) -> Result<(String, Option<String>), String> {
 // -----------------------------------------------------------------------------
 
 fn tool_type_text(args: &Value) -> Result<String, String> {
-    let display_id = args.get("display")
+    let display_id = args
+        .get("display")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'display' argument")?;
 
@@ -448,35 +480,42 @@ fn tool_type_text(args: &Value) -> Result<String, String> {
 // -----------------------------------------------------------------------------
 
 fn tool_click(args: &Value) -> Result<String, String> {
-    let display_id = args.get("display")
+    let display_id = args
+        .get("display")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'display' argument")?;
 
-    let x = args.get("x")
+    let x = args
+        .get("x")
         .and_then(|v| v.as_i64())
         .ok_or("Missing 'x' argument")?;
-    let y = args.get("y")
+    let y = args
+        .get("y")
         .and_then(|v| v.as_i64())
         .ok_or("Missing 'y' argument")?;
 
-    let button = match args.get("button").and_then(|v| v.as_str()).unwrap_or("left") {
+    let button = match args
+        .get("button")
+        .and_then(|v| v.as_str())
+        .unwrap_or("left")
+    {
         "left" => "1",
         "middle" => "2",
         "right" => "3",
         other => return Err(format!("Invalid button: {}", other)),
     };
 
-    let double = args.get("double").and_then(|v| v.as_bool()).unwrap_or(false);
+    let double = args
+        .get("double")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let repeat = if double { "2" } else { "1" };
 
     // Move to position first
     let x_str = x.to_string();
     let y_str = y.to_string();
-    let (_, stderr, exit_code) = run_with_display(
-        display_id,
-        "xdotool",
-        &["mousemove", &x_str, &y_str],
-    )?;
+    let (_, stderr, exit_code) =
+        run_with_display(display_id, "xdotool", &["mousemove", &x_str, &y_str])?;
 
     if exit_code != 0 {
         return Err(format!("xdotool mousemove failed: {}", stderr));
@@ -497,8 +536,11 @@ fn tool_click(args: &Value) -> Result<String, String> {
 
     Ok(format!(
         "{{\"success\": true, \"x\": {}, \"y\": {}, \"button\": \"{}\", \"double\": {}}}",
-        x, y,
-        args.get("button").and_then(|v| v.as_str()).unwrap_or("left"),
+        x,
+        y,
+        args.get("button")
+            .and_then(|v| v.as_str())
+            .unwrap_or("left"),
         double
     ))
 }
@@ -508,24 +550,24 @@ fn tool_click(args: &Value) -> Result<String, String> {
 // -----------------------------------------------------------------------------
 
 fn tool_mouse_move(args: &Value) -> Result<String, String> {
-    let display_id = args.get("display")
+    let display_id = args
+        .get("display")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'display' argument")?;
 
-    let x = args.get("x")
+    let x = args
+        .get("x")
         .and_then(|v| v.as_i64())
         .ok_or("Missing 'x' argument")?;
-    let y = args.get("y")
+    let y = args
+        .get("y")
         .and_then(|v| v.as_i64())
         .ok_or("Missing 'y' argument")?;
 
     let x_str = x.to_string();
     let y_str = y.to_string();
-    let (_, stderr, exit_code) = run_with_display(
-        display_id,
-        "xdotool",
-        &["mousemove", &x_str, &y_str],
-    )?;
+    let (_, stderr, exit_code) =
+        run_with_display(display_id, "xdotool", &["mousemove", &x_str, &y_str])?;
 
     if exit_code != 0 {
         return Err(format!("xdotool mousemove failed: {}", stderr));
@@ -539,11 +581,13 @@ fn tool_mouse_move(args: &Value) -> Result<String, String> {
 // -----------------------------------------------------------------------------
 
 fn tool_scroll(args: &Value) -> Result<String, String> {
-    let display_id = args.get("display")
+    let display_id = args
+        .get("display")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'display' argument")?;
 
-    let amount = args.get("amount")
+    let amount = args
+        .get("amount")
         .and_then(|v| v.as_i64())
         .ok_or("Missing 'amount' argument")?;
 
@@ -554,11 +598,8 @@ fn tool_scroll(args: &Value) -> Result<String, String> {
     ) {
         let x_str = x.to_string();
         let y_str = y.to_string();
-        let (_, stderr, exit_code) = run_with_display(
-            display_id,
-            "xdotool",
-            &["mousemove", &x_str, &y_str],
-        )?;
+        let (_, stderr, exit_code) =
+            run_with_display(display_id, "xdotool", &["mousemove", &x_str, &y_str])?;
 
         if exit_code != 0 {
             return Err(format!("xdotool mousemove failed: {}", stderr));
@@ -596,11 +637,13 @@ fn tool_scroll(args: &Value) -> Result<String, String> {
 // -----------------------------------------------------------------------------
 
 fn tool_i3_command(args: &Value) -> Result<String, String> {
-    let display_id = args.get("display")
+    let display_id = args
+        .get("display")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'display' argument")?;
 
-    let command = args.get("command")
+    let command = args
+        .get("command")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'command' argument")?;
 
@@ -614,7 +657,10 @@ fn tool_i3_command(args: &Value) -> Result<String, String> {
     let result = if stdout.trim().starts_with('[') || stdout.trim().starts_with('{') {
         stdout.trim().to_string()
     } else {
-        format!("{{\"success\": true, \"output\": \"{}\"}}", stdout.trim().replace('"', "\\\""))
+        format!(
+            "{{\"success\": true, \"output\": \"{}\"}}",
+            stdout.trim().replace('"', "\\\"")
+        )
     };
 
     Ok(result)
@@ -625,7 +671,8 @@ fn tool_i3_command(args: &Value) -> Result<String, String> {
 // -----------------------------------------------------------------------------
 
 fn tool_get_text(args: &Value) -> Result<String, String> {
-    let display_id = args.get("display")
+    let display_id = args
+        .get("display")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'display' argument")?;
 
@@ -649,7 +696,12 @@ fn tool_get_text(args: &Value) -> Result<String, String> {
 
     // Run tesseract
     let output = std::process::Command::new("tesseract")
-        .args([screenshot_path.to_string_lossy().as_ref(), "stdout", "-l", "eng"])
+        .args([
+            screenshot_path.to_string_lossy().as_ref(),
+            "stdout",
+            "-l",
+            "eng",
+        ])
         .output()
         .map_err(|e| format!("Failed to run tesseract: {}", e))?;
 
@@ -883,24 +935,22 @@ fn execute_tool(name: &str, args: &Value) -> ToolResult {
     let result = match name {
         "desktop_start_session" => tool_start_session(args),
         "desktop_stop_session" => tool_stop_session(args),
-        "desktop_screenshot" => {
-            match tool_screenshot(args) {
-                Ok((text, Some(image_data))) => {
-                    return ToolResult {
-                        content: vec![
-                            ToolContent::Text { text },
-                            ToolContent::Image {
-                                data: image_data,
-                                mime_type: "image/png".to_string(),
-                            },
-                        ],
-                        is_error: false,
-                    };
-                }
-                Ok((text, None)) => Ok(text),
-                Err(e) => Err(e),
+        "desktop_screenshot" => match tool_screenshot(args) {
+            Ok((text, Some(image_data))) => {
+                return ToolResult {
+                    content: vec![
+                        ToolContent::Text { text },
+                        ToolContent::Image {
+                            data: image_data,
+                            mime_type: "image/png".to_string(),
+                        },
+                    ],
+                    is_error: false,
+                };
             }
-        }
+            Ok((text, None)) => Ok(text),
+            Err(e) => Err(e),
+        },
         "desktop_type" => tool_type_text(args),
         "desktop_click" => tool_click(args),
         "desktop_mouse_move" => tool_mouse_move(args),
@@ -928,8 +978,9 @@ fn execute_tool(name: &str, args: &Value) -> ToolResult {
 
 fn handle_request(request: JsonRpcRequest) -> Option<JsonRpcResponse> {
     match request.method.as_str() {
-        "initialize" => {
-            Some(JsonRpcResponse::success(request.id, json!({
+        "initialize" => Some(JsonRpcResponse::success(
+            request.id,
+            json!({
                 "protocolVersion": "2024-11-05",
                 "serverInfo": {
                     "name": "desktop-mcp",
@@ -940,8 +991,8 @@ fn handle_request(request: JsonRpcRequest) -> Option<JsonRpcResponse> {
                         "listChanged": false
                     }
                 }
-            })))
-        }
+            }),
+        )),
 
         "notifications/initialized" | "initialized" => {
             // JSON-RPC 2.0: "The Server MUST NOT reply to a Notification"
@@ -950,16 +1001,23 @@ fn handle_request(request: JsonRpcRequest) -> Option<JsonRpcResponse> {
 
         "tools/list" => {
             let tools = get_tool_definitions();
-            Some(JsonRpcResponse::success(request.id, json!({
-                "tools": tools
-            })))
+            Some(JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "tools": tools
+                }),
+            ))
         }
 
         "tools/call" => {
-            let name = request.params.get("name")
+            let name = request
+                .params
+                .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let args = request.params.get("arguments")
+            let args = request
+                .params
+                .get("arguments")
                 .cloned()
                 .unwrap_or(json!({}));
 
@@ -967,9 +1025,11 @@ fn handle_request(request: JsonRpcRequest) -> Option<JsonRpcResponse> {
             Some(JsonRpcResponse::success(request.id, json!(result)))
         }
 
-        _ => {
-            Some(JsonRpcResponse::error(request.id, -32601, format!("Method not found: {}", request.method)))
-        }
+        _ => Some(JsonRpcResponse::error(
+            request.id,
+            -32601,
+            format!("Method not found: {}", request.method),
+        )),
     }
 }
 

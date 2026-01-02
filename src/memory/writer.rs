@@ -1,13 +1,13 @@
 //! Memory writer for persisting events and chunks.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, Ordering};
-use uuid::Uuid;
 use serde_json::json;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Arc;
+use uuid::Uuid;
 
-use super::supabase::SupabaseClient;
 use super::embed::EmbeddingClient;
-use super::types::{DbTask, DbEvent, DbChunk, DbTaskOutcome, EventKind, MemoryStatus};
+use super::supabase::SupabaseClient;
+use super::types::{DbChunk, DbEvent, DbTask, DbTaskOutcome, EventKind, MemoryStatus};
 
 /// Maximum chunk size in characters.
 const MAX_CHUNK_SIZE: usize = 2000;
@@ -26,18 +26,24 @@ impl MemoryWriter {
     pub fn new(supabase: Arc<SupabaseClient>, embedder: Arc<EmbeddingClient>) -> Self {
         Self { supabase, embedder }
     }
-    
+
     /// Create a new run and return its ID.
     pub async fn create_run(&self, input_text: &str) -> anyhow::Result<Uuid> {
         let run = self.supabase.create_run(input_text).await?;
         Ok(run.id)
     }
-    
+
     /// Update run status.
-    pub async fn update_run_status(&self, run_id: Uuid, status: MemoryStatus) -> anyhow::Result<()> {
-        self.supabase.update_run(run_id, json!({ "status": status.to_string() })).await
+    pub async fn update_run_status(
+        &self,
+        run_id: Uuid,
+        status: MemoryStatus,
+    ) -> anyhow::Result<()> {
+        self.supabase
+            .update_run(run_id, json!({ "status": status.to_string() }))
+            .await
     }
-    
+
     /// Complete a run with final output.
     pub async fn complete_run(
         &self,
@@ -46,16 +52,25 @@ impl MemoryWriter {
         total_cost_cents: i32,
         success: bool,
     ) -> anyhow::Result<()> {
-        let status = if success { MemoryStatus::Completed } else { MemoryStatus::Failed };
-        
-        self.supabase.update_run(run_id, json!({
-            "status": status.to_string(),
-            "final_output": final_output,
-            "total_cost_cents": total_cost_cents,
-            "updated_at": chrono::Utc::now().to_rfc3339()
-        })).await
+        let status = if success {
+            MemoryStatus::Completed
+        } else {
+            MemoryStatus::Failed
+        };
+
+        self.supabase
+            .update_run(
+                run_id,
+                json!({
+                    "status": status.to_string(),
+                    "final_output": final_output,
+                    "total_cost_cents": total_cost_cents,
+                    "updated_at": chrono::Utc::now().to_rfc3339()
+                }),
+            )
+            .await
     }
-    
+
     /// Create a task.
     pub async fn create_task(
         &self,
@@ -81,11 +96,11 @@ impl MemoryWriter {
             created_at: chrono::Utc::now().to_rfc3339(),
             completed_at: None,
         };
-        
+
         let created = self.supabase.create_task(&task).await?;
         Ok(created.id)
     }
-    
+
     /// Update task with completion info.
     pub async fn complete_task(
         &self,
@@ -95,15 +110,20 @@ impl MemoryWriter {
         success: bool,
     ) -> anyhow::Result<()> {
         let status = if success { "completed" } else { "failed" };
-        
-        self.supabase.update_task(task_id, json!({
-            "status": status,
-            "output": output,
-            "spent_cents": spent_cents,
-            "completed_at": chrono::Utc::now().to_rfc3339()
-        })).await
+
+        self.supabase
+            .update_task(
+                task_id,
+                json!({
+                    "status": status,
+                    "output": output,
+                    "spent_cents": spent_cents,
+                    "completed_at": chrono::Utc::now().to_rfc3339()
+                }),
+            )
+            .await
     }
-    
+
     /// Update task metadata.
     pub async fn update_task_metadata(
         &self,
@@ -113,7 +133,7 @@ impl MemoryWriter {
         budget_cents: Option<i32>,
     ) -> anyhow::Result<()> {
         let mut updates = json!({});
-        
+
         if let Some(score) = complexity_score {
             updates["complexity_score"] = json!(score);
         }
@@ -123,14 +143,18 @@ impl MemoryWriter {
         if let Some(budget) = budget_cents {
             updates["budget_cents"] = json!(budget);
         }
-        
+
         self.supabase.update_task(task_id, updates).await
     }
-    
+
     /// Record an event.
-    pub async fn record_event(&self, recorder: &EventRecorder, event: RecordedEvent) -> anyhow::Result<i64> {
+    pub async fn record_event(
+        &self,
+        recorder: &EventRecorder,
+        event: RecordedEvent,
+    ) -> anyhow::Result<i64> {
         let seq = recorder.next_seq();
-        
+
         let db_event = DbEvent {
             id: None,
             run_id: recorder.run_id,
@@ -146,9 +170,9 @@ impl MemoryWriter {
             completion_tokens: event.completion_tokens,
             cost_cents: event.cost_cents,
         };
-        
+
         let event_id = self.supabase.insert_event(&db_event).await?;
-        
+
         // Create chunk if preview text is substantial
         if let Some(ref text) = event.preview_text {
             if text.len() >= MIN_CHUNK_SIZE {
@@ -158,13 +182,14 @@ impl MemoryWriter {
                     Some(event_id),
                     text,
                     event.chunk_meta,
-                ).await?;
+                )
+                .await?;
             }
         }
-        
+
         Ok(event_id)
     }
-    
+
     /// Create chunks for a text and store with embeddings.
     pub async fn create_chunks_for_text(
         &self,
@@ -176,11 +201,11 @@ impl MemoryWriter {
     ) -> anyhow::Result<Vec<Uuid>> {
         let chunks = self.chunk_text(text);
         let mut chunk_ids = Vec::new();
-        
+
         for chunk_text in chunks {
             // Generate embedding
             let embedding = self.embedder.embed(&chunk_text).await?;
-            
+
             let chunk = DbChunk {
                 id: None,
                 run_id,
@@ -189,14 +214,14 @@ impl MemoryWriter {
                 chunk_text,
                 meta: meta.clone(),
             };
-            
+
             let id = self.supabase.insert_chunk(&chunk, &embedding).await?;
             chunk_ids.push(id);
         }
-        
+
         Ok(chunk_ids)
     }
-    
+
     /// Upload blob to storage and return path.
     pub async fn upload_blob(
         &self,
@@ -206,43 +231,51 @@ impl MemoryWriter {
         content_type: &str,
     ) -> anyhow::Result<String> {
         let path = format!("{}/{}", run_id, filename);
-        self.supabase.upload_file("runs-archive", &path, content, content_type).await
+        self.supabase
+            .upload_file("runs-archive", &path, content, content_type)
+            .await
     }
-    
+
     /// Archive a completed run to storage.
     pub async fn archive_run(&self, run_id: Uuid) -> anyhow::Result<String> {
         // Fetch all events
         let events = self.supabase.get_events_for_run(run_id, None).await?;
-        
+
         // Serialize to JSONL
         let mut jsonl = String::new();
         for event in &events {
             jsonl.push_str(&serde_json::to_string(event)?);
             jsonl.push('\n');
         }
-        
+
         // Upload
-        let path = self.upload_blob(
-            run_id,
-            "events.jsonl",
-            jsonl.as_bytes(),
-            "application/x-ndjson",
-        ).await?;
-        
+        let path = self
+            .upload_blob(
+                run_id,
+                "events.jsonl",
+                jsonl.as_bytes(),
+                "application/x-ndjson",
+            )
+            .await?;
+
         // Update run with archive path
-        self.supabase.update_run(run_id, json!({ "archive_path": path.clone() })).await?;
-        
+        self.supabase
+            .update_run(run_id, json!({ "archive_path": path.clone() }))
+            .await?;
+
         Ok(path)
     }
-    
+
     /// Generate and store a summary for a run.
     pub async fn store_run_summary(&self, run_id: Uuid, summary: &str) -> anyhow::Result<()> {
         let embedding = self.embedder.embed(summary).await?;
-        self.supabase.update_run_summary(run_id, summary, &embedding).await
+        self.supabase
+            .update_run_summary(run_id, summary, &embedding)
+            .await
     }
-    
+
     /// Record a task outcome for learning.
-    /// 
+    ///
     /// This captures predictions vs actuals to enable data-driven optimization
     /// of complexity estimation, model selection, and budget allocation.
     pub async fn record_task_outcome(
@@ -275,25 +308,27 @@ impl MemoryWriter {
             iterations,
             tool_calls_count,
         );
-        
+
         // Generate embedding for similarity search
         let embedding = self.embedder.embed(task_description).await.ok();
-        
-        self.supabase.insert_task_outcome(&outcome, embedding.as_deref()).await
+
+        self.supabase
+            .insert_task_outcome(&outcome, embedding.as_deref())
+            .await
     }
-    
+
     /// Split text into chunks.
     fn chunk_text(&self, text: &str) -> Vec<String> {
         let mut chunks = Vec::new();
         let mut current = String::new();
-        
+
         for line in text.lines() {
             if current.len() + line.len() + 1 > MAX_CHUNK_SIZE {
                 if !current.is_empty() {
                     chunks.push(current.trim().to_string());
                     current = String::new();
                 }
-                
+
                 // Handle very long lines
                 if line.len() > MAX_CHUNK_SIZE {
                     for chunk in line.as_bytes().chunks(MAX_CHUNK_SIZE) {
@@ -311,11 +346,11 @@ impl MemoryWriter {
                 current.push_str(line);
             }
         }
-        
+
         if !current.is_empty() && current.len() >= MIN_CHUNK_SIZE {
             chunks.push(current.trim().to_string());
         }
-        
+
         chunks
     }
 }
@@ -334,12 +369,12 @@ impl EventRecorder {
             seq_counter: AtomicI32::new(0),
         }
     }
-    
+
     /// Get the next sequence number.
     pub fn next_seq(&self) -> i32 {
         self.seq_counter.fetch_add(1, Ordering::SeqCst)
     }
-    
+
     /// Get current sequence number without incrementing.
     pub fn current_seq(&self) -> i32 {
         self.seq_counter.load(Ordering::SeqCst)
@@ -374,25 +409,25 @@ impl RecordedEvent {
             cost_cents: None,
         }
     }
-    
+
     /// Set task ID.
     pub fn with_task(mut self, task_id: Uuid) -> Self {
         self.task_id = Some(task_id);
         self
     }
-    
+
     /// Set preview text.
     pub fn with_preview(mut self, text: impl Into<String>) -> Self {
         self.preview_text = Some(text.into());
         self
     }
-    
+
     /// Set metadata.
     pub fn with_meta(mut self, meta: serde_json::Value) -> Self {
         self.meta = Some(meta);
         self
     }
-    
+
     /// Set token usage.
     pub fn with_tokens(mut self, prompt: i32, completion: i32, cost_cents: i32) -> Self {
         self.prompt_tokens = Some(prompt);
@@ -401,4 +436,3 @@ impl RecordedEvent {
         self
     }
 }
-

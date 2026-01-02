@@ -12,13 +12,13 @@ use serde::{Deserialize, Serialize};
 pub struct FailureAnalysis {
     /// The primary failure mode detected
     pub mode: FailureMode,
-    
+
     /// Confidence in this analysis (0.0 - 1.0)
     pub confidence: f64,
-    
+
     /// Evidence supporting this analysis
     pub evidence: Vec<String>,
-    
+
     /// Recommended retry action
     pub recommendation: RetryRecommendation,
 }
@@ -28,16 +28,16 @@ pub struct FailureAnalysis {
 pub enum FailureMode {
     /// Model is capable but ran out of budget/iterations while making progress
     BudgetExhaustedWithProgress,
-    
+
     /// Model is stuck, repeating actions, or making errors
     ModelCapabilityInsufficient,
-    
+
     /// External errors (API failures, tool errors)
     ExternalError,
-    
+
     /// Task is fundamentally impossible or ill-defined
     TaskInfeasible,
-    
+
     /// Unknown failure mode
     Unknown,
 }
@@ -50,31 +50,29 @@ pub enum RetryRecommendation {
         additional_budget_cents: u64,
         reason: String,
     },
-    
+
     /// Try a cheaper model (task is simple, just needs more tokens)
     TryCheaperModel {
         suggested_model: Option<String>,
         additional_budget_cents: u64,
         reason: String,
     },
-    
+
     /// Upgrade to a smarter model (current model lacks capability)
     UpgradeModel {
         suggested_model: Option<String>,
         additional_budget_cents: u64,
         reason: String,
     },
-    
+
     /// Request human intervention or budget approval
     RequestExtension {
         estimated_additional_cents: u64,
         reason: String,
     },
-    
+
     /// Don't retry - task is infeasible
-    DoNotRetry {
-        reason: String,
-    },
+    DoNotRetry { reason: String },
 }
 
 /// Signals from task execution used for failure analysis.
@@ -82,37 +80,37 @@ pub enum RetryRecommendation {
 pub struct ExecutionSignals {
     /// Number of iterations completed
     pub iterations: u32,
-    
+
     /// Maximum iterations allowed
     pub max_iterations: u32,
-    
+
     /// Number of successful tool calls
     pub successful_tool_calls: u32,
-    
+
     /// Number of failed tool calls
     pub failed_tool_calls: u32,
-    
+
     /// Whether any files were created/modified
     pub files_modified: bool,
-    
+
     /// Whether the same tool was called repeatedly with same args
     pub repetitive_actions: bool,
-    
+
     /// Whether there were explicit error messages in output
     pub has_error_messages: bool,
-    
+
     /// Whether progress was being made (partial results visible)
     pub partial_progress: bool,
-    
+
     /// Cost spent so far
     pub cost_spent_cents: u64,
-    
+
     /// Original budget
     pub budget_total_cents: u64,
-    
+
     /// The final output/error message
     pub final_output: String,
-    
+
     /// The model that was used
     pub model_used: String,
 }
@@ -121,41 +119,48 @@ impl ExecutionSignals {
     /// Analyze the signals to determine failure mode.
     pub fn analyze(&self) -> FailureAnalysis {
         let mut evidence = Vec::new();
-        
+
         // Calculate progress indicators
         let iteration_ratio = if self.max_iterations > 0 {
             self.iterations as f64 / self.max_iterations as f64
         } else {
             0.0
         };
-        
+
         let _tool_success_rate = if self.successful_tool_calls + self.failed_tool_calls > 0 {
-            self.successful_tool_calls as f64 / (self.successful_tool_calls + self.failed_tool_calls) as f64
+            self.successful_tool_calls as f64
+                / (self.successful_tool_calls + self.failed_tool_calls) as f64
         } else {
             0.0
         };
-        
+
         let budget_used_ratio = if self.budget_total_cents > 0 {
             self.cost_spent_cents as f64 / self.budget_total_cents as f64
         } else {
             0.0
         };
-        
+
         // Detect capability issues
         let capability_score = self.calculate_capability_score(&mut evidence);
-        
+
         // Detect progress indicators
         let progress_score = self.calculate_progress_score(&mut evidence);
-        
+
         // Determine failure mode
         let (mode, confidence) = if self.has_external_error() {
             evidence.push("External error detected in output".to_string());
             (FailureMode::ExternalError, 0.9)
         } else if capability_score < 0.3 && !self.partial_progress {
-            (FailureMode::ModelCapabilityInsufficient, capability_score.abs())
+            (
+                FailureMode::ModelCapabilityInsufficient,
+                capability_score.abs(),
+            )
         } else if progress_score > 0.6 && budget_used_ratio > 0.8 {
-            evidence.push(format!("High progress score ({:.2}) with budget mostly used ({:.0}%)", 
-                progress_score, budget_used_ratio * 100.0));
+            evidence.push(format!(
+                "High progress score ({:.2}) with budget mostly used ({:.0}%)",
+                progress_score,
+                budget_used_ratio * 100.0
+            ));
             (FailureMode::BudgetExhaustedWithProgress, progress_score)
         } else if iteration_ratio > 0.9 && progress_score > 0.4 {
             evidence.push("Max iterations reached while making progress".to_string());
@@ -165,10 +170,10 @@ impl ExecutionSignals {
         } else {
             (FailureMode::Unknown, 0.4)
         };
-        
+
         // Generate recommendation based on mode
         let recommendation = self.recommend_action(mode, progress_score, capability_score);
-        
+
         FailureAnalysis {
             mode,
             confidence,
@@ -176,77 +181,87 @@ impl ExecutionSignals {
             recommendation,
         }
     }
-    
+
     /// Calculate a score indicating model capability (higher = more capable).
     fn calculate_capability_score(&self, evidence: &mut Vec<String>) -> f64 {
         let mut score: f64 = 0.5; // Start neutral
-        
+
         // Repetitive actions suggest the model is stuck
         if self.repetitive_actions {
             score -= 0.3;
             evidence.push("Model repeating same actions (stuck)".to_string());
         }
-        
+
         // High tool failure rate suggests capability issues
         let tool_success_rate: f64 = if self.successful_tool_calls + self.failed_tool_calls > 0 {
-            self.successful_tool_calls as f64 / (self.successful_tool_calls + self.failed_tool_calls) as f64
+            self.successful_tool_calls as f64
+                / (self.successful_tool_calls + self.failed_tool_calls) as f64
         } else {
             0.5
         };
-        
+
         if tool_success_rate < 0.5 {
             score -= 0.2;
-            evidence.push(format!("Low tool success rate: {:.0}%", tool_success_rate * 100.0));
+            evidence.push(format!(
+                "Low tool success rate: {:.0}%",
+                tool_success_rate * 100.0
+            ));
         } else if tool_success_rate > 0.8 {
             score += 0.2;
-            evidence.push(format!("High tool success rate: {:.0}%", tool_success_rate * 100.0));
+            evidence.push(format!(
+                "High tool success rate: {:.0}%",
+                tool_success_rate * 100.0
+            ));
         }
-        
+
         // Error messages in output suggest problems
         if self.has_error_messages {
             score -= 0.15;
             evidence.push("Error messages present in output".to_string());
         }
-        
+
         // Files modified suggests productive work
         if self.files_modified {
             score += 0.15;
             evidence.push("Files were created/modified (productive work)".to_string());
         }
-        
+
         score.clamp(0.0, 1.0)
     }
-    
+
     /// Calculate a score indicating progress (higher = more progress).
     fn calculate_progress_score(&self, evidence: &mut Vec<String>) -> f64 {
         let mut score: f64 = 0.0;
-        
+
         // Files modified is strong progress signal
         if self.files_modified {
             score += 0.3;
         }
-        
+
         // Successful tool calls indicate progress
         if self.successful_tool_calls > 0 {
             let tool_factor: f64 = (self.successful_tool_calls as f64 / 10.0).min(0.3);
             score += tool_factor;
-            evidence.push(format!("{} successful tool calls", self.successful_tool_calls));
+            evidence.push(format!(
+                "{} successful tool calls",
+                self.successful_tool_calls
+            ));
         }
-        
+
         // Partial progress flag
         if self.partial_progress {
             score += 0.2;
             evidence.push("Partial progress detected".to_string());
         }
-        
+
         // Not stuck in a loop
         if !self.repetitive_actions {
             score += 0.1;
         }
-        
+
         score.clamp(0.0, 1.0)
     }
-    
+
     /// Check if there's an external/API error.
     fn has_external_error(&self) -> bool {
         let output_lower = self.final_output.to_lowercase();
@@ -272,7 +287,7 @@ impl ExecutionSignals {
             || output_lower.contains("too many requests")
             || output_lower.contains("rate limited")
     }
-    
+
     /// Generate a retry recommendation based on analysis.
     fn recommend_action(
         &self,
@@ -284,7 +299,7 @@ impl ExecutionSignals {
             FailureMode::BudgetExhaustedWithProgress => {
                 // Model is capable, just needs more resources
                 let additional = self.estimate_additional_budget(progress_score);
-                
+
                 if capability_score > 0.7 {
                     // Very capable, might even use cheaper model
                     RetryRecommendation::TryCheaperModel {
@@ -307,11 +322,11 @@ impl ExecutionSignals {
                     }
                 }
             }
-            
+
             FailureMode::ModelCapabilityInsufficient => {
                 // Model is struggling, need smarter model
                 let additional = self.cost_spent_cents; // Budget similar to what was spent
-                
+
                 RetryRecommendation::UpgradeModel {
                     suggested_model: self.suggest_smarter_model(),
                     additional_budget_cents: additional.max(50), // At least 50 cents
@@ -322,7 +337,7 @@ impl ExecutionSignals {
                     ),
                 }
             }
-            
+
             FailureMode::ExternalError => {
                 // Check if it's a rate limit error
                 if self.is_rate_limit_error() {
@@ -336,17 +351,16 @@ impl ExecutionSignals {
                     // Other external issue, retry with same setup
                     RetryRecommendation::ContinueSameModel {
                         additional_budget_cents: self.cost_spent_cents / 2, // Less budget needed for retry
-                        reason: "External error occurred. Retry with same configuration.".to_string(),
+                        reason: "External error occurred. Retry with same configuration."
+                            .to_string(),
                     }
                 }
             }
-            
-            FailureMode::TaskInfeasible => {
-                RetryRecommendation::DoNotRetry {
-                    reason: "Task appears to be infeasible or ill-defined.".to_string(),
-                }
-            }
-            
+
+            FailureMode::TaskInfeasible => RetryRecommendation::DoNotRetry {
+                reason: "Task appears to be infeasible or ill-defined.".to_string(),
+            },
+
             FailureMode::Unknown => {
                 // Uncertain - request human decision
                 RetryRecommendation::RequestExtension {
@@ -360,7 +374,7 @@ impl ExecutionSignals {
             }
         }
     }
-    
+
     /// Estimate additional budget needed to complete the task.
     fn estimate_additional_budget(&self, progress_score: f64) -> u64 {
         if progress_score > 0.8 {
@@ -374,7 +388,7 @@ impl ExecutionSignals {
             self.cost_spent_cents
         }
     }
-    
+
     /// Suggest a cheaper model based on current model.
     fn suggest_cheaper_model(&self) -> Option<String> {
         // Model upgrade/downgrade ladder
@@ -385,25 +399,19 @@ impl ExecutionSignals {
             "anthropic/claude-3.5-sonnet" | "anthropic/claude-3.7-sonnet" => {
                 Some("anthropic/claude-3.5-haiku".to_string())
             }
-            "openai/gpt-4o" => {
-                Some("openai/gpt-4o-mini".to_string())
-            }
+            "openai/gpt-4o" => Some("openai/gpt-4o-mini".to_string()),
             _ => None,
         }
     }
-    
+
     /// Suggest a smarter model based on current model.
     fn suggest_smarter_model(&self) -> Option<String> {
         match self.model_used.as_str() {
-            "anthropic/claude-haiku-4.5" | "anthropic/claude-3.5-haiku" | "anthropic/claude-3-haiku" => {
-                Some("anthropic/claude-sonnet-4.5".to_string())
-            }
-            "openai/gpt-4o-mini" => {
-                Some("openai/gpt-4o".to_string())
-            }
-            "google/gemini-2.0-flash-001" => {
-                Some("anthropic/claude-sonnet-4.5".to_string())
-            }
+            "anthropic/claude-haiku-4.5"
+            | "anthropic/claude-3.5-haiku"
+            | "anthropic/claude-3-haiku" => Some("anthropic/claude-sonnet-4.5".to_string()),
+            "openai/gpt-4o-mini" => Some("openai/gpt-4o".to_string()),
+            "google/gemini-2.0-flash-001" => Some("anthropic/claude-sonnet-4.5".to_string()),
             // Already using top-tier model
             "anthropic/claude-sonnet-4.5" | "anthropic/claude-sonnet-4" | "openai/gpt-4o" => {
                 None // Already at top tier
@@ -420,25 +428,17 @@ impl ExecutionSignals {
         // When rate limited, try a model from a different provider
         match self.model_used.as_str() {
             // Anthropic -> OpenAI
-            m if m.starts_with("anthropic/") => {
-                Some("openai/gpt-4o-mini".to_string())
-            }
+            m if m.starts_with("anthropic/") => Some("openai/gpt-4o-mini".to_string()),
             // OpenAI -> Google
-            m if m.starts_with("openai/") => {
-                Some("google/gemini-2.0-flash-001".to_string())
-            }
+            m if m.starts_with("openai/") => Some("google/gemini-2.0-flash-001".to_string()),
             // Google -> Anthropic
-            m if m.starts_with("google/") => {
-                Some("anthropic/claude-haiku-4.5".to_string())
-            }
+            m if m.starts_with("google/") => Some("anthropic/claude-haiku-4.5".to_string()),
             // Mistral -> Anthropic (particularly for free tier rate limits)
             m if m.starts_with("mistralai/") || m.contains("mistral") => {
                 Some("anthropic/claude-haiku-4.5".to_string())
             }
             // Default: try Anthropic
-            _ => {
-                Some("anthropic/claude-haiku-4.5".to_string())
-            }
+            _ => Some("anthropic/claude-haiku-4.5".to_string()),
         }
     }
 }
@@ -448,13 +448,13 @@ impl ExecutionSignals {
 pub struct RetryConfig {
     /// Maximum number of retries
     pub max_retries: u32,
-    
+
     /// Maximum additional budget to allocate (as multiplier of original)
     pub max_budget_multiplier: f64,
-    
+
     /// Whether to allow automatic model upgrades
     pub allow_model_upgrade: bool,
-    
+
     /// Whether to allow automatic model downgrades
     pub allow_model_downgrade: bool,
 }
@@ -496,8 +496,8 @@ mod tests {
 
         // Should recommend cheaper model or continue
         match analysis.recommendation {
-            RetryRecommendation::TryCheaperModel { .. } |
-            RetryRecommendation::ContinueSameModel { .. } => {}
+            RetryRecommendation::TryCheaperModel { .. }
+            | RetryRecommendation::ContinueSameModel { .. } => {}
             _ => panic!("Expected cheaper model or continue recommendation"),
         }
     }
@@ -518,17 +518,18 @@ mod tests {
             final_output: "Unable to complete task".to_string(),
             model_used: "anthropic/claude-haiku-4.5".to_string(),
         };
-        
+
         let analysis = signals.analyze();
         assert_eq!(analysis.mode, FailureMode::ModelCapabilityInsufficient);
-        
+
         // Should recommend model upgrade
         match analysis.recommendation {
-            RetryRecommendation::UpgradeModel { suggested_model, .. } => {
+            RetryRecommendation::UpgradeModel {
+                suggested_model, ..
+            } => {
                 assert!(suggested_model.is_some());
             }
             _ => panic!("Expected upgrade model recommendation"),
         }
     }
 }
-

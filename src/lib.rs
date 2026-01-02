@@ -4,38 +4,37 @@
 //!
 //! This library provides:
 //! - An HTTP API for task submission and monitoring
-//! - A simple agent architecture for direct task execution
-//! - Tool-based execution for autonomous code editing
-//! - Integration with OpenRouter for LLM access
+//! - OpenCode-based agent architecture for task execution
+//! - Integration with Claude Max subscriptions via OpenCode
 //!
-//! ## Architecture (v3: SimpleAgent)
+//! ## Architecture (OpenCode Backend)
 //!
 //! ```text
 //!        ┌──────────────────────────────────┐
-//!        │          SimpleAgent             │
-//!        │  (direct execution, no overhead) │
+//!        │         OpenCodeAgent            │
+//!        │  (delegates to OpenCode server)  │
 //!        └────────────────┬─────────────────┘
 //!                         │
 //!                         ▼
 //!                ┌─────────────────┐
-//!                │  TaskExecutor   │
-//!                │ (tool loop)     │
+//!                │  OpenCode       │
+//!                │  Server         │
 //!                └─────────────────┘
 //! ```
 //!
 //! ## Task Flow
 //! 1. Receive task via API
-//! 2. Resolve model (user override or config default)
-//! 3. Execute via TaskExecutor (tool loop)
-//! 4. Return result (mission completion via complete_mission tool)
+//! 2. Delegate to OpenCode server
+//! 3. Stream real-time events (thinking, tool calls, results)
+//! 4. Return result
 //!
 //! ## Modules
-//! - `agents`: SimpleAgent and TaskExecutor
-//! - `task`: Task, subtask, and verification types
+//! - `agents`: OpenCodeAgent for task delegation
+//! - `task`: Task and verification types
 //! - `budget`: Cost tracking and model pricing
 
-pub mod api;
 pub mod agents;
+pub mod api;
 pub mod budget;
 pub mod config;
 pub mod llm;

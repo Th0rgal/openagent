@@ -55,7 +55,9 @@ impl SessionContext {
 
         // Add brief mission mode indicator
         if self.working_dir.contains("mission-") {
-            out.push_str("\n⚠️ **MISSION MODE**: All files must go in your working directory above.\n");
+            out.push_str(
+                "\n⚠️ **MISSION MODE**: All files must go in your working directory above.\n",
+            );
         }
 
         out
@@ -158,7 +160,7 @@ impl<'a> ContextBuilder<'a> {
     }
 
     /// Build memory context (async, requires memory system).
-    /// 
+    ///
     /// This is the default mode that retrieves all available memory context.
     /// For mission-isolated context, use `build_memory_context_with_options` with a mission_id.
     pub async fn build_memory_context(
@@ -166,11 +168,12 @@ impl<'a> ContextBuilder<'a> {
         memory: &crate::memory::MemorySystem,
         task_description: &str,
     ) -> MemoryContext {
-        self.build_memory_context_with_options(memory, task_description, None).await
+        self.build_memory_context_with_options(memory, task_description, None)
+            .await
     }
 
     /// Build memory context with options for mission isolation.
-    /// 
+    ///
     /// If `mission_id` is provided, memory is filtered to that mission only:
     /// - Past task chunks are skipped (no cross-mission contamination)
     /// - Mission summaries are filtered to the current mission only
@@ -219,20 +222,23 @@ impl<'a> ContextBuilder<'a> {
         // 3. Get mission summaries (filtered by mission in mission mode)
         let summaries = if let Some(mid) = mission_id {
             // In mission mode: only get summaries from THIS mission
-            memory.supabase
+            memory
+                .supabase
                 .get_mission_summaries_for_mission(mid, self.config.mission_summaries_limit)
                 .await
                 .unwrap_or_default()
         } else {
             // Regular mode: get recent summaries from all missions
-            memory.supabase
+            memory
+                .supabase
                 .get_recent_mission_summaries(self.config.mission_summaries_limit)
                 .await
                 .unwrap_or_default()
         };
-        
+
         for summary in summaries {
-            ctx.mission_summaries.push((summary.success, summary.summary));
+            ctx.mission_summaries
+                .push((summary.success, summary.summary));
         }
 
         ctx
@@ -247,7 +253,9 @@ impl<'a> ContextBuilder<'a> {
         let mut context = String::from("Conversation so far:\n");
 
         // Take only the most recent messages
-        let start_idx = history.len().saturating_sub(self.config.max_history_messages);
+        let start_idx = history
+            .len()
+            .saturating_sub(self.config.max_history_messages);
         let recent_history = &history[start_idx..];
 
         for (role, content) in recent_history {

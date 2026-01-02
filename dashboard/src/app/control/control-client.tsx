@@ -23,16 +23,14 @@ import {
   getProgress,
   getRunningMissions,
   cancelMission,
-  listModels,
-  getModelDisplayName,
-  filterAndSortModels,
-  getModelCategory,
+  listProviders,
   getHealth,
   type ControlRunState,
   type Mission,
   type MissionStatus,
   type RunningMissionInfo,
   type UploadProgress,
+  type Provider,
 } from "@/lib/api";
 import {
   Send,
@@ -625,8 +623,8 @@ export default function ControlClient() {
   const [urlInput, setUrlInput] = useState("");
   const [urlDownloading, setUrlDownloading] = useState(false);
 
-  // Model selection state
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  // Provider and model selection state
+  const [providers, setProviders] = useState<Provider[]>([]);
 
   // Server configuration (fetched from health endpoint)
   const [maxIterations, setMaxIterations] = useState<number>(50); // Default fallback
@@ -909,14 +907,14 @@ export default function ControlClient() {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch available models for mission creation
+  // Fetch available providers and models for mission creation
   useEffect(() => {
-    listModels()
+    listProviders()
       .then((data) => {
-        setAvailableModels(filterAndSortModels(data.models));
+        setProviders(data.providers);
       })
       .catch((err) => {
-        console.error("Failed to fetch models:", err);
+        console.error("Failed to fetch providers:", err);
       });
   }, []);
 
@@ -1503,28 +1501,25 @@ export default function ControlClient() {
                       <option value="" className="bg-[#1a1a1a]">
                         Auto (default)
                       </option>
-                      {/* Group models by category */}
-                      {(() => {
-                        const grouped = availableModels.reduce((acc, model) => {
-                          const cat = getModelCategory(model);
-                          if (!acc[cat]) acc[cat] = [];
-                          acc[cat].push(model);
-                          return acc;
-                        }, {} as Record<string, string[]>);
-                        
-                        return Object.entries(grouped).map(([category, models]) => (
-                          <optgroup key={category} label={category} className="bg-[#1a1a1a]">
-                            {models.map((model) => (
-                              <option key={model} value={model} className="bg-[#1a1a1a]">
-                                {getModelDisplayName(model)}
+                      {/* Group models by provider */}
+                      {providers.map((provider) => (
+                        provider.models.length > 0 && (
+                          <optgroup
+                            key={provider.id}
+                            label={`${provider.name}${provider.billing === "subscription" ? " (included)" : ""}`}
+                            className="bg-[#1a1a1a]"
+                          >
+                            {provider.models.map((model) => (
+                              <option key={model.id} value={model.id} className="bg-[#1a1a1a]">
+                                {model.name}
                               </option>
                             ))}
                           </optgroup>
-                        ));
-                      })()}
+                        )
+                      ))}
                     </select>
                     <p className="text-xs text-white/30 mt-1.5">
-                      Auto uses the configured default model
+                      Auto uses Claude Sonnet 4
                     </p>
                   </div>
                   <div className="flex gap-2 pt-1">

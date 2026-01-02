@@ -40,14 +40,8 @@ impl Tool for AnalyzeCodebase {
     }
 
     async fn execute(&self, args: Value, working_dir: &Path) -> anyhow::Result<String> {
-        let path_str = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
-        let max_depth = args
-            .get("max_depth")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(3) as usize;
+        let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let max_depth = args.get("max_depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
 
         let target_path = if Path::new(path_str).is_absolute() {
             Path::new(path_str).to_path_buf()
@@ -56,11 +50,17 @@ impl Tool for AnalyzeCodebase {
         };
 
         if !target_path.exists() {
-            return Ok(format!("Error: Path does not exist: {}", target_path.display()));
+            return Ok(format!(
+                "Error: Path does not exist: {}",
+                target_path.display()
+            ));
         }
 
         let mut result = String::new();
-        result.push_str(&format!("# Codebase Analysis: {}\n\n", target_path.display()));
+        result.push_str(&format!(
+            "# Codebase Analysis: {}\n\n",
+            target_path.display()
+        ));
 
         // 1. Directory structure
         result.push_str("## Directory Structure\n```\n");
@@ -216,14 +216,9 @@ impl Tool for DeepSearch {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("pattern is required"))?;
 
-        let path_str = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
-        let file_types = args
-            .get("file_types")
-            .and_then(|v| v.as_str());
+        let file_types = args.get("file_types").and_then(|v| v.as_str());
 
         let context_lines = args
             .get("context_lines")
@@ -336,10 +331,7 @@ impl Tool for PrepareProject {
     }
 
     async fn execute(&self, args: Value, working_dir: &Path) -> anyhow::Result<String> {
-        let path_str = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
         let target_path = if Path::new(path_str).is_absolute() {
             Path::new(path_str).to_path_buf()
@@ -348,40 +340,67 @@ impl Tool for PrepareProject {
         };
 
         let mut result = String::new();
-        result.push_str(&format!("# Project Preparation: {}\n\n", target_path.display()));
+        result.push_str(&format!(
+            "# Project Preparation: {}\n\n",
+            target_path.display()
+        ));
 
         // Detect project type and provide setup instructions
         let project_types = vec![
-            ("Cargo.toml", "Rust", vec![
-                "Run `cargo build` to compile",
-                "Run `cargo test` to run tests",
-                "Run `cargo fmt` to format code",
-            ]),
-            ("package.json", "Node.js", vec![
-                "Run `npm install` or `bun install` to install dependencies",
-                "Check `scripts` section for available commands",
-                "Run `npm test` or `bun test` to run tests",
-            ]),
-            ("requirements.txt", "Python", vec![
-                "Run `pip install -r requirements.txt` to install dependencies",
-                "Consider using a virtual environment: `python -m venv venv`",
-                "Activate with `source venv/bin/activate` (Linux/Mac)",
-            ]),
-            ("go.mod", "Go", vec![
-                "Run `go mod download` to fetch dependencies",
-                "Run `go build ./...` to compile",
-                "Run `go test ./...` to run tests",
-            ]),
-            ("hardhat.config.js", "Solidity (Hardhat)", vec![
-                "Run `npm install` to install dependencies",
-                "Run `npx hardhat compile` to compile contracts",
-                "Run `npx hardhat test` to run tests",
-            ]),
-            ("foundry.toml", "Solidity (Foundry)", vec![
-                "Run `forge install` to install dependencies",
-                "Run `forge build` to compile contracts",
-                "Run `forge test` to run tests",
-            ]),
+            (
+                "Cargo.toml",
+                "Rust",
+                vec![
+                    "Run `cargo build` to compile",
+                    "Run `cargo test` to run tests",
+                    "Run `cargo fmt` to format code",
+                ],
+            ),
+            (
+                "package.json",
+                "Node.js",
+                vec![
+                    "Run `npm install` or `bun install` to install dependencies",
+                    "Check `scripts` section for available commands",
+                    "Run `npm test` or `bun test` to run tests",
+                ],
+            ),
+            (
+                "requirements.txt",
+                "Python",
+                vec![
+                    "Run `pip install -r requirements.txt` to install dependencies",
+                    "Consider using a virtual environment: `python -m venv venv`",
+                    "Activate with `source venv/bin/activate` (Linux/Mac)",
+                ],
+            ),
+            (
+                "go.mod",
+                "Go",
+                vec![
+                    "Run `go mod download` to fetch dependencies",
+                    "Run `go build ./...` to compile",
+                    "Run `go test ./...` to run tests",
+                ],
+            ),
+            (
+                "hardhat.config.js",
+                "Solidity (Hardhat)",
+                vec![
+                    "Run `npm install` to install dependencies",
+                    "Run `npx hardhat compile` to compile contracts",
+                    "Run `npx hardhat test` to run tests",
+                ],
+            ),
+            (
+                "foundry.toml",
+                "Solidity (Foundry)",
+                vec![
+                    "Run `forge install` to install dependencies",
+                    "Run `forge build` to compile contracts",
+                    "Run `forge test` to run tests",
+                ],
+            ),
         ];
 
         let mut detected = false;
@@ -464,10 +483,7 @@ impl Tool for DebugError {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("error_message is required"))?;
 
-        let path_str = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
         let target_path = if Path::new(path_str).is_absolute() {
             Path::new(path_str).to_path_buf()
@@ -490,12 +506,16 @@ impl Tool for DebugError {
         let file_line_pattern = regex::Regex::new(r"([a-zA-Z0-9_/\.\-]+)\:(\d+)").ok();
         if let Some(re) = file_line_pattern {
             for cap in re.captures_iter(error_message).take(5) {
-                result.push_str(&format!("- File reference: `{}` at line `{}`\n", &cap[1], &cap[2]));
+                result.push_str(&format!(
+                    "- File reference: `{}` at line `{}`\n",
+                    &cap[1], &cap[2]
+                ));
             }
         }
 
         // Look for function/method names
-        let func_pattern = regex::Regex::new(r"(?:fn|function|def|func)\s+([a-zA-Z_][a-zA-Z0-9_]*)").ok();
+        let func_pattern =
+            regex::Regex::new(r"(?:fn|function|def|func)\s+([a-zA-Z_][a-zA-Z0-9_]*)").ok();
         if let Some(re) = func_pattern {
             for cap in re.captures_iter(error_message).take(5) {
                 result.push_str(&format!("- Function: `{}`\n", &cap[1]));
@@ -534,9 +554,16 @@ impl Tool for DebugError {
         // Extract likely search terms (words that look like identifiers)
         let identifier_pattern = regex::Regex::new(r"[a-zA-Z_][a-zA-Z0-9_]{2,}").ok();
         if let Some(re) = identifier_pattern {
-            let identifiers: Vec<_> = re.find_iter(error_message)
+            let identifiers: Vec<_> = re
+                .find_iter(error_message)
                 .map(|m| m.as_str())
-                .filter(|s| !["the", "and", "error", "warning", "info", "debug", "trace", "at", "in", "from", "to"].contains(s))
+                .filter(|s| {
+                    ![
+                        "the", "and", "error", "warning", "info", "debug", "trace", "at", "in",
+                        "from", "to",
+                    ]
+                    .contains(s)
+                })
                 .take(3)
                 .collect();
 

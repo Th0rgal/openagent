@@ -132,12 +132,10 @@ IMPORTANT: Use 'blocked' or 'not_feasible' instead of producing fake/placeholder
             "failed" => MissionStatusValue::Failed,
             "blocked" => MissionStatusValue::Blocked,
             "not_feasible" => MissionStatusValue::NotFeasible,
-            other => {
-                return Err(anyhow::anyhow!(
-                    "Invalid status '{}'. Must be 'completed', 'failed', 'blocked', or 'not_feasible'.",
-                    other
-                ))
-            }
+            other => return Err(anyhow::anyhow!(
+                "Invalid status '{}'. Must be 'completed', 'failed', 'blocked', or 'not_feasible'.",
+                other
+            )),
         };
 
         let Some(control) = &self.control else {
@@ -151,8 +149,9 @@ IMPORTANT: Use 'blocked' or 'not_feasible' instead of producing fake/placeholder
         }
 
         // For blocked/not_feasible, require a summary explaining why
-        if (status == MissionStatusValue::Blocked || status == MissionStatusValue::NotFeasible) 
-            && args.summary.is_none() {
+        if (status == MissionStatusValue::Blocked || status == MissionStatusValue::NotFeasible)
+            && args.summary.is_none()
+        {
             return Ok(format!(
                 "⚠️ A summary is required when marking a mission as '{}'. \n\
                 Please call complete_mission again with a summary explaining:\n\
@@ -191,23 +190,24 @@ IMPORTANT: Use 'blocked' or 'not_feasible' instead of producing fake/placeholder
         }
 
         // Build enhanced summary for blocked/not_feasible
-        let enhanced_summary = if status == MissionStatusValue::Blocked || status == MissionStatusValue::NotFeasible {
-            let mut parts = vec![];
-            if let Some(ref summary) = args.summary {
-                parts.push(summary.clone());
-            }
-            if let Some(ref blocker_type) = args.blocker_type {
-                parts.push(format!("Blocker type: {}", blocker_type));
-            }
-            if let Some(ref attempted) = args.attempted {
-                if !attempted.is_empty() {
-                    parts.push(format!("Attempted: {}", attempted.join(", ")));
+        let enhanced_summary =
+            if status == MissionStatusValue::Blocked || status == MissionStatusValue::NotFeasible {
+                let mut parts = vec![];
+                if let Some(ref summary) = args.summary {
+                    parts.push(summary.clone());
                 }
-            }
-            Some(parts.join("\n"))
-        } else {
-            args.summary.clone()
-        };
+                if let Some(ref blocker_type) = args.blocker_type {
+                    parts.push(format!("Blocker type: {}", blocker_type));
+                }
+                if let Some(ref attempted) = args.attempted {
+                    if !attempted.is_empty() {
+                        parts.push(format!("Attempted: {}", attempted.join(", ")));
+                    }
+                }
+                Some(parts.join("\n"))
+            } else {
+                args.summary.clone()
+            };
 
         // Log blocked/not_feasible status clearly
         if status == MissionStatusValue::Blocked || status == MissionStatusValue::NotFeasible {

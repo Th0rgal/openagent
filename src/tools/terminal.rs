@@ -1,7 +1,7 @@
 //! Terminal/shell command execution tool.
 //!
 //! ## Workspace-First Design
-//! 
+//!
 //! Commands run in the workspace by default:
 //! - `run_command("ls")` → lists workspace contents
 //! - `run_command("cat output/report.md")` → reads workspace file
@@ -19,10 +19,11 @@ use super::{resolve_path_simple as resolve_path, Tool};
 /// Removes binary garbage while preserving valid text.
 fn sanitize_output(bytes: &[u8]) -> String {
     // Check if output appears to be mostly binary
-    let non_printable_count = bytes.iter()
+    let non_printable_count = bytes
+        .iter()
         .filter(|&&b| b < 0x20 && b != b'\n' && b != b'\r' && b != b'\t')
         .count();
-    
+
     // If more than 10% is non-printable (excluding newlines/tabs), it's likely binary
     if bytes.len() > 100 && non_printable_count > bytes.len() / 10 {
         return format!(
@@ -32,10 +33,10 @@ fn sanitize_output(bytes: &[u8]) -> String {
             non_printable_count * 100 / bytes.len()
         );
     }
-    
+
     // Convert to string, replacing invalid UTF-8
     let text = String::from_utf8_lossy(bytes);
-    
+
     // Remove null bytes and other problematic control characters
     // Keep: newlines, tabs, carriage returns
     text.chars()
@@ -46,11 +47,26 @@ fn sanitize_output(bytes: &[u8]) -> String {
 /// Dangerous command patterns that should be blocked.
 /// These patterns cause infinite loops or could damage the system.
 const DANGEROUS_PATTERNS: &[(&str, &str)] = &[
-    ("find /", "Use 'find /root/work/' or a specific directory path"),
-    ("find / ", "Use 'find /root/work/' or a specific directory path"),
-    ("grep -r /", "Use 'grep -r /root/' or a specific directory path"),
-    ("grep -rn /", "Use 'grep -rn /root/' or a specific directory path"),
-    ("grep -R /", "Use 'grep -R /root/' or a specific directory path"),
+    (
+        "find /",
+        "Use 'find /root/work/' or a specific directory path",
+    ),
+    (
+        "find / ",
+        "Use 'find /root/work/' or a specific directory path",
+    ),
+    (
+        "grep -r /",
+        "Use 'grep -r /root/' or a specific directory path",
+    ),
+    (
+        "grep -rn /",
+        "Use 'grep -rn /root/' or a specific directory path",
+    ),
+    (
+        "grep -R /",
+        "Use 'grep -R /root/' or a specific directory path",
+    ),
     ("ls -laR /", "Use a specific directory path instead of root"),
     ("du -sh /", "Use a specific directory path instead of root"),
     ("du -a /", "Use a specific directory path instead of root"),
@@ -64,7 +80,7 @@ const DANGEROUS_PATTERNS: &[(&str, &str)] = &[
 /// Returns Ok(()) if safe, Err with suggestion if blocked.
 fn validate_command(cmd: &str) -> Result<(), String> {
     let cmd_trimmed = cmd.trim();
-    
+
     for (pattern, suggestion) in DANGEROUS_PATTERNS {
         // Check if command starts with the dangerous pattern
         if cmd_trimmed.starts_with(pattern) {
@@ -87,7 +103,7 @@ fn validate_command(cmd: &str) -> Result<(), String> {
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -129,13 +145,13 @@ impl Tool for RunCommand {
         let command = args["command"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'command' argument"))?;
-        
+
         // Validate command against dangerous patterns
         if let Err(msg) = validate_command(command) {
             tracing::warn!("Blocked dangerous command: {}", command);
             return Err(anyhow::anyhow!("{}", msg));
         }
-        
+
         let cwd = args["cwd"]
             .as_str()
             .map(|p| resolve_path(p, working_dir))
@@ -162,7 +178,8 @@ impl Tool for RunCommand {
                 .stderr(Stdio::piped())
                 .output(),
         )
-        .await {
+        .await
+        {
             Ok(Ok(output)) => output,
             Ok(Err(e)) => {
                 tracing::error!("Command execution failed: {}", e);
@@ -170,16 +187,23 @@ impl Tool for RunCommand {
             }
             Err(_) => {
                 tracing::error!("Command timed out after {} seconds", timeout_secs);
-                return Err(anyhow::anyhow!("Command timed out after {} seconds", timeout_secs));
+                return Err(anyhow::anyhow!(
+                    "Command timed out after {} seconds",
+                    timeout_secs
+                ));
             }
         };
 
         let stdout = sanitize_output(&output.stdout);
         let stderr = sanitize_output(&output.stderr);
         let exit_code = output.status.code().unwrap_or(-1);
-        
-        tracing::debug!("Command completed: exit={}, stdout_len={}, stderr_len={}", 
-            exit_code, stdout.len(), stderr.len());
+
+        tracing::debug!(
+            "Command completed: exit={}, stdout_len={}, stderr_len={}",
+            exit_code,
+            stdout.len(),
+            stderr.len()
+        );
 
         let mut result = String::new();
 
@@ -209,4 +233,3 @@ impl Tool for RunCommand {
         Ok(result)
     }
 }
-

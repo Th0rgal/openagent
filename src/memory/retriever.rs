@@ -1,12 +1,12 @@
 //! Memory retriever for semantic search and context packing.
 
+use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
-use serde::Deserialize;
 
-use super::supabase::SupabaseClient;
 use super::embed::EmbeddingClient;
-use super::types::{SearchResult, ContextPack, DbTaskOutcome, ModelStats, HistoricalContext};
+use super::supabase::SupabaseClient;
+use super::types::{ContextPack, DbTaskOutcome, HistoricalContext, ModelStats, SearchResult};
 
 /// Default similarity threshold for vector search.
 const DEFAULT_THRESHOLD: f64 = 0.5;
@@ -40,7 +40,7 @@ impl MemoryRetriever {
             openrouter_key,
         }
     }
-    
+
     /// Search for relevant chunks.
     pub async fn search(
         &self,
@@ -51,28 +51,31 @@ impl MemoryRetriever {
     ) -> anyhow::Result<Vec<SearchResult>> {
         let limit = limit.unwrap_or(DEFAULT_LIMIT);
         let threshold = threshold.unwrap_or(DEFAULT_THRESHOLD);
-        
+
         // Generate query embedding
         let embedding = self.embedder.embed(query).await?;
-        
+
         // Vector search
-        let results = self.supabase.search_chunks(
-            &embedding,
-            threshold,
-            limit * 2, // Fetch more for reranking
-            filter_run_id,
-        ).await?;
-        
+        let results = self
+            .supabase
+            .search_chunks(
+                &embedding,
+                threshold,
+                limit * 2, // Fetch more for reranking
+                filter_run_id,
+            )
+            .await?;
+
         // Rerank if configured
         let results = if self.rerank_model.is_some() && results.len() > 1 {
             self.rerank(query, results, limit).await?
         } else {
             results.into_iter().take(limit).collect()
         };
-        
+
         Ok(results)
     }
-    
+
     /// Retrieve a context pack for prompt injection.
     pub async fn retrieve_context(
         &self,
@@ -81,32 +84,32 @@ impl MemoryRetriever {
         max_tokens: Option<usize>,
     ) -> anyhow::Result<ContextPack> {
         let max_tokens = max_tokens.unwrap_or(MAX_CONTEXT_TOKENS);
-        
+
         // Search for relevant chunks
         let results = self.search(query, Some(20), None, filter_run_id).await?;
-        
+
         // Build context pack within token budget
         let mut chunks = Vec::new();
         let mut total_tokens = 0;
-        
+
         for result in results {
             let chunk_tokens = EmbeddingClient::estimate_tokens(&result.chunk_text);
-            
+
             if total_tokens + chunk_tokens > max_tokens {
                 break;
             }
-            
+
             total_tokens += chunk_tokens;
             chunks.push(result);
         }
-        
+
         Ok(ContextPack {
             chunks,
             estimated_tokens: total_tokens,
             query: query.to_string(),
         })
     }
-    
+
     /// Rerank results using LLM.
     async fn rerank(
         &self,
@@ -118,13 +121,14 @@ impl MemoryRetriever {
             Some(m) => m,
             None => return Ok(results.into_iter().take(limit).collect()),
         };
-        
+
         // Build reranking prompt
-        let passages: Vec<String> = results.iter()
+        let passages: Vec<String> = results
+            .iter()
             .enumerate()
             .map(|(i, r)| format!("[{}] {}", i, truncate(&r.chunk_text, 500)))
             .collect();
-        
+
         let prompt = format!(
             r#"You are a relevance ranking assistant. Given a query and passages, rank the passages by relevance to the query.
 
@@ -139,7 +143,7 @@ Only return the JSON array, nothing else."#,
             query,
             passages.join("\n\n")
         );
-        
+
         // Call LLM for reranking
         let client = reqwest::Client::new();
         let resp = client
@@ -155,15 +159,15 @@ Only return the JSON array, nothing else."#,
             }))
             .send()
             .await?;
-        
+
         let status = resp.status();
         let text = resp.text().await?;
-        
+
         if !status.is_success() {
             tracing::warn!("Rerank failed, using original order: {}", text);
             return Ok(results.into_iter().take(limit).collect());
         }
-        
+
         // Parse response
         let response: RerankResponse = match serde_json::from_str(&text) {
             Ok(r) => r,
@@ -172,12 +176,14 @@ Only return the JSON array, nothing else."#,
                 return Ok(results.into_iter().take(limit).collect());
             }
         };
-        
-        let content = response.choices.first()
+
+        let content = response
+            .choices
+            .first()
             .and_then(|c| c.message.content.as_ref())
             .map(|s| s.trim())
             .unwrap_or("[]");
-        
+
         // Parse ranking
         let ranking: Vec<usize> = match serde_json::from_str(content) {
             Ok(r) => r,
@@ -186,7 +192,7 @@ Only return the JSON array, nothing else."#,
                 return Ok(results.into_iter().take(limit).collect());
             }
         };
-        
+
         // Reorder results
         let mut reranked = Vec::new();
         for idx in ranking.into_iter().take(limit) {
@@ -194,7 +200,7 @@ Only return the JSON array, nothing else."#,
                 reranked.push(results[idx].clone());
             }
         }
-        
+
         // Fill remaining slots if ranking was incomplete
         if reranked.len() < limit {
             for result in results {
@@ -203,10 +209,10 @@ Only return the JSON array, nothing else."#,
                 }
             }
         }
-        
+
         Ok(reranked)
     }
-    
+
     /// Get events for a run.
     pub async fn get_run_events(
         &self,
@@ -215,26 +221,30 @@ Only return the JSON array, nothing else."#,
     ) -> anyhow::Result<Vec<super::types::DbEvent>> {
         self.supabase.get_events_for_run(run_id, limit).await
     }
-    
+
     /// Get tasks for a run.
     pub async fn get_run_tasks(&self, run_id: Uuid) -> anyhow::Result<Vec<super::types::DbTask>> {
         self.supabase.get_tasks_for_run(run_id).await
     }
-    
+
     /// Get a run by ID.
     pub async fn get_run(&self, run_id: Uuid) -> anyhow::Result<Option<super::types::DbRun>> {
         self.supabase.get_run(run_id).await
     }
-    
+
     /// List runs.
-    pub async fn list_runs(&self, limit: usize, offset: usize) -> anyhow::Result<Vec<super::types::DbRun>> {
+    pub async fn list_runs(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> anyhow::Result<Vec<super::types::DbRun>> {
         self.supabase.list_runs(limit, offset).await
     }
-    
+
     // ==================== Learning Methods ====================
-    
+
     /// Get model performance statistics for a given complexity range.
-    /// 
+    ///
     /// Returns historical success rates, cost ratios, etc. for each model
     /// that has been used at the given complexity level.
     pub async fn get_model_stats(
@@ -246,9 +256,9 @@ Only return the JSON array, nothing else."#,
         let max = (complexity + range).min(1.0);
         self.supabase.get_model_stats(min, max).await
     }
-    
+
     /// Find similar past tasks and their outcomes.
-    /// 
+    ///
     /// Uses embedding similarity to find tasks that are semantically similar
     /// to the given task description, then returns their execution outcomes.
     pub async fn find_similar_tasks(
@@ -258,13 +268,15 @@ Only return the JSON array, nothing else."#,
     ) -> anyhow::Result<Vec<DbTaskOutcome>> {
         // Generate embedding for the task description
         let embedding = self.embedder.embed(task_description).await?;
-        
+
         // Search for similar outcomes
-        self.supabase.search_similar_outcomes(&embedding, 0.6, limit).await
+        self.supabase
+            .search_similar_outcomes(&embedding, 0.6, limit)
+            .await
     }
-    
+
     /// Get historical context for a task.
-    /// 
+    ///
     /// Returns aggregated learning data from similar past tasks including:
     /// - Average cost adjustment multiplier
     /// - Average token adjustment multiplier
@@ -275,33 +287,53 @@ Only return the JSON array, nothing else."#,
         limit: usize,
     ) -> anyhow::Result<Option<HistoricalContext>> {
         let similar = self.find_similar_tasks(task_description, limit).await?;
-        
+
         if similar.is_empty() {
             return Ok(None);
         }
-        
+
         // Calculate aggregated stats
         let total = similar.len() as f64;
-        
-        let avg_cost_multiplier = similar.iter()
+
+        let avg_cost_multiplier = similar
+            .iter()
             .filter_map(|o| o.cost_error_ratio)
-            .sum::<f64>() / similar.iter().filter(|o| o.cost_error_ratio.is_some()).count().max(1) as f64;
-        
-        let avg_token_multiplier = similar.iter()
+            .sum::<f64>()
+            / similar
+                .iter()
+                .filter(|o| o.cost_error_ratio.is_some())
+                .count()
+                .max(1) as f64;
+
+        let avg_token_multiplier = similar
+            .iter()
             .filter_map(|o| o.token_error_ratio)
-            .sum::<f64>() / similar.iter().filter(|o| o.token_error_ratio.is_some()).count().max(1) as f64;
-        
+            .sum::<f64>()
+            / similar
+                .iter()
+                .filter(|o| o.token_error_ratio.is_some())
+                .count()
+                .max(1) as f64;
+
         let success_count = similar.iter().filter(|o| o.success).count() as f64;
         let similar_success_rate = success_count / total;
-        
+
         Ok(Some(HistoricalContext {
             similar_outcomes: similar,
-            avg_cost_multiplier: if avg_cost_multiplier.is_nan() { 1.0 } else { avg_cost_multiplier },
-            avg_token_multiplier: if avg_token_multiplier.is_nan() { 1.0 } else { avg_token_multiplier },
+            avg_cost_multiplier: if avg_cost_multiplier.is_nan() {
+                1.0
+            } else {
+                avg_cost_multiplier
+            },
+            avg_token_multiplier: if avg_token_multiplier.is_nan() {
+                1.0
+            } else {
+                avg_token_multiplier
+            },
             similar_success_rate,
         }))
     }
-    
+
     /// Get global learning statistics.
     pub async fn get_learning_stats(&self) -> anyhow::Result<serde_json::Value> {
         self.supabase.get_global_stats().await
@@ -332,4 +364,3 @@ struct RerankChoice {
 struct RerankMessage {
     content: Option<String>,
 }
-

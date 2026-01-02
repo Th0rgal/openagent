@@ -20,12 +20,8 @@ pub struct OpenCodeAgent {
 
 impl OpenCodeAgent {
     pub fn new(config: Config) -> Self {
-        let base_url = config
-            .opencode_base_url
-            .clone()
-            .unwrap_or_else(|| "http://127.0.0.1:4096".to_string());
         let client = OpenCodeClient::new(
-            base_url,
+            config.opencode_base_url.clone(),
             config.opencode_agent.clone(),
             config.opencode_permissive,
         );
@@ -42,9 +38,14 @@ impl OpenCodeAgent {
             .with_status("running");
 
         root.add_child(
-            AgentTreeNode::new("opencode", "OpenCodeSession", "OpenCode Session", "Delegating to OpenCode")
-                .with_budget(budget_cents, 0)
-                .with_status("running"),
+            AgentTreeNode::new(
+                "opencode",
+                "OpenCodeSession",
+                "OpenCode Session",
+                "Delegating to OpenCode",
+            )
+            .with_budget(budget_cents, 0)
+            .with_status("running"),
         );
 
         root
@@ -67,13 +68,21 @@ impl OpenCodeAgent {
                 done: false,
                 mission_id: ctx.mission_id,
             },
-            OpenCodeEvent::ToolCall { tool_call_id, name, args } => AgentEvent::ToolCall {
+            OpenCodeEvent::ToolCall {
+                tool_call_id,
+                name,
+                args,
+            } => AgentEvent::ToolCall {
                 tool_call_id: tool_call_id.clone(),
                 name: name.clone(),
                 args: args.clone(),
                 mission_id: ctx.mission_id,
             },
-            OpenCodeEvent::ToolResult { tool_call_id, name, result } => AgentEvent::ToolResult {
+            OpenCodeEvent::ToolResult {
+                tool_call_id,
+                name,
+                result,
+            } => AgentEvent::ToolResult {
                 tool_call_id: tool_call_id.clone(),
                 name: name.clone(),
                 result: result.clone(),
@@ -117,7 +126,8 @@ impl Agent for OpenCodeAgent {
         );
 
         if ctx.is_cancelled() {
-            return AgentResult::failure("Task cancelled", 0).with_terminal_reason(TerminalReason::Cancelled);
+            return AgentResult::failure("Task cancelled", 0)
+                .with_terminal_reason(TerminalReason::Cancelled);
         }
 
         // OpenCode requires an absolute path
@@ -149,20 +159,36 @@ impl Agent for OpenCodeAgent {
         let agent_name = self.default_agent.as_deref();
 
         // Use streaming to get real-time events
-        let streaming_result = self.client.send_message_streaming(
-            &session.id,
-            &directory,
-            task.description(),
-            model_override.as_deref(),
-            agent_name,
-        ).await;
+        let streaming_result = self
+            .client
+            .send_message_streaming(
+                &session.id,
+                &directory,
+                task.description(),
+                model_override.as_deref(),
+                agent_name,
+            )
+            .await;
 
         let (mut event_rx, message_handle) = match streaming_result {
             Ok((rx, handle)) => (rx, handle),
             Err(e) => {
                 // Fall back to non-streaming if SSE fails
-                tracing::warn!("OpenCode SSE streaming failed, falling back to blocking: {}", e);
-                return self.execute_blocking(task, ctx, &session.id, &directory, model_override.as_deref(), agent_name, tree).await;
+                tracing::warn!(
+                    "OpenCode SSE streaming failed, falling back to blocking: {}",
+                    e
+                );
+                return self
+                    .execute_blocking(
+                        task,
+                        ctx,
+                        &session.id,
+                        &directory,
+                        model_override.as_deref(),
+                        agent_name,
+                        tree,
+                    )
+                    .await;
             }
         };
 

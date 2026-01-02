@@ -182,12 +182,7 @@ impl ModelResolver {
         let normalized = Self::normalize(model_id);
         if let Some(target) = self.aliases.get(&normalized) {
             let family = self.model_to_family.get(target).map(|s| s.as_str());
-            return ResolvedModel::upgraded(
-                model_id,
-                target,
-                "Fuzzy match to latest",
-                family,
-            );
+            return ResolvedModel::upgraded(model_id, target, "Fuzzy match to latest", family);
         }
 
         // 4. Try to match family name directly

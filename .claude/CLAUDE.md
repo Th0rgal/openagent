@@ -6,11 +6,11 @@ Minimal autonomous coding agent in Rust with **full machine access** (not sandbo
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| Backend (Rust) | `src/` | HTTP API + agent system |
+| Backend (Rust) | `src/` | HTTP API + OpenCode integration |
 | Dashboard (Next.js) | `dashboard/` | Web UI (uses **Bun**, not npm) |
 | iOS Dashboard | `ios_dashboard/` | Native iOS app (Swift/SwiftUI) |
 | MCP configs | `.open_agent/mcp/config.json` | Model Context Protocol servers |
-| Tuning | `.open_agent/tuning.json` | Calibration data |
+| Providers | `.open_agent/providers.json` | Provider configuration |
 
 ## Commands
 
@@ -40,9 +40,10 @@ ssh root@95.216.112.253 'cd /root/open_agent && git pull && cargo build --releas
 
 ## Architecture
 
+Open Agent uses OpenCode as its execution backend, enabling Claude Max subscription usage.
+
 ```
-SimpleAgent
-    └── TaskExecutor → runs tools in a loop with auto-upgrade
+Dashboard → Open Agent API → OpenCode Server → Anthropic API (Claude Max)
 ```
 
 ### Module Map
@@ -50,11 +51,10 @@ SimpleAgent
 ```
 src/
 ├── agents/           # Agent system
-│   ├── simple.rs     # SimpleAgent (main entry point)
-│   └── leaf/         # TaskExecutor
-├── budget/           # Cost tracking, pricing, smart retry
+│   └── opencode.rs   # OpenCodeAgent (delegates to OpenCode server)
+├── budget/           # Cost tracking, pricing
 │   ├── benchmarks.rs # Model capability scores
-│   ├── pricing.rs    # OpenRouter pricing + model allowlist
+│   ├── pricing.rs    # Model pricing
 │   └── resolver.rs   # Model family auto-upgrade system
 ├── memory/           # Supabase + pgvector persistence
 │   ├── supabase.rs   # Database client
@@ -62,38 +62,26 @@ src/
 │   ├── retriever.rs  # Semantic search
 │   └── writer.rs     # Event recording
 ├── mcp/              # MCP server registry + config
-├── llm/              # OpenRouter client
-├── tools/            # File ops, terminal, git, web, search, desktop
+├── opencode/         # OpenCode client
+├── tools/            # Desktop MCP tools
 ├── task/             # Task types + verification
 ├── config.rs         # Config + env vars
 └── api/              # HTTP routes (axum)
 ```
 
-## Execution Backends
+## OpenCode Configuration
 
-Open Agent supports two execution backends:
-
-### Local Backend (default without OpenCode)
-Uses the built-in agent loop with OpenRouter for LLM access.
-
-### OpenCode Backend (recommended for Claude Max)
-Delegates task execution to an external OpenCode server, enabling use of Claude Max subscription.
+OpenCode is required for task execution. It connects to an OpenCode server that handles LLM interactions.
 
 ```bash
-# Enable OpenCode backend
-AGENT_BACKEND=opencode
+# Optional configuration (defaults shown)
 OPENCODE_BASE_URL=http://127.0.0.1:4096
 OPENCODE_AGENT=build
 OPENCODE_PERMISSIVE=true
 ```
 
-**Architecture with OpenCode:**
-```
-Dashboard → Open Agent API → OpenCode Server → Anthropic API (Claude Max)
-```
-
 **Desktop Tools with OpenCode:**
-To enable desktop tools (i3, Xvfb, screenshots) when using the OpenCode backend:
+To enable desktop tools (i3, Xvfb, screenshots):
 
 1. Build the MCP server: `cargo build --release --bin desktop-mcp`
 2. Ensure `opencode.json` is in the project root with the desktop MCP config
@@ -123,14 +111,10 @@ The `opencode.json` configures MCP servers for desktop and browser automation:
 
 ## Model Preferences
 
-**With OpenCode backend:** Use Claude models via your Claude Max subscription.
-- `anthropic/claude-opus-4-5-20251101` - Most capable, recommended
-- `anthropic/claude-sonnet-4-20250514` - Good balance of speed/capability
-
-**With Local backend (OpenRouter):**
-1. `google/gemini-3-flash-preview` - Fast, cheap, excellent tool use
-2. `qwen/qwen3-235b-a22b-instruct` - Strong reasoning, affordable
-3. `deepseek/deepseek-v3.2` - Good value, capable
+Use Claude models via your Claude Max subscription:
+- `claude-opus-4-5-20251101` - Most capable, recommended
+- `claude-sonnet-4-20250514` - Good balance of speed/capability (default)
+- `claude-3-5-haiku-20241022` - Fastest, most economical
 
 ## API Endpoints
 
@@ -143,13 +127,9 @@ The `opencode.json` configures MCP servers for desktop and browser automation:
 | `POST` | `/api/control/message` | Send message to agent |
 | `GET` | `/api/control/stream` | SSE event stream |
 | `GET` | `/api/models` | List available models |
+| `GET` | `/api/providers` | List available providers |
 
 ## Environment Variables
-
-### Required
-| Variable | Description |
-|----------|-------------|
-| `OPENROUTER_API_KEY` | OpenRouter API key (sk-or-v1-...) |
 
 ### Production Auth
 | Variable | Description |
@@ -161,14 +141,17 @@ The `opencode.json` configures MCP servers for desktop and browser automation:
 ### Optional
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEFAULT_MODEL` | `google/gemini-3-flash-preview` | Default LLM |
+| `DEFAULT_MODEL` | `claude-sonnet-4-20250514` | Default LLM model |
+| `OPENCODE_BASE_URL` | `http://127.0.0.1:4096` | OpenCode server URL |
+| `OPENCODE_AGENT` | - | OpenCode agent name |
+| `OPENCODE_PERMISSIVE` | `true` | Auto-allow OpenCode permissions |
 | `WORKING_DIR` | `/root` (prod), `.` (dev) | Working directory |
 | `HOST` | `127.0.0.1` | Bind address |
 | `PORT` | `3000` | Server port |
 | `MAX_ITERATIONS` | `50` | Max agent loop iterations |
 | `SUPABASE_URL` | - | Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | - | Service role key |
-| `TAVILY_API_KEY` | - | Web search API key |
+| `OPENROUTER_API_KEY` | - | Only needed for memory embeddings |
 
 ## Secrets
 

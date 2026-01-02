@@ -25,7 +25,7 @@ use crate::config::Config;
 use crate::llm::OpenRouterClient;
 use crate::mcp::McpRegistry;
 use crate::memory::{ContextBuilder, MemorySystem};
-use crate::task::{VerificationCriteria, DeliverableSet, extract_deliverables};
+use crate::task::{extract_deliverables, DeliverableSet, VerificationCriteria};
 use crate::tools::ToolRegistry;
 
 use super::control::{
@@ -56,13 +56,9 @@ pub enum MissionHealth {
         last_state: String,
     },
     /// Mission completed without deliverables
-    MissingDeliverables {
-        missing: Vec<String>,
-    },
+    MissingDeliverables { missing: Vec<String> },
     /// Mission ended unexpectedly
-    UnexpectedEnd {
-        reason: String,
-    },
+    UnexpectedEnd { reason: String },
 }
 
 /// A message queued for this mission.
@@ -77,37 +73,37 @@ pub struct QueuedMessage {
 pub struct MissionRunner {
     /// Mission ID
     pub mission_id: Uuid,
-    
+
     /// Model override for this mission (if any)
     pub model_override: Option<String>,
-    
+
     /// Current state
     pub state: MissionRunState,
-    
+
     /// Message queue for this mission
     pub queue: VecDeque<QueuedMessage>,
-    
+
     /// Conversation history: (role, content)
     pub history: Vec<(String, String)>,
-    
+
     /// Cancellation token for the current execution
     pub cancel_token: Option<CancellationToken>,
-    
+
     /// Running task handle
     running_handle: Option<tokio::task::JoinHandle<(Uuid, String, AgentResult)>>,
-    
+
     /// Tree snapshot for this mission
     pub tree_snapshot: Arc<RwLock<Option<AgentTreeNode>>>,
-    
+
     /// Progress snapshot for this mission
     pub progress_snapshot: Arc<RwLock<ExecutionProgress>>,
-    
+
     /// Expected deliverables extracted from the initial message
     pub deliverables: DeliverableSet,
-    
+
     /// Last activity timestamp for health monitoring
     pub last_activity: Instant,
-    
+
     /// Whether complete_mission was explicitly called
     pub explicitly_completed: bool,
 }
@@ -121,7 +117,10 @@ pub fn mission_working_dir(base_work_dir: &std::path::Path, mission_id: Uuid) ->
 
 /// Ensure the mission working directory exists with proper structure.
 /// Creates: mission-xxx/, mission-xxx/output/, mission-xxx/temp/
-pub fn ensure_mission_dir(base_work_dir: &std::path::Path, mission_id: Uuid) -> std::io::Result<PathBuf> {
+pub fn ensure_mission_dir(
+    base_work_dir: &std::path::Path,
+    mission_id: Uuid,
+) -> std::io::Result<PathBuf> {
     let dir = mission_working_dir(base_work_dir, mission_id);
     std::fs::create_dir_all(dir.join("output"))?;
     std::fs::create_dir_all(dir.join("temp"))?;
@@ -146,26 +145,29 @@ impl MissionRunner {
             explicitly_completed: false,
         }
     }
-    
+
     /// Check if this runner is currently executing.
     pub fn is_running(&self) -> bool {
-        matches!(self.state, MissionRunState::Running | MissionRunState::WaitingForTool)
+        matches!(
+            self.state,
+            MissionRunState::Running | MissionRunState::WaitingForTool
+        )
     }
-    
+
     /// Check if this runner has finished.
     pub fn is_finished(&self) -> bool {
         matches!(self.state, MissionRunState::Finished)
     }
-    
+
     /// Update the last activity timestamp.
     pub fn touch(&mut self) {
         self.last_activity = Instant::now();
     }
-    
+
     /// Check the health of this mission.
     pub async fn check_health(&self) -> MissionHealth {
         let seconds_since = self.last_activity.elapsed().as_secs();
-        
+
         // If running and no activity for 60+ seconds, consider stalled
         if self.is_running() && seconds_since > 60 {
             return MissionHealth::Stalled {
@@ -173,18 +175,21 @@ impl MissionRunner {
                 last_state: format!("{:?}", self.state),
             };
         }
-        
+
         // If finished without explicit completion and has deliverables, check them
-        if !self.is_running() && !self.explicitly_completed && !self.deliverables.deliverables.is_empty() {
+        if !self.is_running()
+            && !self.explicitly_completed
+            && !self.deliverables.deliverables.is_empty()
+        {
             let missing = self.deliverables.missing_paths().await;
             if !missing.is_empty() {
                 return MissionHealth::MissingDeliverables { missing };
             }
         }
-        
+
         MissionHealth::Healthy
     }
-    
+
     /// Extract deliverables from initial mission message.
     pub fn set_initial_message(&mut self, message: &str) {
         self.deliverables = extract_deliverables(message);
@@ -193,13 +198,15 @@ impl MissionRunner {
                 "Mission {} has {} expected deliverables: {:?}",
                 self.mission_id,
                 self.deliverables.deliverables.len(),
-                self.deliverables.deliverables.iter()
+                self.deliverables
+                    .deliverables
+                    .iter()
                     .filter_map(|d| d.path())
                     .collect::<Vec<_>>()
             );
         }
     }
-    
+
     /// Queue a message for this mission.
     pub fn queue_message(&mut self, id: Uuid, content: String, model_override: Option<String>) {
         self.queue.push_back(QueuedMessage {
@@ -208,14 +215,14 @@ impl MissionRunner {
             model_override: model_override.or_else(|| self.model_override.clone()),
         });
     }
-    
+
     /// Cancel the current execution.
     pub fn cancel(&mut self) {
         if let Some(token) = &self.cancel_token {
             token.cancel();
         }
     }
-    
+
     /// Start executing the next queued message (if any and not already running).
     /// Returns true if execution was started.
     pub fn start_next(
@@ -237,18 +244,18 @@ impl MissionRunner {
         if self.is_running() {
             return false;
         }
-        
+
         // Get next message from queue
         let msg = match self.queue.pop_front() {
             Some(m) => m,
             None => return false,
         };
-        
+
         self.state = MissionRunState::Running;
-        
+
         let cancel = CancellationToken::new();
         self.cancel_token = Some(cancel.clone());
-        
+
         let hist_snapshot = self.history.clone();
         let tree_ref = Arc::clone(&self.tree_snapshot);
         let progress_ref = Arc::clone(&self.progress_snapshot);
@@ -256,20 +263,20 @@ impl MissionRunner {
         let model_override = msg.model_override;
         let user_message = msg.content.clone();
         let msg_id = msg.id;
-        
+
         // Create mission control for complete_mission tool
         let mission_ctrl = crate::tools::mission::MissionControl {
             current_mission_id: current_mission,
             cmd_tx: mission_cmd_tx,
         };
-        
+
         // Emit user message event with mission context
         let _ = events_tx.send(AgentEvent::UserMessage {
             id: msg_id,
             content: user_message.clone(),
             mission_id: Some(mission_id),
         });
-        
+
         let handle = tokio::spawn(async move {
             let result = run_mission_turn(
                 config,
@@ -294,32 +301,34 @@ impl MissionRunner {
             .await;
             (msg_id, user_message, result)
         });
-        
+
         self.running_handle = Some(handle);
         true
     }
-    
+
     /// Poll for completion. Returns Some(result) if finished.
     pub async fn poll_completion(&mut self) -> Option<(Uuid, String, AgentResult)> {
         let handle = self.running_handle.take()?;
-        
+
         // Check if handle is finished
         if handle.is_finished() {
             match handle.await {
                 Ok(result) => {
                     self.touch(); // Update last activity
                     self.state = MissionRunState::Queued; // Ready for next message
-                    
+
                     // Check if complete_mission was called
-                    if result.2.output.contains("Mission marked as") || 
-                       result.2.output.contains("complete_mission") {
+                    if result.2.output.contains("Mission marked as")
+                        || result.2.output.contains("complete_mission")
+                    {
                         self.explicitly_completed = true;
                     }
-                    
+
                     // Add to history
                     self.history.push(("user".to_string(), result.1.clone()));
-                    self.history.push(("assistant".to_string(), result.2.output.clone()));
-                    
+                    self.history
+                        .push(("assistant".to_string(), result.2.output.clone()));
+
                     // Log warning if deliverables are missing and task ended
                     if !self.explicitly_completed && !self.deliverables.deliverables.is_empty() {
                         let missing = self.deliverables.missing_paths().await;
@@ -331,7 +340,7 @@ impl MissionRunner {
                             );
                         }
                     }
-                    
+
                     Some(result)
                 }
                 Err(e) => {
@@ -346,7 +355,7 @@ impl MissionRunner {
             None
         }
     }
-    
+
     /// Check if the running task is finished (non-blocking).
     pub fn check_finished(&self) -> bool {
         self.running_handle
@@ -385,23 +394,29 @@ async fn run_mission_turn(
     // Extract deliverables to include in instructions
     let deliverable_set = extract_deliverables(&user_message);
     let deliverable_reminder = if !deliverable_set.deliverables.is_empty() {
-        let paths: Vec<String> = deliverable_set.deliverables.iter()
+        let paths: Vec<String> = deliverable_set
+            .deliverables
+            .iter()
             .filter_map(|d| d.path())
             .map(|p| p.display().to_string())
             .collect();
         format!(
             "\n\n**REQUIRED DELIVERABLES** (do not stop until these exist):\n{}\n",
-            paths.iter().map(|p| format!("- {}", p)).collect::<Vec<_>>().join("\n")
+            paths
+                .iter()
+                .map(|p| format!("- {}", p))
+                .collect::<Vec<_>>()
+                .join("\n")
         )
     } else {
         String::new()
     };
 
-    let is_multi_step = deliverable_set.is_research_task || 
-                        deliverable_set.requires_report ||
-                        user_message.contains("1.") || 
-                        user_message.contains("- ") ||
-                        user_message.to_lowercase().contains("then");
+    let is_multi_step = deliverable_set.is_research_task
+        || deliverable_set.requires_report
+        || user_message.contains("1.")
+        || user_message.contains("- ")
+        || user_message.to_lowercase().contains("then");
 
     let multi_step_instructions = if is_multi_step {
         r#"
@@ -448,7 +463,11 @@ async fn run_mission_turn(
     let base_work_dir = config.working_dir.join("work");
     let mission_work_dir = match ensure_mission_dir(&base_work_dir, mission_id) {
         Ok(dir) => {
-            tracing::info!("Mission {} working directory: {}", mission_id, dir.display());
+            tracing::info!(
+                "Mission {} working directory: {}",
+                mission_id,
+                dir.display()
+            );
             dir
         }
         Err(e) => {

@@ -238,7 +238,7 @@ fn html_decode(s: &str) -> String {
 }
 
 /// Fetch content from a URL.
-/// 
+///
 /// For large responses (>20KB), saves the full content to /root/tmp/ and returns
 /// the file path along with a preview. This ensures no data is lost due to truncation.
 pub struct FetchUrl;
@@ -317,7 +317,7 @@ impl Tool for FetchUrl {
         if body.len() > MAX_INLINE_SIZE {
             // Use /tmp which works on all systems (macOS, Linux)
             let tmp_dir = Path::new("/tmp");
-            
+
             // Generate unique filename
             let file_id = uuid::Uuid::new_v4();
             let filename = format!("fetch_{}.{}", file_id, extension);
@@ -330,7 +330,7 @@ impl Tool for FetchUrl {
             let preview_len = std::cmp::min(2000, display_content.len());
             let safe_end = crate::memory::safe_truncate_index(&display_content, preview_len);
             let preview = &display_content[..safe_end];
-            
+
             Ok(format!(
                 "Response too large ({} bytes). Full content saved to: {}\n\nPreview (first {} chars):\n{}{}",
                 body.len(),
@@ -384,10 +384,7 @@ fn extract_text_from_html(html: &str) -> String {
     }
 
     // Clean up whitespace
-    let result: String = result
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let result: String = result.split_whitespace().collect::<Vec<_>>().join(" ");
 
     html_decode(&result)
 }

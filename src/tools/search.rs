@@ -1,7 +1,7 @@
 //! Code search tools: grep/regex search.
 //!
 //! ## Workspace-First Design
-//! 
+//!
 //! Searches workspace by default:
 //! - `grep_search("TODO")` → searches in `{workspace}/`
 //! - `grep_search("error", "/var/log")` → searches system logs
@@ -127,10 +127,7 @@ impl Tool for GrepSearch {
 
         let line_count = result.lines().count();
         if line_count >= 100 {
-            Ok(format!(
-                "{}\n\n... (showing first 100 matches)",
-                result
-            ))
+            Ok(format!("{}\n\n... (showing first 100 matches)", result))
         } else {
             Ok(result)
         }
@@ -145,4 +142,3 @@ fn which_exists(cmd: &str) -> bool {
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
-

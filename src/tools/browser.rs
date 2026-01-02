@@ -237,8 +237,8 @@ async fn get_browser_session() -> anyhow::Result<Arc<Mutex<Option<BrowserSession
             (browser_instance, ext_dir)
         } else {
             // Connect to existing Chrome
-            let cdp_url = std::env::var("BROWSER_CDP_URL")
-                .unwrap_or_else(|_| DEFAULT_CDP_URL.to_string());
+            let cdp_url =
+                std::env::var("BROWSER_CDP_URL").unwrap_or_else(|_| DEFAULT_CDP_URL.to_string());
 
             tracing::info!("Connecting to existing Chrome at {}", cdp_url);
 
@@ -280,7 +280,7 @@ async fn get_browser_session() -> anyhow::Result<Arc<Mutex<Option<BrowserSession
 const GOST_LOCAL_PORT: u16 = 18080;
 
 /// Launch a new Chrome instance with optional proxy configuration.
-/// 
+///
 /// When proxy auth is needed, we start a local gost proxy forwarder that handles
 /// authentication with the upstream proxy. Chrome connects to the local proxy
 /// without needing any auth.
@@ -325,10 +325,16 @@ async fn launch_browser(
         if proxy.username.is_some() {
             // Start local gost proxy forwarder to handle authentication
             start_gost_forwarder(proxy).await?;
-            
+
             // Point Chrome to local proxy (no auth needed)
-            config_builder = config_builder.arg(format!("--proxy-server=http://127.0.0.1:{}", GOST_LOCAL_PORT));
-            tracing::info!("Chrome using local proxy forwarder at 127.0.0.1:{}", GOST_LOCAL_PORT);
+            config_builder = config_builder.arg(format!(
+                "--proxy-server=http://127.0.0.1:{}",
+                GOST_LOCAL_PORT
+            ));
+            tracing::info!(
+                "Chrome using local proxy forwarder at 127.0.0.1:{}",
+                GOST_LOCAL_PORT
+            );
         } else {
             // No auth needed, connect directly
             config_builder = config_builder.arg(&proxy.chrome_arg());
@@ -357,7 +363,7 @@ async fn launch_browser(
 /// gost is a Go-based tunnel tool that supports proxy chaining with auth.
 async fn start_gost_forwarder(proxy: &ProxyConfig) -> anyhow::Result<()> {
     use tokio::process::Command;
-    
+
     // Check if gost is already running on our port
     if let Ok(output) = Command::new("lsof")
         .args(["-i", &format!(":{}", GOST_LOCAL_PORT)])
@@ -365,11 +371,14 @@ async fn start_gost_forwarder(proxy: &ProxyConfig) -> anyhow::Result<()> {
         .await
     {
         if !output.stdout.is_empty() {
-            tracing::info!("gost proxy forwarder already running on port {}", GOST_LOCAL_PORT);
+            tracing::info!(
+                "gost proxy forwarder already running on port {}",
+                GOST_LOCAL_PORT
+            );
             return Ok(());
         }
     }
-    
+
     // Build upstream proxy URL with auth
     let upstream_url = if let (Some(user), Some(pass)) = (&proxy.username, &proxy.password) {
         format!(
@@ -379,7 +388,7 @@ async fn start_gost_forwarder(proxy: &ProxyConfig) -> anyhow::Result<()> {
     } else {
         format!("{}://{}:{}", proxy.scheme, proxy.host, proxy.port)
     };
-    
+
     // Start gost
     let gost = Command::new("gost")
         .args([
@@ -389,21 +398,26 @@ async fn start_gost_forwarder(proxy: &ProxyConfig) -> anyhow::Result<()> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| anyhow::anyhow!(
-            "Failed to start gost proxy forwarder: {}. Make sure gost is installed.", e
-        ))?;
-    
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to start gost proxy forwarder: {}. Make sure gost is installed.",
+                e
+            )
+        })?;
+
     // Wait for gost to be ready
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    
+
     tracing::info!(
         "Started gost proxy forwarder on 127.0.0.1:{} -> {}:{}",
-        GOST_LOCAL_PORT, proxy.host, proxy.port
+        GOST_LOCAL_PORT,
+        proxy.host,
+        proxy.port
     );
-    
+
     // Keep gost running (leak the handle intentionally)
     std::mem::forget(gost);
-    
+
     Ok(())
 }
 
@@ -411,19 +425,20 @@ async fn start_gost_forwarder(proxy: &ProxyConfig) -> anyhow::Result<()> {
 async fn start_virtual_display() -> anyhow::Result<String> {
     use std::sync::atomic::{AtomicU32, Ordering};
     use tokio::process::Command;
-    
+
     static DISPLAY_COUNTER: AtomicU32 = AtomicU32::new(50);
-    
+
     let display_num = DISPLAY_COUNTER.fetch_add(1, Ordering::SeqCst);
     let display_id = format!(":{}", display_num);
-    let resolution = std::env::var("DESKTOP_RESOLUTION").unwrap_or_else(|_| "1920x1080".to_string());
-    
+    let resolution =
+        std::env::var("DESKTOP_RESOLUTION").unwrap_or_else(|_| "1920x1080".to_string());
+
     // Clean up any existing files
     let lock_file = format!("/tmp/.X{}-lock", display_num);
     let socket_file = format!("/tmp/.X11-unix/X{}", display_num);
     let _ = std::fs::remove_file(&lock_file);
     let _ = std::fs::remove_file(&socket_file);
-    
+
     // Start Xvfb
     let xvfb_args = format!("{} -screen 0 {}x24", display_id, resolution);
     let mut xvfb = Command::new("Xvfb")
@@ -432,21 +447,28 @@ async fn start_virtual_display() -> anyhow::Result<String> {
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| anyhow::anyhow!("Failed to start Xvfb: {}. Is Xvfb installed?", e))?;
-    
+
     // Wait for Xvfb to be ready
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    
+
     // Verify Xvfb is running
     if let Ok(Some(status)) = xvfb.try_wait() {
-        return Err(anyhow::anyhow!("Xvfb exited immediately with status: {:?}", status));
+        return Err(anyhow::anyhow!(
+            "Xvfb exited immediately with status: {:?}",
+            status
+        ));
     }
-    
-    tracing::info!("Xvfb started on display {} (pid: {:?})", display_id, xvfb.id());
-    
+
+    tracing::info!(
+        "Xvfb started on display {} (pid: {:?})",
+        display_id,
+        xvfb.id()
+    );
+
     // Keep the process handle alive by leaking it (it will be cleaned up on process exit)
     // This is intentional - we want Xvfb to keep running
     std::mem::forget(xvfb);
-    
+
     Ok(display_id)
 }
 
@@ -458,7 +480,7 @@ where
 {
     let state = get_browser_session().await?;
     let guard = state.lock().await;
-    
+
     if let Some(session) = guard.as_ref() {
         f(session.page.clone()).await
     } else {
@@ -509,7 +531,7 @@ impl Tool for BrowserNavigate {
         with_page(|page| async move {
             // Navigate to URL
             page.goto(url).await?;
-            
+
             // Wait for network idle or timeout
             tokio::time::sleep(Duration::from_millis(1000)).await;
 
@@ -545,11 +567,11 @@ pub struct BrowserScreenshot;
 fn get_supabase_config() -> Option<(String, String)> {
     let url = std::env::var("SUPABASE_URL").ok()?;
     let key = std::env::var("SUPABASE_SERVICE_ROLE_KEY").ok()?;
-    
+
     if url.is_empty() || key.is_empty() {
         return None;
     }
-    
+
     Some((url, key))
 }
 
@@ -561,13 +583,13 @@ async fn upload_to_supabase(
 ) -> anyhow::Result<String> {
     let file_id = uuid::Uuid::new_v4();
     let upload_path = format!("{}.png", file_id);
-    
+
     let storage_url = format!(
         "{}/storage/v1/object/images/{}",
         supabase_url.trim_end_matches('/'),
         upload_path
     );
-    
+
     let client = reqwest::Client::new();
     let resp = client
         .post(&storage_url)
@@ -578,13 +600,13 @@ async fn upload_to_supabase(
         .body(content.to_vec())
         .send()
         .await?;
-    
+
     let status = resp.status();
     if !status.is_success() {
         let error_text = resp.text().await.unwrap_or_default();
         anyhow::bail!("Failed to upload image: {} - {}", status, error_text);
     }
-    
+
     // Return public URL
     Ok(format!(
         "{}/storage/v1/object/public/images/{}",
@@ -640,7 +662,10 @@ impl Tool for BrowserScreenshot {
         let full_page = args["full_page"].as_bool().unwrap_or(false);
         let return_image = args["return_image"].as_bool().unwrap_or(false);
         let upload = args["upload"].as_bool().unwrap_or(true);
-        let filename = format!("screenshot_{}.png", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
+        let filename = format!(
+            "screenshot_{}.png",
+            chrono::Utc::now().format("%Y%m%d_%H%M%S")
+        );
 
         // Take the screenshot
         let screenshot = with_page(|page| async move {
@@ -661,7 +686,7 @@ impl Tool for BrowserScreenshot {
         // Try to upload to Supabase if requested and configured
         let mut public_url: Option<String> = None;
         let mut markdown: Option<String> = None;
-        
+
         if upload {
             if let Some((supabase_url, service_role_key)) = get_supabase_config() {
                 match upload_to_supabase(&screenshot, &supabase_url, &service_role_key).await {
@@ -688,7 +713,7 @@ impl Tool for BrowserScreenshot {
             "local_path": file_path.display().to_string(),
             "size_bytes": screenshot.len()
         });
-        
+
         if let Some(url) = &public_url {
             result["url"] = json!(url);
         }
@@ -696,7 +721,7 @@ impl Tool for BrowserScreenshot {
             result["markdown"] = json!(md);
             result["message"] = json!("Screenshot uploaded! Include the 'markdown' value in your response for the user to see it.");
         }
-        
+
         // Add vision marker if return_image is true (so agent can SEE the screenshot)
         // Format: [VISION_IMAGE:url] - parsed by executor to include image in context
         let vision_marker = if return_image {
@@ -704,12 +729,13 @@ impl Tool for BrowserScreenshot {
                 format!("\n\n[VISION_IMAGE:{}]", url)
             } else {
                 // Can't do vision without a URL - need to upload first
-                "\n\nNote: return_image requires upload=true to work (need URL for vision)".to_string()
+                "\n\nNote: return_image requires upload=true to work (need URL for vision)"
+                    .to_string()
             }
         } else {
             String::new()
         };
-        
+
         Ok(format!("{}{}", result.to_string(), vision_marker))
     }
 }
@@ -754,9 +780,11 @@ impl Tool for BrowserGetContent {
         with_page(|page| async move {
             let content: String = if let Some(sel) = selector {
                 // Get content from specific element
-                let element = page.find_element(sel).await
+                let element = page
+                    .find_element(sel)
+                    .await
                     .map_err(|e| anyhow::anyhow!("Element '{}' not found: {}", sel, e))?;
-                
+
                 if include_html {
                     element.inner_html().await?.unwrap_or_default()
                 } else {
@@ -826,11 +854,13 @@ impl Tool for BrowserClick {
             .ok_or_else(|| anyhow::anyhow!("Missing 'selector' argument"))?;
 
         with_page(|page| async move {
-            let element = page.find_element(selector).await
+            let element = page
+                .find_element(selector)
+                .await
                 .map_err(|e| anyhow::anyhow!("Element '{}' not found: {}", selector, e))?;
-            
+
             element.click().await?;
-            
+
             // Wait a bit for any navigation or dynamic updates
             tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -888,19 +918,23 @@ impl Tool for BrowserType {
         let clear_first = args["clear_first"].as_bool().unwrap_or(true);
 
         with_page(|page| async move {
-            let element = page.find_element(selector).await
+            let element = page
+                .find_element(selector)
+                .await
                 .map_err(|e| anyhow::anyhow!("Element '{}' not found: {}", selector, e))?;
-            
+
             // Click to focus
             element.click().await?;
-            
+
             // Clear if requested
             if clear_first {
                 // Select all and delete
                 element.type_str("").await?; // Focus
-                page.evaluate("document.activeElement.value = ''").await.ok();
+                page.evaluate("document.activeElement.value = ''")
+                    .await
+                    .ok();
             }
-            
+
             // Type the text
             element.type_str(text).await?;
 
@@ -947,7 +981,7 @@ impl Tool for BrowserEvaluate {
 
         with_page(|page| async move {
             let result = page.evaluate(script).await?;
-            
+
             // Try to serialize the result
             let value = result.value();
             match value {
@@ -1002,7 +1036,7 @@ impl Tool for BrowserWait {
         with_page(|page| async move {
             let start = std::time::Instant::now();
             let timeout = Duration::from_millis(timeout_ms);
-            
+
             loop {
                 if page.find_element(selector).await.is_ok() {
                     return Ok(format!(
@@ -1011,7 +1045,7 @@ impl Tool for BrowserWait {
                         start.elapsed().as_millis()
                     ));
                 }
-                
+
                 if start.elapsed() > timeout {
                     return Err(anyhow::anyhow!(
                         "Timeout waiting for element '{}' after {} ms",
@@ -1019,7 +1053,7 @@ impl Tool for BrowserWait {
                         timeout_ms
                     ));
                 }
-                
+
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         })
@@ -1054,7 +1088,7 @@ impl Tool for BrowserClose {
     async fn execute(&self, _args: Value, _workspace: &Path) -> anyhow::Result<String> {
         let state = BROWSER_STATE.clone();
         let mut guard = state.lock().await;
-        
+
         if let Some(session) = guard.take() {
             // Close the page
             session.page.close().await.ok();
@@ -1100,13 +1134,15 @@ impl Tool for BrowserListElements {
     }
 
     async fn execute(&self, args: Value, _workspace: &Path) -> anyhow::Result<String> {
-        let selector = args["selector"].as_str()
+        let selector = args["selector"]
+            .as_str()
             .unwrap_or("a, button, input, select, textarea, [onclick], [role='button']");
         let limit = args["limit"].as_u64().unwrap_or(50) as usize;
 
         with_page(|page| async move {
             // Use JavaScript to get element info
-            let script = format!(r#"
+            let script = format!(
+                r#"
                 (() => {{
                     const elements = document.querySelectorAll('{}');
                     const results = [];
@@ -1126,7 +1162,9 @@ impl Tool for BrowserListElements {
                     }}
                     return results;
                 }})()
-            "#, selector, limit);
+            "#,
+                selector, limit
+            );
 
             let result = page.evaluate(script.as_str()).await?;
             let elements: Vec<Value> = result.into_value().unwrap_or_default();
@@ -1143,7 +1181,7 @@ impl Tool for BrowserListElements {
                 let text = el["text"].as_str().filter(|s| !s.is_empty());
                 let href = el["href"].as_str().filter(|s| !s.is_empty());
                 let visible = el["visible"].as_bool().unwrap_or(true);
-                
+
                 // Build selector hint
                 let selector_hint = if let Some(id) = id {
                     format!("#{}", id)
@@ -1160,9 +1198,12 @@ impl Tool for BrowserListElements {
                     if visible { "✓" } else { "hidden" },
                     selector_hint
                 ));
-                
+
                 if let Some(t) = text {
-                    output.push_str(&format!(" - \"{}\"", t.chars().take(60).collect::<String>()));
+                    output.push_str(&format!(
+                        " - \"{}\"",
+                        t.chars().take(60).collect::<String>()
+                    ));
                 }
                 if let Some(h) = href {
                     output.push_str(&format!(" → {}", h.chars().take(50).collect::<String>()));

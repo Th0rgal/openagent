@@ -1,7 +1,7 @@
 //! Git operation tools.
 //!
 //! ## Workspace-First Design
-//! 
+//!
 //! Git tools operate on the workspace by default:
 //! - `git_status()` → status of workspace repo
 //! - `git_status("subproject/")` → status of nested repo
@@ -250,14 +250,10 @@ async fn run_git_command(args: &[&str], repo_path: &Path) -> anyhow::Result<Stri
 
     if !output.status.success() {
         if stderr.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Git command failed: {}",
-                stdout.trim()
-            ));
+            return Err(anyhow::anyhow!("Git command failed: {}", stdout.trim()));
         }
         return Err(anyhow::anyhow!("Git error: {}", stderr.trim()));
     }
 
     Ok(stdout.to_string())
 }
-

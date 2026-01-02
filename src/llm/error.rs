@@ -84,7 +84,7 @@ impl LlmError {
     }
 
     /// Get the suggested delay before retry.
-    /// 
+    ///
     /// Returns the `retry_after` if set, otherwise returns a default based on error kind.
     pub fn suggested_delay(&self, attempt: u32) -> Duration {
         if let Some(retry_after) = self.retry_after {
@@ -156,7 +156,7 @@ impl LlmErrorKind {
             LlmErrorKind::RateLimited | LlmErrorKind::ServerError | LlmErrorKind::NetworkError
         )
     }
-    
+
     /// Check if this error should trigger a model fallback.
     pub fn should_fallback(&self) -> bool {
         matches!(self, LlmErrorKind::IncompatibleModel)
@@ -211,7 +211,9 @@ impl RetryConfig {
             LlmErrorKind::ServerError => self.retry_server_errors,
             LlmErrorKind::NetworkError => self.retry_network_errors,
             // These should not be retried with the same model
-            LlmErrorKind::ClientError | LlmErrorKind::ParseError | LlmErrorKind::IncompatibleModel => false,
+            LlmErrorKind::ClientError
+            | LlmErrorKind::ParseError
+            | LlmErrorKind::IncompatibleModel => false,
         }
     }
 }
@@ -253,7 +255,7 @@ mod tests {
     #[test]
     fn test_exponential_backoff() {
         let error = LlmError::rate_limited("test".to_string(), None);
-        
+
         let delay_0 = error.suggested_delay(0);
         let delay_1 = error.suggested_delay(1);
         let delay_2 = error.suggested_delay(2);
@@ -261,7 +263,7 @@ mod tests {
         // Should increase exponentially
         assert!(delay_1 > delay_0);
         assert!(delay_2 > delay_1);
-        
+
         // Should be capped
         let delay_10 = error.suggested_delay(10);
         assert!(delay_10.as_secs() <= 60);
@@ -269,11 +271,8 @@ mod tests {
 
     #[test]
     fn test_retry_after_respected() {
-        let error = LlmError::rate_limited(
-            "test".to_string(),
-            Some(Duration::from_secs(30)),
-        );
-        
+        let error = LlmError::rate_limited("test".to_string(), Some(Duration::from_secs(30)));
+
         // Should use the provided retry_after, not calculate
         assert_eq!(error.suggested_delay(0), Duration::from_secs(30));
         assert_eq!(error.suggested_delay(5), Duration::from_secs(30));

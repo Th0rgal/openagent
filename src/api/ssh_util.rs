@@ -66,7 +66,12 @@ fn ssh_base_args(cfg: &ConsoleSshConfig, key_path: &Path) -> Vec<String> {
     ]
 }
 
-pub async fn ssh_exec(cfg: &ConsoleSshConfig, key_path: &Path, remote_cmd: &str, args: &[String]) -> anyhow::Result<String> {
+pub async fn ssh_exec(
+    cfg: &ConsoleSshConfig,
+    key_path: &Path,
+    remote_cmd: &str,
+    args: &[String],
+) -> anyhow::Result<String> {
     let mut cmd = Command::new("ssh");
     for a in ssh_base_args(cfg, key_path) {
         cmd.arg(a);
@@ -130,7 +135,11 @@ pub async fn ssh_exec_with_stdin(
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
-pub async fn sftp_batch(cfg: &ConsoleSshConfig, key_path: &Path, batch: &str) -> anyhow::Result<()> {
+pub async fn sftp_batch(
+    cfg: &ConsoleSshConfig,
+    key_path: &Path,
+    batch: &str,
+) -> anyhow::Result<()> {
     let mut cmd = Command::new("sftp");
     cmd.arg("-b").arg("-");
     cmd.arg("-i").arg(key_path);
@@ -164,6 +173,3 @@ pub async fn sftp_batch(cfg: &ConsoleSshConfig, key_path: &Path, batch: &str) ->
     }
     Ok(())
 }
-
-
-
