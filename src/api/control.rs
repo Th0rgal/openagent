@@ -1785,16 +1785,17 @@ async fn control_actor_loop(
                         // First check parallel runners
                         if let Some(runner) = parallel_runners.get_mut(&mission_id) {
                             runner.cancel();
-                            let _ = events_tx.send(AgentEvent::Error { 
+                            let _ = events_tx.send(AgentEvent::Error {
                                 message: format!("Parallel mission {} cancelled", mission_id),
                                 mission_id: Some(mission_id),
                             });
                             parallel_runners.remove(&mission_id);
                             let _ = respond.send(Ok(()));
                         } else {
-                            // Check if this is the current running mission
-                            let current = current_mission.read().await.clone();
-                            if current == Some(mission_id) {
+                            // Check if this is the currently executing mission
+                            // Use running_mission_id (the actual mission being executed)
+                            // instead of current_mission (which can change when user creates a new mission)
+                            if running_mission_id == Some(mission_id) {
                                 // Cancel the current execution
                                 if let Some(token) = &running_cancel {
                                     token.cancel();
