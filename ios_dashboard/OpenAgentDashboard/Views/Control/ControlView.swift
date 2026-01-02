@@ -806,14 +806,17 @@ struct ControlView: View {
                 }
 
                 // Start streaming - this will block until the stream ends
+                // Use nonisolated(unsafe) to allow mutation from closure (we accept the risk for this simple boolean)
+                nonisolated(unsafe) var receivedEvent = false
+
                 let streamCompleted = await withCheckedContinuation { continuation in
                     let innerTask = api.streamControl { eventType, data in
+                        receivedEvent = true
                         Task { @MainActor in
                             // Successfully received an event - we're connected
                             if !self.connectionState.isConnected {
                                 self.connectionState = .connected
                                 self.reconnectAttempt = 0
-                                currentBackoff = 1
                             }
                             self.handleStreamEvent(type: eventType, data: data)
                         }
@@ -824,6 +827,11 @@ struct ControlView: View {
                         await innerTask.value
                         continuation.resume(returning: true)
                     }
+                }
+
+                // Reset backoff after successful connection (stream has ended, safe to read)
+                if receivedEvent {
+                    currentBackoff = 1
                 }
 
                 // Stream ended - check if we should reconnect

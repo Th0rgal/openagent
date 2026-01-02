@@ -124,6 +124,10 @@ export function DesktopStream({
           }
           URL.revokeObjectURL(imageUrl);
         };
+        img.onerror = () => {
+          // Revoke URL on failed load to prevent memory leak
+          URL.revokeObjectURL(imageUrl);
+        };
         img.src = imageUrl;
       } else if (typeof event.data === "string") {
         // Text message = JSON (error or control response)

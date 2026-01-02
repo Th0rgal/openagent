@@ -61,6 +61,7 @@ final class DesktopStreamService {
         webSocket?.cancel(with: .normalClosure, reason: nil)
         webSocket = nil
         isConnected = false
+        isPaused = false  // Reset paused state for fresh connection
         currentFrame = nil
         frameCount = 0
     }
