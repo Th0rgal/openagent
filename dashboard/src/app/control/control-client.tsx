@@ -286,15 +286,22 @@ function ThinkingItem({
   }, [item.done, item.startTime]);
 
   // Auto-collapse when thinking is done (with delay)
+  // Longer delay for extended thinking sessions to let user see the summary
   useEffect(() => {
     if (item.done && expanded && !hasAutoCollapsedRef.current) {
+      const duration = Math.floor((Date.now() - item.startTime) / 1000);
+      // Don't auto-collapse if thinking was > 30 seconds (user may want to review)
+      if (duration > 30) {
+        hasAutoCollapsedRef.current = true; // Mark as handled but don't collapse
+        return;
+      }
       const timer = setTimeout(() => {
         setExpanded(false);
         hasAutoCollapsedRef.current = true;
-      }, 500);
+      }, 1500); // Longer delay
       return () => clearTimeout(timer);
     }
-  }, [item.done, expanded]);
+  }, [item.done, expanded, item.startTime]);
 
   const formatDuration = (seconds: number) => {
     if (seconds < 60) return `${seconds}s`;
@@ -340,12 +347,12 @@ function ThinkingItem({
       <div
         className={cn(
           "overflow-hidden transition-all duration-200 ease-out",
-          expanded ? "max-h-80 opacity-100 mt-2" : "max-h-0 opacity-0"
+          expanded ? "max-h-[50vh] opacity-100 mt-2" : "max-h-0 opacity-0"
         )}
       >
         <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
-          <div className="text-xs text-white/50 whitespace-pre-wrap overflow-y-auto max-h-64 leading-relaxed">
-            {item.content}
+          <div className="text-xs text-white/50 whitespace-pre-wrap overflow-y-auto max-h-[45vh] leading-relaxed">
+            {item.content || <span className="italic text-white/30">Processing...</span>}
           </div>
         </div>
       </div>
@@ -1007,16 +1014,19 @@ export default function ControlClient() {
       setViewingMissionId(missionId);
       fetchingMissionIdRef.current = missionId;
 
+      // Update URL immediately so it's shareable/bookmarkable
+      router.replace(`/control?mission=${missionId}`, { scroll: false });
+
       // Always load fresh history from API when switching missions
       // This ensures we don't show stale cached events
       try {
         const mission = await getMission(missionId);
-        
+
         // Race condition guard: only update if this is still the mission we want
         if (fetchingMissionIdRef.current !== missionId) {
           return; // Another mission was requested, discard this response
         }
-        
+
         const historyItems = missionHistoryToItems(mission);
         setItems(historyItems);
         // Update cache with fresh data
@@ -1027,30 +1037,33 @@ export default function ControlClient() {
         }
       } catch (err) {
         console.error("Failed to load mission:", err);
-        
+
         // Race condition guard: only update if this is still the mission we want
         if (fetchingMissionIdRef.current !== missionId) {
           return;
         }
-        
+
         // Revert viewing state to avoid filtering out events
         const fallbackMission = previousViewingMission ?? currentMissionRef.current;
         if (fallbackMission) {
           setViewingMissionId(fallbackMission.id);
           setViewingMission(fallbackMission);
           setItems(missionHistoryToItems(fallbackMission));
+          router.replace(`/control?mission=${fallbackMission.id}`, { scroll: false });
         } else if (previousViewingId && missionItems[previousViewingId]) {
           setViewingMissionId(previousViewingId);
           setViewingMission(null);
           setItems(missionItems[previousViewingId]);
+          router.replace(`/control?mission=${previousViewingId}`, { scroll: false });
         } else {
           setViewingMissionId(null);
           setViewingMission(null);
           setItems([]);
+          router.replace(`/control`, { scroll: false });
         }
       }
     },
-    [missionItems, missionHistoryToItems]
+    [missionItems, missionHistoryToItems, router]
   );
 
   // Sync viewingMissionId with currentMission only when there's no explicit viewing mission set
@@ -1721,11 +1734,19 @@ export default function ControlClient() {
 
             {/* Queue count */}
             <div className="h-4 w-px bg-white/[0.08]" />
-            <div className="flex items-center gap-1.5">
+            <div
+              className="flex items-center gap-1.5"
+              title={queueLen > 0 ? `${queueLen} message${queueLen > 1 ? 's' : ''} waiting to be processed` : 'No messages queued'}
+            >
               <span className="text-[10px] uppercase tracking-wider text-white/40">
                 Queue
               </span>
-              <span className="text-sm font-medium text-white/70 tabular-nums">
+              <span className={cn(
+                "text-sm font-medium tabular-nums",
+                queueLen === 0 && "text-white/70",
+                queueLen > 0 && queueLen < 3 && "text-amber-400",
+                queueLen >= 3 && "text-orange-400"
+              )}>
                 {queueLen}
               </span>
             </div>
@@ -1872,7 +1893,7 @@ export default function ControlClient() {
             <div className="flex h-full items-center justify-center">
               <div className="text-center">
                 <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-500/10">
-                  {runState === "running" ? (
+                  {viewingMissionIsRunning ? (
                     <Loader className="h-8 w-8 text-indigo-400 animate-spin" />
                   ) : (
                     <Bot className="h-8 w-8 text-indigo-400" />
@@ -1880,7 +1901,7 @@ export default function ControlClient() {
                 </div>
                 {missionLoading ? (
                   <Shimmer className="max-w-xs mx-auto" />
-                ) : runState === "running" ? (
+                ) : viewingMissionIsRunning ? (
                   <>
                     <h2 className="text-lg font-medium text-white">
                       Agent is working...
@@ -1904,6 +1925,10 @@ export default function ControlClient() {
                         <>This mission was interrupted (server shutdown or cancellation). Click the <strong className="text-amber-400">Resume</strong> button in the mission menu to continue where you left off.</>
                       ) : activeMission.status === "blocked" ? (
                         <>The agent reached its iteration limit ({maxIterations}). You can continue the mission to give it more iterations.</>
+                      ) : activeMission.status === "failed" ? (
+                        <>This mission failed without producing any messages.</>
+                      ) : activeMission.status === "not_feasible" ? (
+                        <>The agent determined this task was not feasible.</>
                       ) : (
                         <>This mission was {activeMission.status} without any messages.
                         {activeMission.status === "completed" && " You can reactivate it to continue."}</>
@@ -2232,7 +2257,7 @@ export default function ControlClient() {
               })}
 
               {/* Show streaming indicator when running but no active thinking/phase */}
-              {runState === "running" &&
+              {viewingMissionIsRunning &&
                 items.length > 0 &&
                 !items.some(
                   (it) =>

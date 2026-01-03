@@ -1435,20 +1435,29 @@ private struct ThinkingBubble: View {
             
             // Expandable content
             if isExpanded && !message.content.isEmpty {
-                Text(message.content)
+                ScrollView {
+                    Text(message.content)
+                        .font(.caption)
+                        .foregroundStyle(Theme.textTertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 300) // Allow scrolling for long thinking content
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.white.opacity(0.02))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 0.5)
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .top)))
+            } else if isExpanded && message.content.isEmpty {
+                Text("Processing...")
                     .font(.caption)
-                    .foregroundStyle(Theme.textTertiary)
-                    .lineLimit(message.thinkingDone ? 8 : nil)
+                    .italic()
+                    .foregroundStyle(Theme.textMuted)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.white.opacity(0.02))
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Theme.border, lineWidth: 0.5)
-                    )
-                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .top)))
             }
         }
         .onAppear {
@@ -1456,8 +1465,15 @@ private struct ThinkingBubble: View {
         }
         .onChange(of: message.thinkingDone) { _, done in
             if done && !hasAutoCollapsed {
-                // Auto-collapse after a brief delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                // Don't auto-collapse for extended thinking (> 30 seconds)
+                // User may want to review what the agent was thinking about
+                let duration = message.thinkingStartTime.map { Int(Date().timeIntervalSince($0)) } ?? 0
+                if duration > 30 {
+                    hasAutoCollapsed = true // Mark as handled but don't collapse
+                    return
+                }
+                // Auto-collapse shorter thinking after a delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                     withAnimation(.spring(duration: 0.25)) {
                         isExpanded = false
                         hasAutoCollapsed = true
