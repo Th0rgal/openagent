@@ -1716,7 +1716,8 @@ async fn control_actor_loop(
                         if running.is_none() {
                             if let Some((mid, msg, model_override)) = queue.pop_front() {
                                 set_and_emit_status(&status, &events_tx, ControlRunState::Running, queue.len()).await;
-                                let _ = events_tx.send(AgentEvent::UserMessage { id: mid, content: msg.clone(), mission_id: None });
+                                let current_mid = current_mission.read().await.clone();
+                                let _ = events_tx.send(AgentEvent::UserMessage { id: mid, content: msg.clone(), mission_id: current_mid });
                                 let cfg = config.clone();
                                 let agent = Arc::clone(&root_agent);
                                 let mem = memory.clone();
@@ -2332,7 +2333,8 @@ async fn control_actor_loop(
                 // Start next queued message, if any.
                 if let Some((mid, msg, model_override)) = queue.pop_front() {
                     set_and_emit_status(&status, &events_tx, ControlRunState::Running, queue.len()).await;
-                    let _ = events_tx.send(AgentEvent::UserMessage { id: mid, content: msg.clone(), mission_id: None });
+                    let current_mid = current_mission.read().await.clone();
+                    let _ = events_tx.send(AgentEvent::UserMessage { id: mid, content: msg.clone(), mission_id: current_mid });
                     let cfg = config.clone();
                     let agent = Arc::clone(&root_agent);
                     let mem = memory.clone();
