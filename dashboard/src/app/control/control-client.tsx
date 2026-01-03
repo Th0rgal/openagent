@@ -1967,28 +1967,6 @@ export default function ControlClient() {
             </div>
           ) : (
             <div className="mx-auto max-w-3xl space-y-6">
-              {/* Show streaming indicator when running but no active thinking/phase */}
-              {runState === "running" &&
-                items.length > 0 &&
-                !items.some(
-                  (it) =>
-                    (it.kind === "thinking" && !it.done) || it.kind === "phase"
-                ) && (
-                  <div className="flex justify-start gap-3 animate-fade-in">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-500/20">
-                      <Bot className="h-4 w-4 text-indigo-400 animate-pulse" />
-                    </div>
-                    <div className="rounded-2xl rounded-bl-md bg-white/[0.03] border border-white/[0.06] px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <Loader className="h-4 w-4 text-indigo-400 animate-spin" />
-                        <span className="text-sm text-white/60">
-                          Agent is working...
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
               {items.map((item) => {
                 if (item.kind === "user") {
                   return (
@@ -2233,7 +2211,29 @@ export default function ControlClient() {
                   </div>
                 );
               })}
-              
+
+              {/* Show streaming indicator when running but no active thinking/phase */}
+              {runState === "running" &&
+                items.length > 0 &&
+                !items.some(
+                  (it) =>
+                    (it.kind === "thinking" && !it.done) || it.kind === "phase"
+                ) && (
+                  <div className="flex justify-start gap-3 animate-fade-in">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-500/20">
+                      <Bot className="h-4 w-4 text-indigo-400 animate-pulse" />
+                    </div>
+                    <div className="rounded-2xl rounded-bl-md bg-white/[0.03] border border-white/[0.06] px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <Loader className="h-4 w-4 text-indigo-400 animate-spin" />
+                        <span className="text-sm text-white/60">
+                          Agent is working...
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
               {/* Continue banner for blocked missions */}
               {activeMission?.status === "blocked" && items.length > 0 && (
                 <div className="flex justify-center py-4">

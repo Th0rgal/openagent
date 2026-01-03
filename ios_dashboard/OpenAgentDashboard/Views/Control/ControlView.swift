@@ -316,11 +316,6 @@ struct ControlView: View {
                             LoadingView(message: "Loading conversation...")
                                 .frame(height: 200)
                         } else {
-                            // Show working indicator at top when running but no active streaming item
-                            if runState == .running && !hasActiveStreamingItem {
-                                agentWorkingIndicator
-                            }
-                            
                             ForEach(messages) { message in
                                 MessageBubble(
                                     message: message,
@@ -328,6 +323,11 @@ struct ControlView: View {
                                     onCopy: { copyMessage(message) }
                                 )
                                 .id(message.id)
+                            }
+
+                            // Show working indicator after messages when running but no active streaming item
+                            if runState == .running && !hasActiveStreamingItem {
+                                agentWorkingIndicator
                             }
                         }
                         
@@ -769,13 +769,24 @@ struct ControlView: View {
     private func sendMessage() {
         let content = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !content.isEmpty else { return }
-        
+
         inputText = ""
         HapticService.lightTap()
-        
+
         Task {
             do {
-                let _ = try await api.sendMessage(content: content)
+                let (messageId, _) = try await api.sendMessage(content: content)
+
+                // Optimistically add user message to UI immediately
+                let userMessage = ChatMessage(id: messageId, type: .user, content: content)
+                messages.append(userMessage)
+                shouldScrollToBottom = true
+
+                // If we don't have a current mission, the backend may have just created one
+                // Refresh to get the new mission context
+                if currentMission == nil {
+                    await loadCurrentMission(updateViewing: true)
+                }
             } catch {
                 print("Failed to send message: \(error)")
                 HapticService.error()
@@ -977,15 +988,25 @@ struct ControlView: View {
         let eventMissionId = data["mission_id"] as? String
         let viewingId = viewingMissionId
         let currentId = currentMission?.id
-        
+
         // Only allow status events from any mission (for global state)
         // All other events must match the mission we're viewing
         if type != "status" {
             if let eventId = eventMissionId {
-                // Event has a mission_id - must match viewing mission
-                if eventId != viewingId {
-                    return // Skip events from other missions
+                // Event has a mission_id
+                if let vId = viewingId {
+                    // We're viewing a specific mission - must match
+                    if eventId != vId {
+                        return // Skip events from other missions
+                    }
+                } else if let cId = currentId {
+                    // Not viewing any mission but have a current one - must match current
+                    if eventId != cId {
+                        return // Skip events from other missions
+                    }
                 }
+                // If both viewingId and currentId are nil, accept the event
+                // This handles the case where a new mission was just created
             } else if viewingId != nil && viewingId != currentId {
                 // Event has NO mission_id (from main session)
                 // Skip if we're viewing a different (parallel) mission
@@ -1028,6 +1049,8 @@ struct ControlView: View {
         case "user_message":
             if let content = data["content"] as? String,
                let id = data["id"] as? String {
+                // Skip if we already have this message (added optimistically)
+                guard !messages.contains(where: { $0.id == id }) else { break }
                 let message = ChatMessage(id: id, type: .user, content: content)
                 messages.append(message)
             }
