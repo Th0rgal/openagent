@@ -45,6 +45,7 @@ export function DesktopStream({
   const wsRef = useRef<WebSocket | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const connectionIdRef = useRef(0); // Guard against stale callbacks from old connections
 
   // Refs to store current values without triggering reconnection on slider changes
   const fpsRef = useRef(initialFps);
@@ -80,6 +81,10 @@ export function DesktopStream({
       wsRef.current.close();
     }
 
+    // Increment connection ID to invalidate stale callbacks
+    connectionIdRef.current += 1;
+    const thisConnectionId = connectionIdRef.current;
+
     setConnectionState("connecting");
     setErrorMessage(null);
 
@@ -96,11 +101,15 @@ export function DesktopStream({
     ws.binaryType = "arraybuffer";
 
     ws.onopen = () => {
+      // Guard against stale callbacks from previous connections
+      if (connectionIdRef.current !== thisConnectionId) return;
       setConnectionState("connected");
       setErrorMessage(null);
     };
 
     ws.onmessage = (event) => {
+      // Guard against stale callbacks
+      if (connectionIdRef.current !== thisConnectionId) return;
       if (event.data instanceof ArrayBuffer) {
         // Binary data = JPEG frame
         const blob = new Blob([event.data], { type: "image/jpeg" });
@@ -145,11 +154,15 @@ export function DesktopStream({
     };
 
     ws.onerror = () => {
+      // Guard against stale callbacks
+      if (connectionIdRef.current !== thisConnectionId) return;
       setConnectionState("error");
       setErrorMessage("Connection error");
     };
 
     ws.onclose = () => {
+      // Guard against stale callbacks from previous connections
+      if (connectionIdRef.current !== thisConnectionId) return;
       setConnectionState("disconnected");
     };
 

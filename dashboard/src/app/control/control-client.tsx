@@ -1048,15 +1048,16 @@ export default function ControlClient() {
     [missionItems, missionHistoryToItems]
   );
 
-  // Sync viewingMissionId with currentMission
+  // Sync viewingMissionId with currentMission only when there's no explicit viewing mission set
   useEffect(() => {
     if (currentMission && !viewingMissionId) {
       setViewingMissionId(currentMission.id);
-    }
-    if (currentMission && (!viewingMission || viewingMissionId === currentMission.id)) {
+      setViewingMission(currentMission);
+    } else if (currentMission && viewingMissionId === currentMission.id) {
+      // Only update viewingMission if we're actually viewing the current mission
       setViewingMission(currentMission);
     }
-  }, [currentMission, viewingMission, viewingMissionId]);
+  }, [currentMission, viewingMissionId]);
 
   // Note: We don't auto-cache items from SSE events because they may not have mission_id
   // and could be from any mission. We only cache when explicitly loading from API.

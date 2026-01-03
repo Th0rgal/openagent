@@ -885,6 +885,9 @@ struct ControlView: View {
         // Set the target mission ID immediately for race condition tracking
         let previousViewingMission = viewingMission
         let previousViewingId = viewingMissionId
+        let previousRunState = runState
+        let previousQueueLength = queueLength
+        let previousProgress = progress
         viewingMissionId = id
         fetchingMissionId = id
 
@@ -933,8 +936,11 @@ struct ControlView: View {
             isLoading = false
             print("Failed to switch mission: \(error)")
             HapticService.error()
-            
-            // Revert viewing state to avoid filtering out events
+
+            // Revert viewing state and status indicators to avoid filtering out events
+            runState = previousRunState
+            queueLength = previousQueueLength
+            progress = previousProgress
             if let fallback = previousViewingMission ?? currentMission {
                 applyViewingMission(fallback, scrollToBottom: false)
             } else {
