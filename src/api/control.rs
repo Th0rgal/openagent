@@ -2760,6 +2760,12 @@ async fn control_actor_loop(
                     set_and_emit_status(&status, &events_tx, ControlRunState::Running, queue.len()).await;
                     let current_mid = current_mission.read().await.clone();
                     let _ = events_tx.send(AgentEvent::UserMessage { id: mid, content: msg.clone(), mission_id: current_mid });
+
+                    // Immediately persist user message so it's visible when loading mission
+                    history.push(("user".to_string(), msg.clone()));
+                    persist_mission_history(&mission_store, &current_mission, &history)
+                        .await;
+
                     let cfg = config.clone();
                     let agent = Arc::clone(&root_agent);
                     let mem = memory.clone();
