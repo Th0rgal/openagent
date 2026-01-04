@@ -70,6 +70,7 @@ import {
   PanelRight,
   Wifi,
   WifiOff,
+  AlertTriangle,
 } from "lucide-react";
 import {
   OptionList,
@@ -663,6 +664,18 @@ export default function ControlClient() {
     // Check the actual state from the backend
     return mission.state === "running" || mission.state === "waiting_for_tool";
   }, [viewingMissionId, runningMissions, runState]);
+
+  // Check if the mission we're viewing appears stalled (no activity for 60+ seconds)
+  const viewingMissionStallSeconds = useMemo(() => {
+    if (!viewingMissionId) return 0;
+    const mission = runningMissions.find((m) => m.mission_id === viewingMissionId);
+    if (!mission) return 0;
+    if (mission.state !== "running") return 0;
+    return mission.seconds_since_activity;
+  }, [viewingMissionId, runningMissions]);
+
+  const isViewingMissionStalled = viewingMissionStallSeconds >= 60;
+  const isViewingMissionSeverelyStalled = viewingMissionStallSeconds >= 120;
 
   const isBusy = viewingMissionIsRunning;
 
@@ -2534,6 +2547,53 @@ export default function ControlClient() {
                     </div>
                   </div>
                 )}
+
+              {/* Stall warning banner when agent hasn't reported activity for 60+ seconds */}
+              {isViewingMissionStalled && viewingMissionId && (
+                <div className="flex justify-center py-4 animate-fade-in">
+                  <div className={cn(
+                    "flex flex-col sm:flex-row items-start sm:items-center gap-3 rounded-xl px-5 py-4",
+                    isViewingMissionSeverelyStalled
+                      ? "bg-red-500/10 border border-red-500/20"
+                      : "bg-amber-500/10 border border-amber-500/20"
+                  )}>
+                    <div className="flex items-center gap-3">
+                      <AlertTriangle className={cn(
+                        "h-5 w-5 shrink-0",
+                        isViewingMissionSeverelyStalled ? "text-red-400" : "text-amber-400"
+                      )} />
+                      <div className="text-sm">
+                        <span className={cn(
+                          "font-medium",
+                          isViewingMissionSeverelyStalled ? "text-red-400" : "text-amber-400"
+                        )}>
+                          Agent may be stuck
+                        </span>
+                        <span className="text-white/50 ml-1">
+                          — No activity for {Math.floor(viewingMissionStallSeconds)}s
+                        </span>
+                        <p className="text-white/40 text-xs mt-1">
+                          {isViewingMissionSeverelyStalled
+                            ? "The agent appears to be stuck on a long-running operation. Consider stopping it."
+                            : "A tool or external operation may be taking longer than expected."}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleCancelMission(viewingMissionId)}
+                      className={cn(
+                        "shrink-0 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                        isViewingMissionSeverelyStalled
+                          ? "bg-red-500 text-white hover:bg-red-400"
+                          : "bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30"
+                      )}
+                    >
+                      <Square className="h-3.5 w-3.5" />
+                      {isViewingMissionSeverelyStalled ? "Force Stop" : "Stop"}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Continue banner for blocked missions */}
               {activeMission?.status === "blocked" && items.length > 0 && (

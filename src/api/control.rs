@@ -1624,7 +1624,7 @@ fn spawn_control_session(
     mission_store: Arc<dyn MissionStore>,
 ) -> ControlState {
     let (cmd_tx, cmd_rx) = mpsc::channel::<ControlCommand>(256);
-    let (events_tx, _events_rx) = broadcast::channel::<AgentEvent>(1024);
+    let (events_tx, events_rx) = broadcast::channel::<AgentEvent>(1024);
     let tool_hub = Arc::new(FrontendToolHub::new());
     let status = Arc::new(RwLock::new(ControlStatus {
         state: ControlRunState::Idle,
@@ -1666,6 +1666,7 @@ fn spawn_control_session(
         mission_cmd_rx,
         mission_cmd_tx,
         events_tx.clone(),
+        events_rx,
         tool_hub,
         status,
         current_mission,
@@ -1749,6 +1750,7 @@ async fn control_actor_loop(
     mut mission_cmd_rx: mpsc::Receiver<crate::tools::mission::MissionControlCommand>,
     mission_cmd_tx: mpsc::Sender<crate::tools::mission::MissionControlCommand>,
     events_tx: broadcast::Sender<AgentEvent>,
+    mut events_rx: broadcast::Receiver<AgentEvent>,
     tool_hub: Arc<FrontendToolHub>,
     status: Arc<RwLock<ControlStatus>>,
     current_mission: Arc<RwLock<Option<Uuid>>>,
@@ -2869,6 +2871,27 @@ async fn control_actor_loop(
                 for mid in completed_missions {
                     parallel_runners.remove(&mid);
                     tracing::info!("Parallel mission {} removed from runners", mid);
+                }
+            }
+            // Update last_activity for parallel runners when we receive events for them
+            event = events_rx.recv() => {
+                if let Ok(event) = event {
+                    // Extract mission_id from event if present
+                    let mission_id = match &event {
+                        AgentEvent::ToolCall { mission_id, .. } => *mission_id,
+                        AgentEvent::ToolResult { mission_id, .. } => *mission_id,
+                        AgentEvent::Thinking { mission_id, .. } => *mission_id,
+                        AgentEvent::AgentPhase { mission_id, .. } => *mission_id,
+                        AgentEvent::AgentTree { mission_id, .. } => *mission_id,
+                        AgentEvent::Progress { mission_id, .. } => *mission_id,
+                        _ => None,
+                    };
+                    // Update last_activity for matching parallel runner
+                    if let Some(mid) = mission_id {
+                        if let Some(runner) = parallel_runners.get_mut(&mid) {
+                            runner.touch();
+                        }
+                    }
                 }
             }
         }
