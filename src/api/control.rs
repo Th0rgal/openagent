@@ -2105,6 +2105,8 @@ async fn control_actor_loop(
                                 let mission_id = current_mission.read().await.clone();
                                 running_cancel = Some(cancel.clone());
                                 running_mission_id = mission_id;
+                                // Reset activity timer when new task starts to avoid false stall warnings
+                                main_runner_last_activity = std::time::Instant::now();
                                 running = Some(tokio::spawn(async move {
                                     let result = run_single_control_turn(
                                         cfg,
@@ -2792,6 +2794,8 @@ async fn control_actor_loop(
                     // Capture which mission this task is working on
                     let mission_id = current_mission.read().await.clone();
                     running_mission_id = mission_id;
+                    // Reset activity timer when new task starts to avoid false stall warnings
+                    main_runner_last_activity = std::time::Instant::now();
                     running = Some(tokio::spawn(async move {
                         let result = run_single_control_turn(
                             cfg,
