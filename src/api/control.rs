@@ -440,9 +440,10 @@ impl MissionStore for InMemoryMissionStore {
         false
     }
 
-    async fn list_missions(&self, _limit: usize, _offset: usize) -> Result<Vec<Mission>, String> {
+    async fn list_missions(&self, limit: usize, offset: usize) -> Result<Vec<Mission>, String> {
         let mut missions: Vec<Mission> = self.missions.read().await.values().cloned().collect();
         missions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        let missions = missions.into_iter().skip(offset).take(limit).collect();
         Ok(missions)
     }
 

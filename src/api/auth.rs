@@ -114,21 +114,35 @@ pub async fn login(
             if username.is_empty() {
                 return Err((StatusCode::UNAUTHORIZED, "Username required".to_string()));
             }
-            let Some(account) = state
+            // Find user and verify password. Use a single generic error message
+            // for both invalid username and invalid password to prevent username enumeration.
+            let account = state
                 .config
                 .auth
                 .users
                 .iter()
-                .find(|u| u.username == username)
-            else {
-                return Err((StatusCode::UNAUTHORIZED, "Invalid username".to_string()));
+                .find(|u| u.username == username);
+
+            let valid = match account {
+                Some(acc) => {
+                    !acc.password.trim().is_empty()
+                        && constant_time_eq(req.password.trim(), acc.password.trim())
+                }
+                None => {
+                    // Perform a dummy comparison to prevent timing attacks
+                    let _ = constant_time_eq(req.password.trim(), "dummy_password_for_timing");
+                    false
+                }
             };
 
-            if account.password.trim().is_empty()
-                || !constant_time_eq(req.password.trim(), account.password.trim())
-            {
-                return Err((StatusCode::UNAUTHORIZED, "Invalid password".to_string()));
+            if !valid {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    "Invalid username or password".to_string(),
+                ));
             }
+
+            let account = account.unwrap();
 
             AuthUser {
                 id: account.id.clone(),

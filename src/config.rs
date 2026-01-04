@@ -518,6 +518,10 @@ impl Config {
                     }
                 }
                 AuthMode::Disabled => {
+                    // Provide a more specific error message when partial config exists
+                    if auth.dashboard_password.is_some() && auth.jwt_secret.is_none() {
+                        return Err(ConfigError::MissingEnvVar("JWT_SECRET".to_string()));
+                    }
                     return Err(ConfigError::MissingEnvVar(
                         "DASHBOARD_PASSWORD or OPEN_AGENT_USERS".to_string(),
                     ));
