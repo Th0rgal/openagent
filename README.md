@@ -45,13 +45,12 @@ cargo run --release
 
 The server starts on `http://127.0.0.1:3000` by default.
 
-### OpenCode Backend (External Agent)
+### OpenCode Backend (Required)
 
-Open Agent can delegate execution to an OpenCode server instead of using its built-in agent loop.
+Open Agent delegates execution to an OpenCode server. OpenCode must be running and reachable.
 
 ```bash
 # Point to a running OpenCode server
-export AGENT_BACKEND="opencode"
 export OPENCODE_BASE_URL="http://127.0.0.1:4096"
 
 # Optional: choose OpenCode agent (build/plan/etc)

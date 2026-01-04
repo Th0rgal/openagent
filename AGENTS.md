@@ -205,10 +205,16 @@ Use Claude models via your Claude Max subscription:
 | `POST` | `/api/control/missions` | Create mission |
 | `GET` | `/api/control/missions/current` | Get current mission |
 | `GET` | `/api/control/missions/{id}` | Get mission details |
+| `GET` | `/api/control/missions/{id}/tree` | Get mission tree |
 | `POST` | `/api/control/missions/{id}/load` | Load mission |
+| `POST` | `/api/control/missions/{id}/status` | Set mission status |
 | `POST` | `/api/control/missions/{id}/cancel` | Cancel mission |
 | `POST` | `/api/control/missions/{id}/resume` | Resume mission |
+| `POST` | `/api/control/missions/{id}/parallel` | Start parallel execution |
 | `DELETE` | `/api/control/missions/{id}` | Delete mission |
+| `POST` | `/api/control/missions/cleanup` | Cleanup empty missions |
+| `GET` | `/api/control/running` | List running missions |
+| `GET` | `/api/control/parallel/config` | Get parallel config |
 
 ### Memory Endpoints
 | Method | Path | Purpose |
@@ -216,6 +222,7 @@ Use Claude models via your Claude Max subscription:
 | `GET` | `/api/runs` | List archived runs |
 | `GET` | `/api/runs/{id}` | Get run details |
 | `GET` | `/api/runs/{id}/events` | Get run events |
+| `GET` | `/api/runs/{id}/tasks` | Get run tasks |
 | `GET` | `/api/memory/search` | Search memory |
 
 ### File System (Remote Explorer)
@@ -224,17 +231,23 @@ Use Claude models via your Claude Max subscription:
 | `GET` | `/api/fs/list` | List directory |
 | `GET` | `/api/fs/download` | Download file |
 | `POST` | `/api/fs/upload` | Upload file |
+| `POST` | `/api/fs/upload-chunk` | Chunked upload |
+| `POST` | `/api/fs/upload-finalize` | Finalize upload |
+| `POST` | `/api/fs/download-url` | Download from URL |
 | `POST` | `/api/fs/mkdir` | Create directory |
 | `POST` | `/api/fs/rm` | Remove file/dir |
 
-### MCP & Tools Management
+### MCP Management
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/api/mcp` | List MCP servers |
 | `POST` | `/api/mcp` | Add MCP server |
+| `POST` | `/api/mcp/refresh` | Refresh all MCPs |
+| `GET` | `/api/mcp/{id}` | Get MCP details |
 | `DELETE` | `/api/mcp/{id}` | Remove MCP |
 | `POST` | `/api/mcp/{id}/enable` | Enable MCP |
 | `POST` | `/api/mcp/{id}/disable` | Disable MCP |
+| `POST` | `/api/mcp/{id}/refresh` | Refresh MCP |
 | `GET` | `/api/tools` | List all tools |
 | `POST` | `/api/tools/{name}/toggle` | Toggle tool |
 
@@ -253,6 +266,8 @@ Use Claude models via your Claude Max subscription:
 | `GET` | `/api/health` | Health check |
 | `GET` | `/api/stats` | System statistics |
 | `POST` | `/api/auth/login` | Authenticate |
+| `GET` | `/api/console/ws` | WebSocket console |
+| `GET` | `/api/desktop/stream` | WebSocket desktop stream |
 
 ## Environment Variables
 
@@ -324,8 +339,8 @@ pub fn do_thing() -> Result<T, MyError> {
 ### Adding a New Tool
 
 1. Add to `src/tools/` (new file or extend existing)
-2. Implement `Tool` trait: `name()`, `description()`, `parameters()`, `call()`
-3. Register in `src/tools/mod.rs` → `create_tools()`
+2. Implement `Tool` trait: `name()`, `description()`, `parameters_schema()`, `execute()`
+3. Register in `src/tools/mod.rs` → `ToolRegistry::with_options()`
 4. Tool parameters use serde_json schema format
 5. Document pre/postconditions for provability
 
@@ -363,9 +378,14 @@ pub fn do_thing() -> Result<T, MyError> {
 
 ### New API Endpoint
 1. Add handler in `src/api/`
-2. Register route in `src/api/mod.rs`
+2. Register route in `src/api/routes.rs`
+3. Update this doc
+
+### New Tool
+1. Implement `Tool` trait in `src/tools/`
+2. Register in `ToolRegistry::with_options()` in `src/tools/mod.rs`
 3. Update this doc
 
 ### After Significant Changes
 - Update `.cursor/rules/` if architecture changes
-- Update `AGENTS.md` (root) and `.claude/CLAUDE.md` for new env vars or commands
+- Update `AGENTS.md` and `.claude/CLAUDE.md` for new env vars or commands

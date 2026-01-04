@@ -132,10 +132,12 @@ IMPORTANT: Use 'blocked' or 'not_feasible' instead of producing fake/placeholder
             "failed" => MissionStatusValue::Failed,
             "blocked" => MissionStatusValue::Blocked,
             "not_feasible" => MissionStatusValue::NotFeasible,
-            other => return Err(anyhow::anyhow!(
+            other => {
+                return Err(anyhow::anyhow!(
                 "Invalid status '{}'. Must be 'completed', 'failed', 'blocked', or 'not_feasible'.",
                 other
-            )),
+            ))
+            }
         };
 
         let Some(control) = &self.control else {

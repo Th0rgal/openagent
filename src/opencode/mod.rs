@@ -4,10 +4,10 @@
 //! OpenCode server, with real-time event streaming.
 
 use anyhow::Context;
-use std::collections::HashMap;
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -140,11 +140,8 @@ impl OpenCodeClient {
                                 let event_str = buffer[..pos].to_string();
                                 buffer = buffer[pos + 2..].to_string();
 
-                                if let Some(event) = parse_sse_event(
-                                    &event_str,
-                                    &session_id_clone,
-                                    &mut sse_state,
-                                )
+                                if let Some(event) =
+                                    parse_sse_event(&event_str, &session_id_clone, &mut sse_state)
                                 {
                                     let is_complete =
                                         matches!(event, OpenCodeEvent::MessageComplete { .. });
@@ -345,10 +342,7 @@ fn looks_like_user_prompt(content: &str) -> bool {
         || trimmed.contains("\nInstructions:\n")
 }
 
-fn handle_part_update(
-    props: &serde_json::Value,
-    state: &mut SseState,
-) -> Option<OpenCodeEvent> {
+fn handle_part_update(props: &serde_json::Value, state: &mut SseState) -> Option<OpenCodeEvent> {
     let part = props.get("part")?;
     let part_type = part.get("type").and_then(|v| v.as_str())?;
     if !matches!(part_type, "text" | "reasoning" | "thinking") {

@@ -74,8 +74,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       setIsAuthed(true);
       setPassword('');
       signalAuthSuccess();
-    } catch {
-      setError(authMode === 'multi_user' ? 'Invalid username or password' : 'Invalid password');
+    } catch (err) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError(authMode === 'multi_user' ? 'Invalid username or password' : 'Invalid password');
+      }
     } finally {
       setIsSubmitting(false);
     }

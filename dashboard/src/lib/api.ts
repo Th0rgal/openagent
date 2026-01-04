@@ -95,7 +95,10 @@ export async function login(password: string, username?: string): Promise<LoginR
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error("Failed to login");
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || "Failed to login");
+  }
   return res.json();
 }
 

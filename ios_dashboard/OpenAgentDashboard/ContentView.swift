@@ -66,6 +66,7 @@ struct LoginView: View {
     init(onLogin: @escaping () -> Void) {
         self.onLogin = onLogin
         _serverURL = State(initialValue: APIService.shared.baseURL)
+        _username = State(initialValue: UserDefaults.standard.string(forKey: "last_username") ?? "")
     }
     
     var body: some View {
@@ -205,6 +206,20 @@ struct LoginView: View {
                         }
                     }
                     .padding(.horizontal, 24)
+                    .onAppear {
+                        if api.authMode == .multiUser {
+                            isUsernameFocused = true
+                        } else {
+                            isPasswordFocused = true
+                        }
+                    }
+                    .onChange(of: api.authMode) { _, newMode in
+                        if newMode == .multiUser {
+                            isUsernameFocused = true
+                        } else {
+                            isPasswordFocused = true
+                        }
+                    }
                     
                     Spacer()
                 }
@@ -225,10 +240,31 @@ struct LoginView: View {
             do {
                 let usernameValue = api.authMode == .multiUser ? username : nil
                 let _ = try await api.login(password: password, username: usernameValue)
+                if api.authMode == .multiUser {
+                    let trimmed = username.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        UserDefaults.standard.set(trimmed, forKey: "last_username")
+                    }
+                }
                 HapticService.success()
                 onLogin()
             } catch {
-                errorMessage = error.localizedDescription
+                if let apiError = error as? APIError {
+                    switch apiError {
+                    case .httpError(let code, _):
+                        if code == 401 {
+                            errorMessage = api.authMode == .multiUser ? "Invalid username or password" : "Invalid password"
+                        } else {
+                            errorMessage = apiError.errorDescription
+                        }
+                    case .unauthorized:
+                        errorMessage = api.authMode == .multiUser ? "Invalid username or password" : "Invalid password"
+                    default:
+                        errorMessage = apiError.errorDescription
+                    }
+                } else {
+                    errorMessage = error.localizedDescription
+                }
                 HapticService.error()
             }
             isLoading = false

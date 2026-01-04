@@ -156,7 +156,9 @@ async fn handle_desktop_stream(mut socket: WebSocket, params: StreamParams) {
                         frame_interval = Duration::from_millis(1000 / current_fps as u64);
                         tracing::debug!(fps = current_fps, "FPS changed");
                     }
-                    ClientCommand::SetQuality { quality: new_quality } => {
+                    ClientCommand::SetQuality {
+                        quality: new_quality,
+                    } => {
                         current_quality = new_quality.clamp(10, 100);
                         tracing::debug!(quality = current_quality, "Quality changed");
                     }
