@@ -154,8 +154,6 @@ struct ToolUIDataTableView: View {
 }
 
 #Preview {
-    let sampleTable = ToolUIDataTable.Column(id: "model", label: "Model", width: nil)
-    
     VStack {
         // Preview would go here
         Text("Data Table Preview")

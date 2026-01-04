@@ -338,10 +338,17 @@ final class DesktopStreamService: NSObject {
         guard let sample = sampleBuffer else { return }
 
         // Enqueue to layer
-        if layer.status == .failed {
-            layer.flush()
+        if #available(iOS 18.0, *) {
+            if layer.sampleBufferRenderer.status == .failed {
+                layer.sampleBufferRenderer.flush()
+            }
+            layer.sampleBufferRenderer.enqueue(sample)
+        } else {
+            if layer.status == .failed {
+                layer.flush()
+            }
+            layer.enqueue(sample)
         }
-        layer.enqueue(sample)
     }
 }
 

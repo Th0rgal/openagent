@@ -860,7 +860,7 @@ struct ControlView: View {
                 // Track successful (non-error) events separately from all events
                 let receivedSuccessfulEvent = OSAllocatedUnfairLock(initialState: false)
 
-                let streamCompleted = await withCheckedContinuation { continuation in
+                _ = await withCheckedContinuation { continuation in
                     let innerTask = api.streamControl { eventType, data in
                         // Only count non-error events as successful for backoff reset
                         if eventType != "error" {
@@ -1488,6 +1488,7 @@ private struct ThinkingBubble: View {
     @State private var isExpanded: Bool = true
     @State private var elapsedSeconds: Int = 0
     @State private var hasAutoCollapsed = false
+    @State private var timerTask: Task<Void, Never>?
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1549,7 +1550,20 @@ private struct ThinkingBubble: View {
         .onAppear {
             startTimer()
         }
+        .onDisappear {
+            timerTask?.cancel()
+            timerTask = nil
+        }
         .onChange(of: message.thinkingDone) { _, done in
+            if done {
+                timerTask?.cancel()
+                timerTask = nil
+
+                if let startTime = message.thinkingStartTime {
+                    elapsedSeconds = Int(Date().timeIntervalSince(startTime))
+                }
+            }
+
             if done && !hasAutoCollapsed {
                 // Don't auto-collapse for extended thinking (> 30 seconds)
                 // User may want to review what the agent was thinking about
@@ -1580,6 +1594,9 @@ private struct ThinkingBubble: View {
     }
     
     private func startTimer() {
+        timerTask?.cancel()
+        timerTask = nil
+
         guard !message.thinkingDone else {
             // Calculate elapsed from start time
             if let startTime = message.thinkingStartTime {
@@ -1587,15 +1604,16 @@ private struct ThinkingBubble: View {
             }
             return
         }
-        
+
         // Update every second while thinking
-        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
-            if message.thinkingDone {
-                timer.invalidate()
-            } else if let startTime = message.thinkingStartTime {
-                elapsedSeconds = Int(Date().timeIntervalSince(startTime))
-            } else {
-                elapsedSeconds += 1
+        timerTask = Task { @MainActor in
+            while !Task.isCancelled {
+                if let startTime = message.thinkingStartTime {
+                    elapsedSeconds = Int(Date().timeIntervalSince(startTime))
+                } else {
+                    elapsedSeconds += 1
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
     }

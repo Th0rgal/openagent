@@ -291,7 +291,9 @@ struct TerminalView: View {
                     break
                 }
                 // Continue receiving
-                receiveMessages()
+                Task { @MainActor in
+                    receiveMessages()
+                }
                 
             case .failure(let error):
                 Task { @MainActor in
