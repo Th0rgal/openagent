@@ -28,6 +28,13 @@ mod terminal;
 mod ui;
 mod web;
 
+pub use directory::{ListDirectory, SearchFiles};
+pub use file_ops::{DeleteFile, ReadFile, WriteFile};
+pub use git::{GitCommit, GitDiff, GitLog, GitStatus};
+pub use search::GrepSearch;
+pub use terminal::RunCommand;
+pub use web::{FetchUrl, WebSearch};
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -153,6 +160,13 @@ impl ToolRegistry {
     /// Create a new registry with all default tools.
     pub fn new() -> Self {
         Self::with_options(None, None)
+    }
+
+    /// Create an empty registry (no built-in tools).
+    pub fn empty() -> Self {
+        Self {
+            tools: HashMap::new(),
+        }
     }
 
     /// Create a new registry with all default tools and optional mission control.

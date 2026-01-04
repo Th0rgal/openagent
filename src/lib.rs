@@ -43,6 +43,7 @@ pub mod memory;
 pub mod opencode;
 pub mod task;
 pub mod tools;
+pub mod workspace;
 
 pub use config::Config;
 pub use config::MemoryConfig;

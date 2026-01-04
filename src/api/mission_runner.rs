@@ -11,7 +11,6 @@
 //! - Working directory (isolated per mission)
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -27,6 +26,7 @@ use crate::mcp::McpRegistry;
 use crate::memory::{ContextBuilder, MemorySystem};
 use crate::task::{extract_deliverables, DeliverableSet, VerificationCriteria};
 use crate::tools::ToolRegistry;
+use crate::workspace;
 
 use super::control::{
     AgentEvent, AgentTreeNode, ControlStatus, ExecutionProgress, FrontendToolHub,
@@ -106,25 +106,6 @@ pub struct MissionRunner {
 
     /// Whether complete_mission was explicitly called
     pub explicitly_completed: bool,
-}
-
-/// Compute the working directory path for a mission.
-/// Format: /root/work/mission-{first 8 chars of UUID}/
-pub fn mission_working_dir(base_work_dir: &std::path::Path, mission_id: Uuid) -> PathBuf {
-    let short_id = &mission_id.to_string()[..8];
-    base_work_dir.join(format!("mission-{}", short_id))
-}
-
-/// Ensure the mission working directory exists with proper structure.
-/// Creates: mission-xxx/, mission-xxx/output/, mission-xxx/temp/
-pub fn ensure_mission_dir(
-    base_work_dir: &std::path::Path,
-    mission_id: Uuid,
-) -> std::io::Result<PathBuf> {
-    let dir = mission_working_dir(base_work_dir, mission_id);
-    std::fs::create_dir_all(dir.join("output"))?;
-    std::fs::create_dir_all(dir.join("temp"))?;
-    Ok(dir)
 }
 
 impl MissionRunner {
@@ -436,7 +417,7 @@ async fn run_mission_turn(
     convo.push_str("User:\n");
     convo.push_str(&user_message);
     convo.push_str(&deliverable_reminder);
-    convo.push_str("\n\nInstructions:\n- Continue the conversation helpfully.\n- You may use tools to gather information or make changes.\n- When appropriate, use Tool UI tools (ui_*) for structured output or to ask for user selections.\n- For large data processing tasks (>10KB), use run_command to execute Python scripts rather than processing inline.\n- USE information already provided in the message - do not ask for URLs, paths, or details that were already given.\n- When you have fully completed the user's goal or determined it cannot be completed, use the complete_mission tool to mark the mission status.");
+    convo.push_str("\n\nInstructions:\n- Continue the conversation helpfully.\n- Use available tools to gather information or make changes.\n- For large data processing tasks (>10KB), prefer executing scripts rather than inline processing.\n- USE information already provided in the message - do not ask for URLs, paths, or details that were already given.\n- When you have fully completed the user's goal or determined it cannot be completed, state that clearly in your final response.");
     convo.push_str(multi_step_instructions);
     convo.push_str("\n");
 
@@ -458,30 +439,24 @@ async fn run_mission_turn(
     // Create LLM client
     let llm = Arc::new(OpenRouterClient::new(config.api_key.clone()));
 
-    // Ensure mission working directory exists
-    // This creates /root/work/mission-{short_id}/ with output/ and temp/ subdirs
-    let base_work_dir = config.working_dir.join("work");
-    let mission_work_dir = match ensure_mission_dir(&base_work_dir, mission_id) {
-        Ok(dir) => {
-            tracing::info!(
-                "Mission {} working directory: {}",
-                mission_id,
-                dir.display()
-            );
-            dir
-        }
-        Err(e) => {
-            tracing::warn!("Failed to create mission directory, using default: {}", e);
-            config.working_dir.clone()
-        }
-    };
+    // Ensure mission workspace exists and is configured for OpenCode.
+    let mission_work_dir =
+        match workspace::prepare_mission_workspace(&config, &mcp, mission_id).await {
+            Ok(dir) => {
+                tracing::info!(
+                    "Mission {} workspace directory: {}",
+                    mission_id,
+                    dir.display()
+                );
+                dir
+            }
+            Err(e) => {
+                tracing::warn!("Failed to prepare mission workspace, using default: {}", e);
+                config.working_dir.clone()
+            }
+        };
 
-    // Create shared memory reference for memory tools
-    let shared_memory: Option<crate::tools::memory::SharedMemory> = memory
-        .as_ref()
-        .map(|m| Arc::new(tokio::sync::RwLock::new(Some(m.clone()))));
-
-    let tools = ToolRegistry::with_options(mission_control.clone(), shared_memory);
+    let tools = ToolRegistry::empty();
     let mut ctx = AgentContext::with_memory(
         config.clone(),
         llm,

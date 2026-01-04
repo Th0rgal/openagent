@@ -12,7 +12,6 @@ import {
   disableMcp,
   refreshMcp,
   refreshAllMcps,
-  toggleTool,
   type McpServerState,
   type McpStatus,
   type ToolInfo,
@@ -31,7 +30,6 @@ import {
   Power,
   ChevronLeft,
   Plug,
-  Wrench,
   Settings,
   Search,
 } from "lucide-react";
@@ -684,60 +682,25 @@ function ConfigureMcpModal({
   );
 }
 
-function ToolsTab({
-  tools,
-  onToggle,
-}: {
-  tools: ToolInfo[];
-  onToggle: (name: string, enabled: boolean) => void;
-}) {
-  const builtinTools = tools.filter((t) => t.source === "builtin");
+function ToolsTab({ tools }: { tools: ToolInfo[] }) {
   const mcpTools = tools.filter(
     (t) => typeof t.source === "object" && "mcp" in t.source
   );
 
   return (
     <div className="space-y-6">
-      {/* Built-in tools */}
-      <div>
-        <h3 className="mb-3 text-sm font-medium text-white">
-          Built-in Tools ({builtinTools.length})
-        </h3>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {builtinTools.map((tool) => (
-            <div
-              key={tool.name}
-              className="flex items-center justify-between rounded-xl bg-white/[0.02] border border-white/[0.04] hover:bg-white/[0.04] hover:border-white/[0.08] p-4 transition-colors"
-            >
-              <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/[0.04]">
-                  <Wrench className="h-4 w-4 text-white/40" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-white">{tool.name}</p>
-                  <p
-                    className="truncate text-xs text-white/40 max-w-[150px]"
-                    title={tool.description}
-                  >
-                    {tool.description.slice(0, 35)}...
-                  </p>
-                </div>
-              </div>
-              <Toggle
-                checked={tool.enabled}
-                onChange={() => onToggle(tool.name, !tool.enabled)}
-              />
-            </div>
-          ))}
-        </div>
+      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-sm text-white/60">
+        Tools are provided by MCP servers and surfaced to OpenCode. Enable or
+        disable an MCP in the Installed tab to control availability.
       </div>
 
-      {/* MCP tools */}
-      {mcpTools.length > 0 && (
-        <div>
-          <h3 className="mb-3 text-sm font-medium text-white">
-            MCP Tools ({mcpTools.length})
-          </h3>
+      <div>
+        <h3 className="mb-3 text-sm font-medium text-white">
+          MCP Tools ({mcpTools.length})
+        </h3>
+        {mcpTools.length === 0 ? (
+          <p className="text-sm text-white/40">No MCP tools discovered yet.</p>
+        ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {mcpTools.map((tool) => (
               <div
@@ -756,19 +719,21 @@ function ToolsTab({
                       from{" "}
                       {typeof tool.source === "object" && "mcp" in tool.source
                         ? tool.source.mcp.name
-                        : "builtin"}
+                        : "unknown"}
+                    </p>
+                    <p
+                      className="truncate text-[11px] text-white/30 max-w-[150px]"
+                      title={tool.description}
+                    >
+                      {tool.description.slice(0, 32)}...
                     </p>
                   </div>
                 </div>
-                <Toggle
-                  checked={tool.enabled}
-                  onChange={() => onToggle(tool.name, !tool.enabled)}
-                />
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -911,17 +876,6 @@ export default function ModulesPage() {
     }
   };
 
-  const handleToggleTool = async (name: string, enabled: boolean) => {
-    try {
-      await toggleTool(name, enabled);
-      toast.success(`${enabled ? "Enabled" : "Disabled"} ${name}`);
-      await fetchData();
-    } catch (error) {
-      console.error("Failed to toggle tool:", error);
-      toast.error(`Failed to toggle ${name}`);
-    }
-  };
-
   const handleRefreshAll = async () => {
     setRefreshing(true);
     try {
@@ -1050,7 +1004,7 @@ export default function ModulesPage() {
           </div>
         )
       ) : (
-        <ToolsTab tools={filteredTools} onToggle={handleToggleTool} />
+        <ToolsTab tools={filteredTools} />
       )}
 
       {/* Detail panel (overlay) */}

@@ -33,6 +33,7 @@ use crate::mcp::McpRegistry;
 use crate::memory::{ContextBuilder, MemorySystem, MissionMessage};
 use crate::task::VerificationCriteria;
 use crate::tools::ToolRegistry;
+use crate::workspace;
 
 use super::auth::AuthUser;
 use super::routes::AppState;
@@ -1889,11 +1890,7 @@ async fn control_actor_loop(
         }
 
         // Clean workspace if requested
-        let short_id = &mission_id.to_string()[..8];
-        let mission_dir = config
-            .working_dir
-            .join("work")
-            .join(format!("mission-{}", short_id));
+        let mission_dir = workspace::mission_workspace_dir(&config.working_dir, mission_id);
 
         if clean_workspace && mission_dir.exists() {
             tracing::info!(
@@ -1971,6 +1968,7 @@ async fn control_actor_loop(
                         if dir_name == "venv"
                             || dir_name == ".venv"
                             || dir_name == ".open_agent"
+                            || dir_name == ".openagent"
                             || dir_name == "temp"
                         {
                             continue;
@@ -2886,9 +2884,22 @@ async fn run_single_control_turn(
     progress_snapshot: Arc<RwLock<ExecutionProgress>>,
     mission_id: Option<Uuid>,
 ) -> crate::agents::AgentResult {
+    // Ensure a workspace directory for this mission (if applicable).
+    let working_dir_path = if let Some(mid) = mission_id {
+        match workspace::prepare_mission_workspace(&config, &mcp, mid).await {
+            Ok(dir) => dir,
+            Err(e) => {
+                tracing::warn!("Failed to prepare mission workspace: {}", e);
+                config.working_dir.clone()
+            }
+        }
+    } else {
+        config.working_dir.clone()
+    };
+
     // Build a task prompt that includes conversation context with size limits.
     // Uses ContextBuilder with config-driven limits to prevent context overflow.
-    let working_dir = config.working_dir.to_string_lossy().to_string();
+    let working_dir = working_dir_path.to_string_lossy().to_string();
     let context_builder = ContextBuilder::new(&config.context, &working_dir);
     let history_for_prompt = match history.last() {
         Some((role, content)) if role == "user" && content == &user_message => {
@@ -2923,18 +2934,13 @@ async fn run_single_control_turn(
     // Context for agent execution.
     let llm = Arc::new(OpenRouterClient::new(config.api_key.clone()));
 
-    // Create shared memory reference for memory tools
-    let shared_memory: Option<crate::tools::memory::SharedMemory> = memory
-        .as_ref()
-        .map(|m| Arc::new(tokio::sync::RwLock::new(Some(m.clone()))));
-
-    let tools = ToolRegistry::with_options(mission_control.clone(), shared_memory);
+    let tools = ToolRegistry::empty();
     let mut ctx = AgentContext::with_memory(
         config.clone(),
         llm,
         tools,
         pricing,
-        config.working_dir.clone(),
+        working_dir_path,
         memory,
     );
     ctx.mission_control = mission_control;

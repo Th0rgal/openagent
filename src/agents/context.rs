@@ -155,7 +155,7 @@ impl AgentContext {
         Self {
             config: self.config.clone(),
             llm: Arc::clone(&self.llm),
-            tools: ToolRegistry::new(), // Fresh tools for isolation
+            tools: ToolRegistry::empty(), // No built-in tools in OpenCode-only mode
             pricing: Arc::clone(&self.pricing),
             working_dir: self.working_dir.clone(),
             max_split_depth: self.max_split_depth.saturating_sub(1),

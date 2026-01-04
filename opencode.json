@@ -1,6 +1,11 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
+    "host": {
+      "type": "local",
+      "command": ["./target/release/host-mcp"],
+      "enabled": true
+    },
     "desktop": {
       "type": "local",
       "command": ["./target/release/desktop-mcp"],

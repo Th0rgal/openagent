@@ -217,7 +217,7 @@ export OPENROUTER_API_KEY="sk-or-v1-..."
 cargo run --release --bin calibrate -- --workspace ./.open_agent_calibration --model openai/gpt-4.1-mini --write-tuning
 ```
 
-This writes a tuning file at `./.open_agent_calibration/.open_agent/tuning.json`. Move/copy it to your real workspace as `./.open_agent/tuning.json` to enable it.
+This writes a tuning file at `./.open_agent_calibration/.openagent/tuning.json`. Move/copy it to your real workspace as `./.openagent/tuning.json` to enable it.
 
 ## License
 

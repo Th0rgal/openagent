@@ -51,9 +51,13 @@ pub struct ProvidersConfig {
 
 /// Load providers configuration from file.
 fn load_providers_config(working_dir: &str) -> ProvidersConfig {
-    let config_path = format!("{}/.open_agent/providers.json", working_dir);
+    let config_path = format!("{}/.openagent/providers.json", working_dir);
+    let legacy_path = format!("{}/.open_agent/providers.json", working_dir);
 
-    match std::fs::read_to_string(&config_path) {
+    let contents =
+        std::fs::read_to_string(&config_path).or_else(|_| std::fs::read_to_string(&legacy_path));
+
+    match contents {
         Ok(contents) => match serde_json::from_str(&contents) {
             Ok(config) => config,
             Err(e) => {
@@ -63,8 +67,9 @@ fn load_providers_config(working_dir: &str) -> ProvidersConfig {
         },
         Err(_) => {
             tracing::info!(
-                "No providers.json found at {}. Using defaults.",
-                config_path
+                "No providers.json found at {} or {}. Using defaults.",
+                config_path,
+                legacy_path
             );
             default_providers_config()
         }

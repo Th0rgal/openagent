@@ -20,7 +20,7 @@ impl TuningParams {
 
     /// Save tuning parameters to the working directory.
     pub async fn save_to_working_dir(&self, working_dir: &Path) -> anyhow::Result<PathBuf> {
-        let dir = working_dir.join(".open_agent");
+        let dir = working_dir.join(".openagent");
         tokio::fs::create_dir_all(&dir).await?;
         let path = dir.join("tuning.json");
         let content = serde_json::to_string_pretty(self)?;

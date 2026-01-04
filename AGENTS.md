@@ -9,8 +9,8 @@ Minimal autonomous coding agent in Rust with **full machine access** (not sandbo
 | Backend (Rust) | `src/` | HTTP API + OpenCode integration |
 | Dashboard (Next.js) | `dashboard/` | Web UI (uses **Bun**, not npm) |
 | iOS Dashboard | `ios_dashboard/` | Native iOS app (Swift/SwiftUI) |
-| MCP configs | `.open_agent/mcp/config.json` | Model Context Protocol servers |
-| Providers | `.open_agent/providers.json` | Provider configuration |
+| MCP configs | `.openagent/mcp/config.json` | Model Context Protocol servers |
+| Providers | `.openagent/providers.json` | Provider configuration |
 
 ## Commands
 
@@ -35,7 +35,7 @@ bun run build                   # Production build
 # - bun run <script> (not npm run <script>)
 
 # Deployment
-ssh root@95.216.112.253 'cd /root/open_agent && git pull && cargo build --release && cp target/release/open_agent /usr/local/bin/ && cp target/release/desktop-mcp /usr/local/bin/ && systemctl restart open_agent'
+ssh root@95.216.112.253 'cd /root/open_agent && git pull && cargo build --release && cp target/release/open_agent /usr/local/bin/ && cp target/release/desktop-mcp /usr/local/bin/ && cp target/release/host-mcp /usr/local/bin/ && systemctl restart open_agent'
 ```
 
 ## Architecture
@@ -144,14 +144,20 @@ OPENCODE_PERMISSIVE=true
 **Desktop Tools with OpenCode:**
 To enable desktop tools (i3, Xvfb, screenshots):
 
-1. Build the MCP server: `cargo build --release --bin desktop-mcp`
-2. Ensure `opencode.json` is in the project root with the desktop MCP config
+1. Build the MCP servers: `cargo build --release --bin desktop-mcp --bin host-mcp`
+2. Workspace `opencode.json` files are generated automatically under `workspaces/`
+   from `.openagent/mcp/config.json` (override by editing MCP configs via the UI).
 3. OpenCode will automatically load the tools from the MCP server
 
 The `opencode.json` configures MCP servers for desktop and browser automation:
 ```json
 {
   "mcp": {
+    "host": {
+      "type": "local",
+      "command": ["./target/release/host-mcp"],
+      "enabled": true
+    },
     "desktop": {
       "type": "local",
       "command": ["./target/release/desktop-mcp"],
@@ -369,6 +375,7 @@ pub fn do_thing() -> Result<T, MyError> {
 | Dashboard URL | `https://agent.thomas.md` |
 | Binary | `/usr/local/bin/open_agent` |
 | Desktop MCP | `/usr/local/bin/desktop-mcp` |
+| Host MCP | `/usr/local/bin/host-mcp` |
 | Env file | `/etc/open_agent/open_agent.env` |
 | Service | `systemctl status open_agent` |
 

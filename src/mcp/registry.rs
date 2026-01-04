@@ -62,7 +62,8 @@ impl McpRegistry {
         let config_store = Arc::new(McpConfigStore::new(working_dir).await);
 
         // Initialize states from configs
-        let configs = config_store.list().await;
+        let mut configs = config_store.list().await;
+        configs = Self::ensure_defaults(&config_store, configs, working_dir).await;
         let mut states = HashMap::new();
         for config in configs {
             states.insert(config.id, McpServerState::from_config(config));
@@ -83,6 +84,75 @@ impl McpRegistry {
             disabled_tools: RwLock::new(std::collections::HashSet::new()),
             request_id: AtomicU64::new(1),
         }
+    }
+
+    /// Return the raw MCP configs (for workspace opencode.json generation).
+    pub async fn list_configs(&self) -> Vec<McpServerConfig> {
+        self.config_store.list().await
+    }
+
+    fn default_configs(working_dir: &Path) -> Vec<McpServerConfig> {
+        let mut desktop_env = HashMap::new();
+        if let Ok(res) = std::env::var("DESKTOP_RESOLUTION") {
+            if !res.trim().is_empty() {
+                desktop_env.insert("DESKTOP_RESOLUTION".to_string(), res);
+            }
+        } else {
+            desktop_env.insert("DESKTOP_RESOLUTION".to_string(), "1920x1080".to_string());
+        }
+
+        let repo_desktop = working_dir
+            .join("target")
+            .join("release")
+            .join("desktop-mcp");
+        let desktop_command = if repo_desktop.exists() {
+            repo_desktop.to_string_lossy().to_string()
+        } else {
+            "desktop-mcp".to_string()
+        };
+        let desktop = McpServerConfig::new_stdio(
+            "desktop".to_string(),
+            desktop_command,
+            Vec::new(),
+            desktop_env,
+        );
+        let repo_host = working_dir.join("target").join("release").join("host-mcp");
+        let host_command = if repo_host.exists() {
+            repo_host.to_string_lossy().to_string()
+        } else {
+            "host-mcp".to_string()
+        };
+        let host = McpServerConfig::new_stdio(
+            "host".to_string(),
+            host_command,
+            Vec::new(),
+            HashMap::new(),
+        );
+        let playwright = McpServerConfig::new_stdio(
+            "playwright".to_string(),
+            "npx".to_string(),
+            vec!["@playwright/mcp@latest".to_string()],
+            HashMap::new(),
+        );
+        vec![host, desktop, playwright]
+    }
+
+    async fn ensure_defaults(
+        config_store: &McpConfigStore,
+        mut configs: Vec<McpServerConfig>,
+        working_dir: &Path,
+    ) -> Vec<McpServerConfig> {
+        let defaults = Self::default_configs(working_dir);
+        for config in defaults {
+            if configs.iter().any(|c| c.name == config.name) {
+                continue;
+            }
+            match config_store.add(config.clone()).await {
+                Ok(saved) => configs.push(saved),
+                Err(e) => tracing::warn!("Failed to add default MCP {}: {}", config.name, e),
+            }
+        }
+        configs
     }
 
     /// Get the next request ID for JSON-RPC

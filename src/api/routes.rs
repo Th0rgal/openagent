@@ -28,6 +28,7 @@ use crate::llm::OpenRouterClient;
 use crate::mcp::McpRegistry;
 use crate::memory::{self, MemorySystem};
 use crate::tools::ToolRegistry;
+use crate::workspace;
 
 use super::auth::{self, AuthUser};
 use super::console;
@@ -461,10 +462,7 @@ async fn create_task(
     // Spawn background task to run the agent
     let state_clone = Arc::clone(&state);
     let task_description = req.task.clone();
-    let working_dir = req
-        .working_dir
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| state.config.working_dir.clone());
+    let working_dir = req.working_dir.map(std::path::PathBuf::from);
 
     tokio::spawn(async move {
         run_agent_task(
@@ -491,7 +489,7 @@ async fn run_agent_task(
     task_id: Uuid,
     task_description: String,
     requested_model: String,
-    working_dir: std::path::PathBuf,
+    working_dir: Option<std::path::PathBuf>,
 ) {
     // Update status to running
     {
@@ -528,9 +526,28 @@ async fn run_agent_task(
         task.analysis_mut().requested_model = Some(requested_model);
     }
 
+    // Prepare workspace for this task (or use a provided custom dir)
+    let working_dir = if let Some(dir) = working_dir {
+        match workspace::prepare_custom_workspace(&state.config, &state.mcp, dir).await {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::warn!("Failed to prepare custom workspace: {}", e);
+                state.config.working_dir.clone()
+            }
+        }
+    } else {
+        match workspace::prepare_task_workspace(&state.config, &state.mcp, task_id).await {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::warn!("Failed to prepare task workspace: {}", e);
+                state.config.working_dir.clone()
+            }
+        }
+    };
+
     // Create context with the specified working directory and memory
     let llm = Arc::new(OpenRouterClient::new(state.config.api_key.clone()));
-    let tools = ToolRegistry::new();
+    let tools = ToolRegistry::empty();
     let pricing = Arc::new(ModelPricing::new());
 
     let mut ctx = AgentContext::with_memory(

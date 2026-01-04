@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::mcp::{AddMcpRequest, McpServerState};
+use crate::workspace;
 
 use super::routes::AppState;
 
@@ -40,12 +41,13 @@ pub async fn add_mcp(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AddMcpRequest>,
 ) -> Result<Json<McpServerState>, (StatusCode, String)> {
-    state
+    let added = state
         .mcp
         .add(req)
         .await
-        .map(Json)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let _ = workspace::sync_all_workspaces(&state.config, &state.mcp).await;
+    Ok(Json(added))
 }
 
 /// Remove an MCP server.
@@ -57,8 +59,9 @@ pub async fn remove_mcp(
         .mcp
         .remove(id)
         .await
-        .map(|_| Json(serde_json::json!({ "success": true })))
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    let _ = workspace::sync_all_workspaces(&state.config, &state.mcp).await;
+    Ok(Json(serde_json::json!({ "success": true })))
 }
 
 /// Enable an MCP server.
@@ -66,12 +69,13 @@ pub async fn enable_mcp(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<McpServerState>, (StatusCode, String)> {
-    state
+    let updated = state
         .mcp
         .enable(id)
         .await
-        .map(Json)
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    let _ = workspace::sync_all_workspaces(&state.config, &state.mcp).await;
+    Ok(Json(updated))
 }
 
 /// Disable an MCP server.
@@ -79,12 +83,13 @@ pub async fn disable_mcp(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<McpServerState>, (StatusCode, String)> {
-    state
+    let updated = state
         .mcp
         .disable(id)
         .await
-        .map(Json)
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    let _ = workspace::sync_all_workspaces(&state.config, &state.mcp).await;
+    Ok(Json(updated))
 }
 
 /// Refresh an MCP server (reconnect and discover tools).
@@ -145,17 +150,6 @@ pub enum ToolSource {
 /// List all available tools (built-in + MCP).
 pub async fn list_tools(State(state): State<Arc<AppState>>) -> Json<Vec<ToolInfo>> {
     let mut tools = Vec::new();
-
-    // Add built-in tools from the ToolRegistry
-    let builtin_tools = crate::tools::ToolRegistry::new().list_tools();
-    for t in builtin_tools {
-        tools.push(ToolInfo {
-            name: t.name.clone(),
-            description: t.description.clone(),
-            source: ToolSource::Builtin,
-            enabled: state.mcp.is_tool_enabled(&t.name).await,
-        });
-    }
 
     // Add MCP tools
     let mcp_tools = state.mcp.list_tools().await;
