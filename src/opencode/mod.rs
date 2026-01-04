@@ -4,6 +4,7 @@
 //! OpenCode server, with real-time event streaming.
 
 use anyhow::Context;
+use std::collections::HashMap;
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
@@ -121,6 +122,7 @@ impl OpenCodeClient {
         }
 
         let session_id_clone = session_id.clone();
+        let mut sse_state = SseState::default();
 
         // Spawn SSE event consumer task
         let sse_handle = tokio::spawn(async move {
@@ -138,7 +140,11 @@ impl OpenCodeClient {
                                 let event_str = buffer[..pos].to_string();
                                 buffer = buffer[pos + 2..].to_string();
 
-                                if let Some(event) = parse_sse_event(&event_str, &session_id_clone)
+                                if let Some(event) = parse_sse_event(
+                                    &event_str,
+                                    &session_id_clone,
+                                    &mut sse_state,
+                                )
                                 {
                                     let is_complete =
                                         matches!(event, OpenCodeEvent::MessageComplete { .. });
@@ -307,8 +313,97 @@ pub enum OpenCodeEvent {
     Error { message: String },
 }
 
+#[derive(Debug, Default)]
+struct SseState {
+    message_roles: HashMap<String, String>,
+    part_buffers: HashMap<String, String>,
+}
+
+fn extract_str<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    for key in keys {
+        if let Some(v) = value.get(*key).and_then(|v| v.as_str()) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+fn extract_part_text<'a>(part: &'a serde_json::Value, part_type: &str) -> Option<&'a str> {
+    if part_type == "thinking" {
+        part.get("thinking")
+            .and_then(|v| v.as_str())
+            .or_else(|| part.get("text").and_then(|v| v.as_str()))
+    } else {
+        part.get("text").and_then(|v| v.as_str())
+    }
+}
+
+fn looks_like_user_prompt(content: &str) -> bool {
+    let trimmed = content.trim_start();
+    trimmed.starts_with("Conversation so far:\n")
+        || trimmed.starts_with("User:\n")
+        || trimmed.contains("\nInstructions:\n")
+}
+
+fn handle_part_update(
+    props: &serde_json::Value,
+    state: &mut SseState,
+) -> Option<OpenCodeEvent> {
+    let part = props.get("part")?;
+    let part_type = part.get("type").and_then(|v| v.as_str())?;
+    if !matches!(part_type, "text" | "reasoning" | "thinking") {
+        return None;
+    }
+
+    let part_id = extract_str(part, &["id", "partID", "partId"]);
+    let message_id = extract_str(part, &["messageID", "messageId", "message_id"])
+        .or_else(|| extract_str(props, &["messageID", "messageId", "message_id"]));
+    let role = message_id
+        .and_then(|id| state.message_roles.get(id))
+        .map(|s| s.as_str());
+    if matches!(role, Some(r) if r != "assistant") {
+        return None;
+    }
+
+    let delta = props.get("delta").and_then(|v| v.as_str());
+    let full_text = extract_part_text(part, part_type);
+    let buffer_key = part_id.or(message_id).unwrap_or(part_type).to_string();
+    let buffer = state.part_buffers.entry(buffer_key).or_default();
+
+    let content = if let Some(delta) = delta {
+        if !delta.is_empty() || full_text.is_none() {
+            buffer.push_str(delta);
+            buffer.clone()
+        } else if let Some(full) = full_text {
+            *buffer = full.to_string();
+            buffer.clone()
+        } else {
+            return None;
+        }
+    } else if let Some(full) = full_text {
+        *buffer = full.to_string();
+        buffer.clone()
+    } else {
+        return None;
+    };
+
+    if role.is_none() && part_type == "text" && looks_like_user_prompt(&content) {
+        return None;
+    }
+
+    if matches!(part_type, "reasoning" | "thinking") {
+        Some(OpenCodeEvent::Thinking { content })
+    } else {
+        Some(OpenCodeEvent::TextDelta { content })
+    }
+}
+
 /// Parse an SSE event line into an OpenCodeEvent.
-fn parse_sse_event(event_str: &str, session_id: &str) -> Option<OpenCodeEvent> {
+fn parse_sse_event(
+    event_str: &str,
+    session_id: &str,
+    state: &mut SseState,
+) -> Option<OpenCodeEvent> {
     // SSE format: "data: {...json...}"
     let data_line = event_str.lines().find(|l| l.starts_with("data: "))?;
     let json_str = data_line.strip_prefix("data: ")?;
@@ -319,35 +414,37 @@ fn parse_sse_event(event_str: &str, session_id: &str) -> Option<OpenCodeEvent> {
     let props = json.get("properties").cloned().unwrap_or(json!({}));
 
     // Filter by session ID if the event has one
-    if let Some(event_session_id) = props.get("sessionID").and_then(|v| v.as_str()) {
+    let event_session_id = props
+        .get("sessionID")
+        .or_else(|| props.get("info").and_then(|v| v.get("sessionID")))
+        .or_else(|| props.get("part").and_then(|v| v.get("sessionID")))
+        .and_then(|v| v.as_str());
+    if let Some(event_session_id) = event_session_id {
         if event_session_id != session_id {
             return None;
         }
     }
 
     match event_type {
-        // Message part streaming events
-        "message.part.updated" | "message.updated" => {
-            // Check for text delta
-            if let Some(part) = props.get("part") {
-                if part.get("type").and_then(|v| v.as_str()) == Some("text") {
-                    if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-                        return Some(OpenCodeEvent::TextDelta {
-                            content: text.to_string(),
-                        });
-                    }
-                }
-                // Check for thinking/reasoning
-                if part.get("type").and_then(|v| v.as_str()) == Some("thinking") {
-                    if let Some(text) = part.get("thinking").and_then(|v| v.as_str()) {
-                        return Some(OpenCodeEvent::Thinking {
-                            content: text.to_string(),
-                        });
-                    }
+        // Message info updates
+        "message.updated" => {
+            if let Some(info) = props.get("info") {
+                if let (Some(id), Some(role)) = (
+                    info.get("id").and_then(|v| v.as_str()),
+                    info.get("role").and_then(|v| v.as_str()),
+                ) {
+                    state.message_roles.insert(id.to_string(), role.to_string());
                 }
             }
-            None
+            if props.get("part").is_some() {
+                handle_part_update(&props, state)
+            } else {
+                None
+            }
         }
+
+        // Message part streaming events
+        "message.part.updated" => handle_part_update(&props, state),
 
         // Tool call events
         "tool.call" | "tool.calling" | "message.tool_call" => {

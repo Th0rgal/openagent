@@ -1152,7 +1152,7 @@ struct ControlView: View {
                 // Find existing thinking message or create new
                 if let index = messages.lastIndex(where: { $0.isThinking && !$0.thinkingDone }) {
                     let existingStartTime = messages[index].thinkingStartTime ?? Date()
-                    messages[index].content += "\n\n---\n\n" + content
+                    messages[index].content = content
                     if done {
                         messages[index] = ChatMessage(
                             id: messages[index].id,

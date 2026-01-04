@@ -2484,7 +2484,13 @@ async fn run_single_control_turn(
     // Uses ContextBuilder with config-driven limits to prevent context overflow.
     let working_dir = config.working_dir.to_string_lossy().to_string();
     let context_builder = ContextBuilder::new(&config.context, &working_dir);
-    let history_context = context_builder.build_history_context(&history);
+    let history_for_prompt = match history.last() {
+        Some((role, content)) if role == "user" && content == &user_message => {
+            &history[..history.len() - 1]
+        }
+        _ => history.as_slice(),
+    };
+    let history_context = context_builder.build_history_context(history_for_prompt);
 
     let mut convo = String::new();
     convo.push_str(&history_context);
