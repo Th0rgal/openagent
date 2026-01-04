@@ -2241,13 +2241,13 @@ async fn control_actor_loop(
                                 mission_id
                             )));
                         } else {
-                            // Load mission to get DB model_override as fallback
-                            let db_model = match load_mission_record(
+                            // Load mission to get DB model_override and existing history
+                            let mission = match load_mission_record(
                                 &mission_store,
                                 mission_id,
                             )
                             .await {
-                                Ok(m) => m.model_override,
+                                Ok(m) => m,
                                 Err(e) => {
                                     let _ = respond.send(Err(format!("Failed to load mission: {}", e)));
                                     continue;
@@ -2255,13 +2255,18 @@ async fn control_actor_loop(
                             };
 
                             // Request model takes priority over DB model
-                            let model_override = model.or(db_model);
+                            let model_override = model.or(mission.model_override);
 
                             // Create a new MissionRunner
                             let mut runner = super::mission_runner::MissionRunner::new(
                                 mission_id,
                                 model_override.clone(),
                             );
+
+                            // Load existing history into runner to preserve conversation context
+                            for entry in &mission.history {
+                                runner.history.push((entry.role.clone(), entry.content.clone()));
+                            }
 
                             // Queue the initial message
                             runner.queue_message(Uuid::new_v4(), content, model_override);
