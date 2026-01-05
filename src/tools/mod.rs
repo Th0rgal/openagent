@@ -236,8 +236,9 @@ impl ToolRegistry {
         tools.insert("ui_optionList".to_string(), Arc::new(ui::UiOptionList));
         tools.insert("ui_dataTable".to_string(), Arc::new(ui::UiDataTable));
 
-        // Storage (image upload - requires Supabase)
-        tools.insert("upload_image".to_string(), Arc::new(storage::UploadImage));
+        // Storage (file sharing - requires Supabase)
+        tools.insert("share_file".to_string(), Arc::new(storage::ShareFile));
+        tools.insert("upload_image".to_string(), Arc::new(storage::UploadImage)); // Legacy alias
 
         // Composite tools (higher-level workflow operations)
         tools.insert(

@@ -76,6 +76,68 @@ impl Default for ControlRunState {
     }
 }
 
+/// A file shared by the agent (images render inline, other files show as download links).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SharedFile {
+    /// Display name for the file
+    pub name: String,
+    /// Public URL to view/download
+    pub url: String,
+    /// MIME type (e.g., "image/png", "application/pdf")
+    pub content_type: String,
+    /// File size in bytes (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    /// File kind for rendering hints: "image", "document", "archive", "code", "other"
+    pub kind: SharedFileKind,
+}
+
+/// Kind of shared file (determines how it renders in the UI).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SharedFileKind {
+    /// Images (PNG, JPEG, GIF, WebP, SVG) - rendered inline
+    Image,
+    /// Documents (PDF, Word, etc.) - shown as download card
+    Document,
+    /// Archives (ZIP, TAR, etc.) - shown as download card
+    Archive,
+    /// Code/text files - shown as download card with syntax hint
+    Code,
+    /// Other files - generic download card
+    Other,
+}
+
+impl SharedFile {
+    /// Create a new SharedFile, inferring kind from content_type.
+    pub fn new(name: impl Into<String>, url: impl Into<String>, content_type: impl Into<String>, size_bytes: Option<u64>) -> Self {
+        let content_type = content_type.into();
+        let kind = Self::infer_kind(&content_type);
+        Self {
+            name: name.into(),
+            url: url.into(),
+            content_type,
+            size_bytes,
+            kind,
+        }
+    }
+
+    /// Infer the file kind from MIME type.
+    fn infer_kind(content_type: &str) -> SharedFileKind {
+        if content_type.starts_with("image/") {
+            SharedFileKind::Image
+        } else if content_type.starts_with("text/") || content_type.contains("json") || content_type.contains("xml") {
+            SharedFileKind::Code
+        } else if content_type.contains("pdf") || content_type.contains("document") || content_type.contains("word") {
+            SharedFileKind::Document
+        } else if content_type.contains("zip") || content_type.contains("tar") || content_type.contains("gzip") || content_type.contains("compress") {
+            SharedFileKind::Archive
+        } else {
+            SharedFileKind::Other
+        }
+    }
+}
+
 /// A structured event emitted by the control session.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -103,6 +165,9 @@ pub enum AgentEvent {
         /// Mission this message belongs to (for parallel execution)
         #[serde(skip_serializing_if = "Option::is_none")]
         mission_id: Option<Uuid>,
+        /// Files shared in this message (images, documents, etc.)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        shared_files: Option<Vec<SharedFile>>,
     },
     /// Agent thinking/reasoning (streaming)
     Thinking {
@@ -2750,6 +2815,7 @@ async fn control_actor_loop(
                                 cost_cents: agent_result.cost_cents,
                                 model: agent_result.model_used,
                                 mission_id: completed_mission_id,
+                                shared_files: None,
                             });
                         }
                         Err(e) => {
@@ -2844,6 +2910,7 @@ async fn control_actor_loop(
                                 cost_cents: result.cost_cents,
                                 model: result.model_used.clone(),
                                 mission_id: Some(*mission_id),
+                                shared_files: None,
                             });
 
                             // Persist history for this mission

@@ -663,7 +663,7 @@ struct ControlView: View {
         messages = mission.history.enumerated().map { index, entry in
             ChatMessage(
                 id: "\(mission.id)-\(index)",
-                type: entry.isUser ? .user : .assistant(success: true, costCents: 0, model: nil),
+                type: entry.isUser ? .user : .assistant(success: true, costCents: 0, model: nil, sharedFiles: nil),
                 content: entry.content
             )
         }
@@ -1130,13 +1130,29 @@ struct ControlView: View {
                 let success = data["success"] as? Bool ?? true
                 let costCents = data["cost_cents"] as? Int ?? 0
                 let model = data["model"] as? String
-                
+
+                // Parse shared_files if present
+                var sharedFiles: [SharedFile]? = nil
+                if let filesArray = data["shared_files"] as? [[String: Any]] {
+                    sharedFiles = filesArray.compactMap { fileData -> SharedFile? in
+                        guard let name = fileData["name"] as? String,
+                              let url = fileData["url"] as? String,
+                              let contentType = fileData["content_type"] as? String,
+                              let kindString = fileData["kind"] as? String,
+                              let kind = SharedFileKind(rawValue: kindString) else {
+                            return nil
+                        }
+                        let sizeBytes = fileData["size_bytes"] as? Int
+                        return SharedFile(name: name, url: url, contentType: contentType, sizeBytes: sizeBytes, kind: kind)
+                    }
+                }
+
                 // Remove any incomplete thinking messages and phase messages
                 messages.removeAll { ($0.isThinking && !$0.thinkingDone) || $0.isPhase }
-                
+
                 let message = ChatMessage(
                     id: id,
-                    type: .assistant(success: success, costCents: costCents, model: model),
+                    type: .assistant(success: success, costCents: costCents, model: model, sharedFiles: sharedFiles),
                     content: content
                 )
                 messages.append(message)
@@ -1343,7 +1359,7 @@ private struct MessageBubble: View {
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 8) {
                 // Status header for assistant messages
-                if case .assistant(let success, _, _) = message.type {
+                if case .assistant(let success, _, _, _) = message.type {
                     HStack(spacing: 6) {
                         Image(systemName: success ? "checkmark.circle.fill" : "xmark.circle.fill")
                             .font(.caption2)
@@ -1370,7 +1386,7 @@ private struct MessageBubble: View {
                             .foregroundStyle(Theme.textMuted)
                     }
                 }
-                
+
                 MarkdownText(message.content)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
@@ -1387,13 +1403,159 @@ private struct MessageBubble: View {
                         RoundedRectangle(cornerRadius: 20, style: .continuous)
                             .stroke(Theme.border, lineWidth: 0.5)
                     )
+
+                // Render shared files
+                if let files = message.sharedFiles, !files.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(files) { file in
+                            SharedFileCardView(file: file)
+                        }
+                    }
+                }
             }
-            
+
             // Copy button
             if !message.content.isEmpty {
                 CopyButton(isCopied: isCopied, onCopy: onCopy)
             }
         }
+    }
+}
+
+// MARK: - Shared File Card View
+
+private struct SharedFileCardView: View {
+    let file: SharedFile
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        if file.isImage {
+            imageCard
+        } else {
+            downloadCard
+        }
+    }
+
+    private var imageCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Image preview
+            AsyncImage(url: URL(string: file.url)) { phase in
+                switch phase {
+                case .empty:
+                    ProgressView()
+                        .frame(maxWidth: .infinity, minHeight: 120)
+                        .background(Theme.backgroundSecondary)
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: 300)
+                case .failure:
+                    Image(systemName: "photo")
+                        .font(.title)
+                        .foregroundStyle(Theme.textMuted)
+                        .frame(maxWidth: .infinity, minHeight: 80)
+                        .background(Theme.backgroundSecondary)
+                @unknown default:
+                    EmptyView()
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            // File info bar
+            HStack(spacing: 6) {
+                Image(systemName: file.kind.iconName)
+                    .font(.caption2)
+                    .foregroundStyle(Theme.textMuted)
+
+                Text(file.name)
+                    .font(.caption2)
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
+
+                Spacer()
+
+                if let size = file.formattedSize {
+                    Text(size)
+                        .font(.caption2)
+                        .foregroundStyle(Theme.textMuted)
+                }
+
+                Button {
+                    if let url = URL(string: file.url) {
+                        openURL(url)
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.caption2)
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Theme.backgroundSecondary)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Theme.border, lineWidth: 0.5)
+        )
+    }
+
+    private var downloadCard: some View {
+        Button {
+            if let url = URL(string: file.url) {
+                openURL(url)
+            }
+        } label: {
+            HStack(spacing: 12) {
+                // File type icon
+                Image(systemName: file.kind.iconName)
+                    .font(.title3)
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 40, height: 40)
+                    .background(Theme.accent.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                // File info
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(file.name)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+
+                    HStack(spacing: 4) {
+                        Text(file.contentType)
+                            .font(.caption2)
+                            .foregroundStyle(Theme.textMuted)
+                            .lineLimit(1)
+
+                        if let size = file.formattedSize {
+                            Text("•")
+                                .foregroundStyle(Theme.textMuted)
+                            Text(size)
+                                .font(.caption2)
+                                .foregroundStyle(Theme.textMuted)
+                        }
+                    }
+                }
+
+                Spacer()
+
+                // Download indicator
+                Image(systemName: "arrow.down.circle")
+                    .font(.title3)
+                    .foregroundStyle(Theme.textMuted)
+            }
+            .padding(12)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 

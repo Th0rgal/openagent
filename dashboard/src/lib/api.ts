@@ -446,6 +446,20 @@ export async function resumeMission(id: string, cleanWorkspace: boolean = false)
 
 export type ControlRunState = "idle" | "running" | "waiting_for_tool";
 
+/** File shared by the agent (images render inline, other files show as download links). */
+export interface SharedFile {
+  /** Display name for the file */
+  name: string;
+  /** Public URL to view/download */
+  url: string;
+  /** MIME type (e.g., "image/png", "application/pdf") */
+  content_type: string;
+  /** File size in bytes */
+  size_bytes?: number;
+  /** File kind for rendering hints: "image", "document", "archive", "code", "other" */
+  kind: "image" | "document" | "archive" | "code" | "other";
+}
+
 export type ControlAgentEvent =
   | {
       type: "status";
@@ -462,6 +476,8 @@ export type ControlAgentEvent =
       cost_cents: number;
       model: string | null;
       mission_id?: string;
+      /** Files shared in this message (images, documents, etc.) */
+      shared_files?: SharedFile[];
     }
   | { type: "thinking"; content: string; done: boolean; mission_id?: string }
   | {

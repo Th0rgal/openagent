@@ -71,6 +71,11 @@ import {
   Wifi,
   WifiOff,
   AlertTriangle,
+  Download,
+  Image,
+  FileArchive,
+  File,
+  ExternalLink,
 } from "lucide-react";
 import {
   OptionList,
@@ -87,6 +92,8 @@ import { useLocalStorage } from "@/hooks/use-local-storage";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { DesktopStream } from "@/components/desktop-stream";
 
+import type { SharedFile } from "@/lib/api";
+
 type ChatItem =
   | {
       kind: "user";
@@ -102,6 +109,7 @@ type ChatItem =
       costCents: number;
       model: string | null;
       timestamp: number;
+      sharedFiles?: SharedFile[];
     }
   | {
       kind: "thinking";
@@ -226,6 +234,83 @@ function Shimmer({ className }: { className?: string }) {
       <div className="h-4 bg-white/[0.06] rounded w-1/2 mb-2" />
       <div className="h-4 bg-white/[0.06] rounded w-5/6" />
     </div>
+  );
+}
+
+// Shared file card component - renders images inline and other files as download cards
+function SharedFileCard({ file }: { file: SharedFile }) {
+  const iconMap: Record<SharedFile["kind"], typeof File> = {
+    image: Image,
+    document: FileText,
+    archive: FileArchive,
+    code: Code,
+    other: File,
+  };
+  const FileIcon = iconMap[file.kind] || File;
+
+  // Format file size
+  const sizeLabel = file.size_bytes ? formatBytes(file.size_bytes) : null;
+
+  if (file.kind === "image") {
+    // Render images inline with click to open
+    return (
+      <div className="mt-3 rounded-lg overflow-hidden border border-white/[0.06] bg-black/20">
+        <a
+          href={file.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block"
+        >
+          <img
+            src={file.url}
+            alt={file.name}
+            className="max-w-full max-h-[400px] object-contain"
+            loading="lazy"
+          />
+        </a>
+        <div className="flex items-center gap-2 px-3 py-2 text-xs text-white/40 border-t border-white/[0.06]">
+          <Image className="h-3 w-3" />
+          <span className="truncate flex-1">{file.name}</span>
+          {sizeLabel && <span>{sizeLabel}</span>}
+          <a
+            href={file.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+          >
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  // Render other files as download cards
+  return (
+    <a
+      href={file.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      download={file.name}
+      className="mt-3 flex items-center gap-3 px-4 py-3 rounded-lg border border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04] transition-colors group"
+    >
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10">
+        <FileIcon className="h-5 w-5 text-indigo-400" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="font-medium text-sm text-white/80 truncate">{file.name}</div>
+        <div className="text-xs text-white/40 flex items-center gap-2">
+          <span className="truncate">{file.content_type}</span>
+          {sizeLabel && (
+            <>
+              <span>•</span>
+              <span>{sizeLabel}</span>
+            </>
+          )}
+        </div>
+      </div>
+      <Download className="h-4 w-4 text-white/30 group-hover:text-indigo-400 transition-colors" />
+    </a>
   );
 }
 
@@ -812,7 +897,7 @@ export default function ControlClient() {
 
     const baseName = file.name.replace(/\.[^.]+$/, "") || "image";
     const compressedName = `${baseName}-compressed.jpg`;
-    return new File([blob], compressedName, {
+    return new globalThis.File([blob], compressedName, {
       type: "image/jpeg",
       lastModified: Date.now(),
     });
@@ -877,10 +962,10 @@ export default function ControlClient() {
       const result = await downloadFromUrl(urlInput.trim(), contextPath);
       toast.success(`Downloaded ${result.name}`);
       
-      // Add a message about the download
+      // Add a message about the download at the beginning (consistent with uploads)
       setInput((prev) => {
-        const uploadNote = `[Downloaded: ${result.name}]`;
-        return prev ? `${prev}\n${uploadNote}` : uploadNote;
+        const downloadNote = `[Downloaded: ${result.name}]`;
+        return prev ? `${downloadNote}\n${prev}` : downloadNote;
       });
       
       setUrlInput("");
@@ -1410,6 +1495,18 @@ export default function ControlClient() {
       }
 
       if (event.type === "assistant_message" && isRecord(data)) {
+        // Parse shared_files if present
+        let sharedFiles: SharedFile[] | undefined;
+        if (Array.isArray(data["shared_files"])) {
+          sharedFiles = (data["shared_files"] as unknown[]).filter(isRecord).map((f) => ({
+            name: String(f["name"] ?? "file"),
+            url: String(f["url"] ?? ""),
+            content_type: String(f["content_type"] ?? "application/octet-stream"),
+            size_bytes: typeof f["size_bytes"] === "number" ? f["size_bytes"] : undefined,
+            kind: (f["kind"] as SharedFile["kind"]) ?? "other",
+          }));
+        }
+
         setItems((prev) => [
           ...prev.filter((it) => it.kind !== "thinking" || it.done),
           {
@@ -1420,6 +1517,7 @@ export default function ControlClient() {
             costCents: Number(data["cost_cents"] ?? 0),
             model: data["model"] ? String(data["model"]) : null,
             timestamp: Date.now(),
+            sharedFiles,
           },
         ]);
         return;
@@ -2358,6 +2456,14 @@ export default function ControlClient() {
                           </span>
                         </div>
                         <MarkdownContent content={item.content} />
+                        {/* Render shared files */}
+                        {item.sharedFiles && item.sharedFiles.length > 0 && (
+                          <div className="mt-2">
+                            {item.sharedFiles.map((file, idx) => (
+                              <SharedFileCard key={`${file.url}-${idx}`} file={file} />
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <CopyButton
                         text={item.content}
