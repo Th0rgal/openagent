@@ -1,5 +1,27 @@
 # Open Agent Development Progress
 
+## Iteration 2 Summary
+
+### Completed Features
+
+#### Playwright Test Suite ✅
+- **Test Configuration** (`dashboard/playwright.config.ts`)
+  - Configured for local development and CI
+  - Uses Chromium browser
+  - Auto-starts dev server for testing
+
+- **Test Files**:
+  - `tests/agents.spec.ts`: Agent page tests (5 tests)
+  - `tests/workspaces.spec.ts`: Workspace page tests (5 tests)
+  - `tests/navigation.spec.ts`: Navigation and sidebar tests (3 tests)
+
+- **Test Commands**:
+  - `bun test`: Run all tests headless
+  - `bun test:ui`: Run tests with UI
+
+#### Documentation ✅
+- **MISSION_TESTS.md**: Mission testing framework with 10 test cases defined
+
 ## Iteration 1 Summary
 
 ### Completed Features
