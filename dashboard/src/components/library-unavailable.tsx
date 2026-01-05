@@ -1,7 +1,18 @@
 'use client';
 
 import { useState } from 'react';
-import { GitBranch, ArrowRight, Loader, Key, ExternalLink, ChevronLeft, Search } from 'lucide-react';
+import {
+  GitBranch,
+  ArrowRight,
+  Loader,
+  Key,
+  ExternalLink,
+  ChevronLeft,
+  Search,
+  Plus,
+  Lock,
+  Globe,
+} from 'lucide-react';
 import { readSavedSettings, writeSavedSettings } from '@/lib/settings';
 import { cn } from '@/lib/utils';
 
@@ -21,7 +32,7 @@ type GitHubRepo = {
   updated_at: string;
 };
 
-type Step = 'token' | 'select';
+type Step = 'token' | 'select' | 'create';
 
 export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailableProps) {
   const details = message?.trim();
@@ -35,6 +46,11 @@ export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailable
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRepo, setSelectedRepo] = useState<GitHubRepo | null>(null);
+
+  // Create repo state
+  const [newRepoName, setNewRepoName] = useState('openagent-library');
+  const [newRepoPrivate, setNewRepoPrivate] = useState(true);
+  const [creating, setCreating] = useState(false);
 
   const fetchRepos = async () => {
     if (!token.trim()) {
@@ -75,8 +91,9 @@ export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailable
     fetchRepos();
   };
 
-  const handleRepoSelect = async () => {
-    if (!selectedRepo) return;
+  const handleRepoSelect = async (repo?: GitHubRepo) => {
+    const repoToUse = repo ?? selectedRepo;
+    if (!repoToUse) return;
 
     setSaving(true);
     setError(null);
@@ -84,7 +101,7 @@ export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailable
     try {
       const current = readSavedSettings();
       // Use SSH URL for private repos, HTTPS for public
-      const repoUrl = selectedRepo.private ? selectedRepo.ssh_url : selectedRepo.clone_url;
+      const repoUrl = repoToUse.private ? repoToUse.ssh_url : repoToUse.clone_url;
       writeSavedSettings({ ...current, libraryRepo: repoUrl });
 
       setTimeout(() => {
@@ -100,10 +117,167 @@ export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailable
     }
   };
 
+  const handleCreateRepo = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    const name = newRepoName.trim();
+    if (!name) {
+      setError('Please enter a repository name');
+      return;
+    }
+
+    if (!/^[a-zA-Z0-9._-]+$/.test(name)) {
+      setError('Repository name can only contain letters, numbers, hyphens, underscores, and dots');
+      return;
+    }
+
+    setCreating(true);
+    setError(null);
+
+    try {
+      const response = await fetch('https://api.github.com/user/repos', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token.trim()}`,
+          Accept: 'application/vnd.github+json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name,
+          description: 'OpenAgent library configuration - MCPs, skills, and commands',
+          private: newRepoPrivate,
+          auto_init: true, // Initialize with README
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        if (response.status === 422 && errorData.errors?.[0]?.message?.includes('already exists')) {
+          throw new Error('A repository with this name already exists');
+        }
+        throw new Error(errorData.message || `GitHub API error: ${response.status}`);
+      }
+
+      const newRepo: GitHubRepo = await response.json();
+
+      // Directly connect the newly created repo
+      await handleRepoSelect(newRepo);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create repository');
+      setCreating(false);
+    }
+  };
+
   const filteredRepos = repos.filter((repo) =>
     repo.full_name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // Create new repository step
+  if (step === 'create') {
+    return (
+      <div className="flex items-center justify-center min-h-[calc(100vh-12rem)]">
+        <div className="w-full max-w-md text-center">
+          <button
+            onClick={() => {
+              setStep('select');
+              setError(null);
+            }}
+            className="flex items-center gap-1 text-xs text-white/40 hover:text-white/60 transition-colors mb-4"
+          >
+            <ChevronLeft className="h-3 w-3" />
+            Back
+          </button>
+
+          <div className="flex justify-center mb-6">
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/10 border border-emerald-500/20">
+              <Plus className="h-8 w-8 text-emerald-400" />
+            </div>
+          </div>
+
+          <h2 className="text-lg font-semibold text-white mb-2">Create New Repository</h2>
+          <p className="text-sm text-white/50 mb-6">
+            Create a new GitHub repository to store your library configuration.
+          </p>
+
+          <form onSubmit={handleCreateRepo} className="space-y-4">
+            <div>
+              <input
+                type="text"
+                value={newRepoName}
+                onChange={(e) => {
+                  setNewRepoName(e.target.value);
+                  setError(null);
+                }}
+                placeholder="repository-name"
+                className={cn(
+                  'w-full rounded-xl border bg-white/[0.02] px-4 py-3 text-sm text-white placeholder-white/30 focus:outline-none transition-colors',
+                  error
+                    ? 'border-red-500/50 focus:border-red-500/50'
+                    : 'border-white/[0.08] focus:border-indigo-500/50'
+                )}
+                disabled={creating}
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setNewRepoPrivate(true)}
+                className={cn(
+                  'flex-1 flex items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm transition-colors',
+                  newRepoPrivate
+                    ? 'border-indigo-500/50 bg-indigo-500/10 text-white'
+                    : 'border-white/[0.08] bg-white/[0.02] text-white/60 hover:bg-white/[0.04]'
+                )}
+              >
+                <Lock className="h-4 w-4" />
+                Private
+              </button>
+              <button
+                type="button"
+                onClick={() => setNewRepoPrivate(false)}
+                className={cn(
+                  'flex-1 flex items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm transition-colors',
+                  !newRepoPrivate
+                    ? 'border-indigo-500/50 bg-indigo-500/10 text-white'
+                    : 'border-white/[0.08] bg-white/[0.02] text-white/60 hover:bg-white/[0.04]'
+                )}
+              >
+                <Globe className="h-4 w-4" />
+                Public
+              </button>
+            </div>
+
+            {error && <p className="text-xs text-red-400 text-left">{error}</p>}
+
+            <button
+              type="submit"
+              disabled={creating || !newRepoName.trim()}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:bg-emerald-500/50 px-4 py-3 text-sm font-medium text-white transition-colors disabled:cursor-not-allowed"
+            >
+              {creating ? (
+                <>
+                  <Loader className="h-4 w-4 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                <>
+                  Create Repository
+                  <ArrowRight className="h-4 w-4" />
+                </>
+              )}
+            </button>
+          </form>
+
+          {showDetails && (
+            <p className="mt-4 text-[11px] text-white/20">Details: {details}</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Select repository step
   if (step === 'select') {
     return (
       <div className="flex items-center justify-center min-h-[calc(100vh-12rem)]">
@@ -128,7 +302,7 @@ export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailable
 
           <h2 className="text-lg font-semibold text-white mb-2">Select Repository</h2>
           <p className="text-sm text-white/50 mb-6">
-            Choose a repository to store your library configuration.
+            Choose a repository or create a new one for your library.
           </p>
 
           <div className="relative mb-4">
@@ -143,6 +317,22 @@ export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailable
           </div>
 
           <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] max-h-64 overflow-y-auto">
+            {/* Create new repo option */}
+            <button
+              onClick={() => setStep('create')}
+              className="w-full text-left px-4 py-3 border-b border-white/[0.04] transition-colors hover:bg-emerald-500/5 group"
+            >
+              <div className="flex items-center gap-2">
+                <Plus className="h-4 w-4 text-emerald-400" />
+                <span className="text-sm font-medium text-emerald-400 group-hover:text-emerald-300">
+                  Create new repository
+                </span>
+              </div>
+              <p className="text-xs text-white/40 mt-1 ml-6">
+                Set up a new repository for your library
+              </p>
+            </button>
+
             {filteredRepos.length === 0 ? (
               <div className="p-4 text-sm text-white/40">
                 {repos.length === 0 ? 'No repositories found' : 'No matching repositories'}
@@ -154,9 +344,7 @@ export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailable
                   onClick={() => setSelectedRepo(repo)}
                   className={cn(
                     'w-full text-left px-4 py-3 border-b border-white/[0.04] last:border-b-0 transition-colors',
-                    selectedRepo?.id === repo.id
-                      ? 'bg-indigo-500/10'
-                      : 'hover:bg-white/[0.02]'
+                    selectedRepo?.id === repo.id ? 'bg-indigo-500/10' : 'hover:bg-white/[0.02]'
                   )}
                 >
                   <div className="flex items-center justify-between">
@@ -178,7 +366,7 @@ export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailable
           {error && <p className="mt-3 text-xs text-red-400 text-left">{error}</p>}
 
           <button
-            onClick={handleRepoSelect}
+            onClick={() => handleRepoSelect()}
             disabled={!selectedRepo || saving}
             className="w-full mt-4 flex items-center justify-center gap-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 disabled:bg-indigo-500/50 px-4 py-3 text-sm font-medium text-white transition-colors disabled:cursor-not-allowed"
           >
@@ -203,6 +391,7 @@ export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailable
     );
   }
 
+  // Token entry step
   return (
     <div className="flex items-center justify-center min-h-[calc(100vh-12rem)]">
       <div className="w-full max-w-md text-center">
