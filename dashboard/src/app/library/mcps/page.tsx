@@ -542,9 +542,8 @@ export default function McpsPage() {
       ]);
       setStatus(statusData);
       setMcps(mcpsData);
-      if (selectedName && !mcpsData[selectedName]) {
-        setSelectedName(null);
-      }
+      // Clear selection if the selected item no longer exists
+      setSelectedName((prev) => (prev && !mcpsData[prev] ? null : prev));
     } catch (err) {
       if (err instanceof LibraryUnavailableError) {
         setLibraryUnavailable(true);
@@ -558,7 +557,7 @@ export default function McpsPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedName]);
+  }, []);
 
   useEffect(() => {
     loadData();
