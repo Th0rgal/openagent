@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import { getHealth, HealthResponse } from '@/lib/api';
-import { Server, Bot, Save, RefreshCw, AlertTriangle, GitBranch } from 'lucide-react';
+import { Server, Save, RefreshCw, AlertTriangle, GitBranch } from 'lucide-react';
 import { readSavedSettings, writeSavedSettings } from '@/lib/settings';
 import { cn } from '@/lib/utils';
 
@@ -265,38 +265,6 @@ export default function SettingsPage() {
                   Leave blank to disable library features.
                 </p>
               )}
-            </div>
-          </div>
-
-          {/* About */}
-          <div className="rounded-xl bg-white/[0.02] border border-white/[0.04] p-5">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/10">
-                <Bot className="h-5 w-5 text-indigo-400" />
-              </div>
-              <div>
-                <h2 className="text-sm font-medium text-white">About OpenAgent</h2>
-                <p className="text-xs text-white/40">Autonomous coding agent</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] px-3 py-2">
-                <span className="h-1.5 w-1.5 rounded-full bg-indigo-400" />
-                <span className="text-xs text-white/60">AI-maintainable</span>
-              </div>
-              <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] px-3 py-2">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                <span className="text-xs text-white/60">Self-contained</span>
-              </div>
-              <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] px-3 py-2">
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-                <span className="text-xs text-white/60">Full-access</span>
-              </div>
-              <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] px-3 py-2">
-                <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
-                <span className="text-xs text-white/60">Hierarchical</span>
-              </div>
             </div>
           </div>
 
