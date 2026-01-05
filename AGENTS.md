@@ -50,13 +50,10 @@ Dashboard → Open Agent API → OpenCode Server → Anthropic API (Claude Max)
 
 ```
 src/
-├── agents/              # Agent system
-│   ├── mod.rs           # Agent trait, OrchestratorAgent trait, LeafCapability enum
+├── agents/              # Agent system (delegates to OpenCode)
+│   ├── mod.rs           # Agent trait, AgentRef, LeafCapability enum
 │   ├── opencode.rs      # OpenCodeAgent (delegates to OpenCode server)
 │   ├── context.rs       # AgentContext with LLM, tools, memory
-│   ├── improvements.rs  # Blocker detection, tool failure tracking, smart truncation
-│   ├── tree.rs          # AgentRef, AgentTree for hierarchy
-│   ├── tuning.rs        # TuningParams for agent behavior
 │   └── types.rs         # AgentError, AgentId, AgentResult, AgentType, Complexity
 ├── api/                 # HTTP routes (axum)
 │   ├── mod.rs           # Endpoint registry
@@ -66,11 +63,13 @@ src/
 │   ├── console.rs       # WebSocket console
 │   ├── desktop_stream.rs # WebSocket desktop stream (VNC-style)
 │   ├── fs.rs            # Remote file explorer (list, upload, download, mkdir, rm)
+│   ├── library.rs       # Configuration library endpoints (skills, commands, MCPs)
 │   ├── mcp.rs           # MCP server management endpoints
 │   ├── mission_runner.rs # Background mission execution
 │   ├── providers.rs     # Provider/model listing
 │   ├── ssh_util.rs      # SSH utilities for remote connections
-│   └── types.rs         # Request/response types
+│   ├── types.rs         # Request/response types
+│   └── workspaces.rs    # Workspace management endpoints
 ├── budget/              # Cost tracking, pricing, model selection
 │   ├── mod.rs           # Budget type, SharedBenchmarkRegistry, SharedModelResolver
 │   ├── benchmarks.rs    # Model capability scores from benchmarks
@@ -98,6 +97,10 @@ src/
 │   ├── writer.rs        # Event recording, run management
 │   ├── embed.rs         # Embedding generation
 │   └── types.rs         # Memory event types
+├── library/             # Git-based configuration library
+│   ├── mod.rs           # LibraryStore with git ops and CRUD
+│   ├── git.rs           # Git operations (clone, pull, commit, push, status)
+│   └── types.rs         # Skill, Command, McpServer types
 ├── opencode/            # OpenCode client
 │   └── mod.rs           # OpenCode server communication
 ├── task/                # Task types + verification
@@ -245,6 +248,27 @@ Use Claude models via your Claude Max subscription:
 | `POST` | `/api/fs/mkdir` | Create directory |
 | `POST` | `/api/fs/rm` | Remove file/dir |
 
+### Library (Configuration)
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/library/status` | Git status |
+| `POST` | `/api/library/sync` | Pull from remote |
+| `POST` | `/api/library/commit` | Commit changes |
+| `POST` | `/api/library/push` | Push to remote |
+| `GET` | `/api/library/skills` | List skills |
+| `GET/PUT/DELETE` | `/api/library/skills/{name}` | Skill CRUD |
+| `GET/PUT` | `/api/library/skills/{name}/refs/{path}` | Reference files |
+| `GET` | `/api/library/commands` | List commands |
+| `GET/PUT/DELETE` | `/api/library/commands/{name}` | Command CRUD |
+| `GET/PUT` | `/api/library/mcp` | MCP servers config |
+
+### Workspaces
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/workspaces` | List workspaces |
+| `POST` | `/api/workspaces` | Create workspace |
+| `GET/DELETE` | `/api/workspaces/{id}` | Workspace CRUD |
+
 ### MCP Management
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -302,6 +326,8 @@ Use Claude models via your Claude Max subscription:
 | `OPENROUTER_API_KEY` | - | Only needed for memory embeddings |
 | `BROWSER_ENABLED` | `false` | Enable browser automation tools |
 | `DESKTOP_ENABLED` | `false` | Enable desktop automation tools |
+| `LIBRARY_PATH` | `{working_dir}/.openagent/library` | Path to library git repo |
+| `LIBRARY_REMOTE` | (none) | Git remote URL - library disabled if not set |
 
 ## Secrets
 
