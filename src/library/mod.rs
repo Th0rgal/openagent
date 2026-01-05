@@ -169,6 +169,7 @@ impl LibraryStore {
 
     /// Get a skill by name with full content.
     pub async fn get_skill(&self, name: &str) -> Result<Skill> {
+        Self::validate_name(name)?;
         let skill_dir = self.path.join("skills").join(name);
         let skill_md = skill_dir.join("SKILL.md");
 
@@ -202,6 +203,7 @@ impl LibraryStore {
 
     /// Save a skill's SKILL.md content.
     pub async fn save_skill(&self, name: &str, content: &str) -> Result<()> {
+        Self::validate_name(name)?;
         let skill_dir = self.path.join("skills").join(name);
         let skill_md = skill_dir.join("SKILL.md");
 
@@ -217,12 +219,34 @@ impl LibraryStore {
 
     /// Delete a skill and its directory.
     pub async fn delete_skill(&self, name: &str) -> Result<()> {
+        Self::validate_name(name)?;
         let skill_dir = self.path.join("skills").join(name);
 
         if skill_dir.exists() {
             fs::remove_dir_all(&skill_dir)
                 .await
                 .context("Failed to delete skill directory")?;
+        }
+
+        Ok(())
+    }
+
+    /// Validate that a name doesn't contain path traversal sequences.
+    /// Names should be simple identifiers without directory separators.
+    fn validate_name(name: &str) -> Result<()> {
+        // Reject empty names
+        if name.is_empty() {
+            anyhow::bail!("Name cannot be empty");
+        }
+
+        // Reject path traversal sequences
+        if name.contains("..") || name.contains('/') || name.contains('\\') {
+            anyhow::bail!("Name contains invalid characters");
+        }
+
+        // Reject names that start with a dot (hidden files)
+        if name.starts_with('.') {
+            anyhow::bail!("Name cannot start with a dot");
         }
 
         Ok(())
@@ -246,6 +270,20 @@ impl LibraryStore {
             if !target_canonical.starts_with(&base_canonical) {
                 anyhow::bail!("Path escapes allowed directory");
             }
+        } else {
+            // For new files, verify the parent directory exists and is within base
+            // This prevents symlink bypass attacks where a symlinked parent could escape
+            let mut current = target.to_path_buf();
+            while let Some(parent) = current.parent() {
+                if parent.exists() {
+                    let parent_canonical = parent.canonicalize()?;
+                    if !parent_canonical.starts_with(&base_canonical) {
+                        anyhow::bail!("Path escapes allowed directory");
+                    }
+                    break;
+                }
+                current = parent.to_path_buf();
+            }
         }
 
         Ok(())
@@ -253,6 +291,7 @@ impl LibraryStore {
 
     /// Get a reference file from a skill.
     pub async fn get_skill_reference(&self, skill_name: &str, ref_path: &str) -> Result<String> {
+        Self::validate_name(skill_name)?;
         let skill_dir = self.path.join("skills").join(skill_name);
         let file_path = skill_dir.join(ref_path);
 
@@ -275,6 +314,7 @@ impl LibraryStore {
         ref_path: &str,
         content: &str,
     ) -> Result<()> {
+        Self::validate_name(skill_name)?;
         let skill_dir = self.path.join("skills").join(skill_name);
         let file_path = skill_dir.join(ref_path);
 
@@ -350,6 +390,7 @@ impl LibraryStore {
 
     /// Get a command by name with full content.
     pub async fn get_command(&self, name: &str) -> Result<Command> {
+        Self::validate_name(name)?;
         let command_path = self.path.join("commands").join(format!("{}.md", name));
 
         if !command_path.exists() {
@@ -378,6 +419,7 @@ impl LibraryStore {
 
     /// Save a command's content.
     pub async fn save_command(&self, name: &str, content: &str) -> Result<()> {
+        Self::validate_name(name)?;
         let commands_dir = self.path.join("commands");
         let command_path = commands_dir.join(format!("{}.md", name));
 
@@ -393,6 +435,7 @@ impl LibraryStore {
 
     /// Delete a command.
     pub async fn delete_command(&self, name: &str) -> Result<()> {
+        Self::validate_name(name)?;
         let command_path = self.path.join("commands").join(format!("{}.md", name));
 
         if command_path.exists() {
@@ -497,5 +540,32 @@ This is the body."#;
 
         assert!(frontmatter.is_none());
         assert_eq!(body, content);
+    }
+
+    #[test]
+    fn test_validate_name_valid() {
+        assert!(LibraryStore::validate_name("my-skill").is_ok());
+        assert!(LibraryStore::validate_name("skill_name").is_ok());
+        assert!(LibraryStore::validate_name("skill123").is_ok());
+    }
+
+    #[test]
+    fn test_validate_name_rejects_path_traversal() {
+        assert!(LibraryStore::validate_name("..").is_err());
+        assert!(LibraryStore::validate_name("../etc").is_err());
+        assert!(LibraryStore::validate_name("skill/../etc").is_err());
+        assert!(LibraryStore::validate_name("skill/subdir").is_err());
+        assert!(LibraryStore::validate_name("skill\\subdir").is_err());
+    }
+
+    #[test]
+    fn test_validate_name_rejects_hidden() {
+        assert!(LibraryStore::validate_name(".hidden").is_err());
+        assert!(LibraryStore::validate_name(".").is_err());
+    }
+
+    #[test]
+    fn test_validate_name_rejects_empty() {
+        assert!(LibraryStore::validate_name("").is_err());
     }
 }
