@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   GitBranch,
   ArrowRight,
@@ -12,8 +12,10 @@ import {
   Plus,
   Lock,
   Globe,
+  CheckCircle,
 } from 'lucide-react';
 import { readSavedSettings, writeSavedSettings } from '@/lib/settings';
+import { getLibraryStatus } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 type LibraryUnavailableProps = {
@@ -32,7 +34,7 @@ type GitHubRepo = {
   updated_at: string;
 };
 
-type Step = 'token' | 'select' | 'create';
+type Step = 'token' | 'select' | 'create' | 'connecting';
 
 export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailableProps) {
   const details = message?.trim();
@@ -51,6 +53,20 @@ export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailable
   const [newRepoName, setNewRepoName] = useState('openagent-library');
   const [newRepoPrivate, setNewRepoPrivate] = useState(true);
   const [creating, setCreating] = useState(false);
+
+  // Connecting state
+  const [connectingRepoName, setConnectingRepoName] = useState('');
+  const [connectingStatus, setConnectingStatus] = useState('Initializing library...');
+  const retryRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (retryRef.current) {
+        clearTimeout(retryRef.current);
+      }
+    };
+  }, []);
 
   const fetchRepos = async () => {
     if (!token.trim()) {
@@ -91,6 +107,42 @@ export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailable
     fetchRepos();
   };
 
+  const waitForLibraryReady = async (maxAttempts = 30, delayMs = 2000) => {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      setConnectingStatus(
+        attempt === 0
+          ? 'Initializing library...'
+          : `Cloning repository... (${attempt + 1}/${maxAttempts})`
+      );
+
+      try {
+        await getLibraryStatus();
+        // Success!
+        setConnectingStatus('Connected!');
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        if (onConfigured) {
+          onConfigured();
+        } else {
+          window.location.reload();
+        }
+        return;
+      } catch {
+        // Still initializing, wait and retry
+        if (attempt < maxAttempts - 1) {
+          await new Promise((resolve) => {
+            retryRef.current = setTimeout(resolve, delayMs);
+          });
+        }
+      }
+    }
+
+    // Failed after all attempts
+    setError('Failed to initialize library. The repository may not be accessible.');
+    setStep('select');
+    setSaving(false);
+  };
+
   const handleRepoSelect = async (repo?: GitHubRepo) => {
     const repoToUse = repo ?? selectedRepo;
     if (!repoToUse) return;
@@ -104,13 +156,15 @@ export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailable
       const repoUrl = repoToUse.private ? repoToUse.ssh_url : repoToUse.clone_url;
       writeSavedSettings({ ...current, libraryRepo: repoUrl });
 
-      setTimeout(() => {
-        if (onConfigured) {
-          onConfigured();
-        } else {
-          window.location.reload();
-        }
-      }, 100);
+      // Show connecting step and wait for backend
+      setConnectingRepoName(repoToUse.full_name);
+      setStep('connecting');
+
+      // Small delay to ensure settings are saved
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      // Wait for library to be ready
+      await waitForLibraryReady();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save');
       setSaving(false);
@@ -171,6 +225,31 @@ export function LibraryUnavailable({ message, onConfigured }: LibraryUnavailable
   const filteredRepos = repos.filter((repo) =>
     repo.full_name.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Connecting step - waiting for backend to initialize library
+  if (step === 'connecting') {
+    return (
+      <div className="flex items-center justify-center min-h-[calc(100vh-12rem)]">
+        <div className="w-full max-w-md text-center">
+          <div className="flex justify-center mb-6">
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-500/10 border border-indigo-500/20">
+              {connectingStatus === 'Connected!' ? (
+                <CheckCircle className="h-8 w-8 text-emerald-400" />
+              ) : (
+                <Loader className="h-8 w-8 text-indigo-400 animate-spin" />
+              )}
+            </div>
+          </div>
+
+          <h2 className="text-lg font-semibold text-white mb-2">
+            {connectingStatus === 'Connected!' ? 'Connected!' : 'Connecting Repository'}
+          </h2>
+          <p className="text-sm text-white/50 mb-4">{connectingRepoName}</p>
+          <p className="text-xs text-white/40">{connectingStatus}</p>
+        </div>
+      </div>
+    );
+  }
 
   // Create new repository step
   if (step === 'create') {
