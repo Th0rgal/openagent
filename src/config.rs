@@ -273,6 +273,10 @@ pub struct Config {
 
     /// Whether to auto-allow all OpenCode permissions for created sessions
     pub opencode_permissive: bool,
+
+    /// Timeout in seconds after which a stuck tool will be auto-aborted.
+    /// Set to 0 to disable auto-abort (default: 0 = warn only, don't abort).
+    pub tool_stuck_abort_timeout_secs: u64,
 }
 
 /// SSH configuration for the dashboard console + file explorer.
@@ -398,6 +402,12 @@ impl Config {
             })
             .transpose()?
             .unwrap_or(true);
+
+        // Tool stuck abort timeout (default: 0 = disabled, warn only)
+        let tool_stuck_abort_timeout_secs = std::env::var("TOOL_STUCK_ABORT_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
 
         let default_model = std::env::var("DEFAULT_MODEL")
             .unwrap_or_else(|_| "claude-opus-4-5-20251101".to_string());
@@ -589,6 +599,7 @@ impl Config {
             opencode_base_url,
             opencode_agent,
             opencode_permissive,
+            tool_stuck_abort_timeout_secs,
         })
     }
 
@@ -611,6 +622,7 @@ impl Config {
             opencode_base_url: "http://127.0.0.1:4096".to_string(),
             opencode_agent: None,
             opencode_permissive: true,
+            tool_stuck_abort_timeout_secs: 0,
         }
     }
 }

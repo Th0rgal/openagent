@@ -139,6 +139,8 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         // State snapshots (for refresh resilience)
         .route("/api/control/tree", get(control::get_tree))
         .route("/api/control/progress", get(control::get_progress))
+        // Diagnostic endpoints
+        .route("/api/control/diagnostics/opencode", get(control::get_opencode_diagnostics))
         // Mission management endpoints
         .route("/api/control/missions", get(control::list_missions))
         .route("/api/control/missions", post(control::create_mission))

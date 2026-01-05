@@ -5,10 +5,18 @@
 
 use anyhow::Context;
 use futures::StreamExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::time::Duration;
 use tokio::sync::mpsc;
+
+/// Default timeout for OpenCode HTTP requests (10 minutes).
+/// This is intentionally long to allow for extended tool executions.
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Interval for logging heartbeat while waiting for SSE events (30 seconds).
+const HEARTBEAT_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct OpenCodeClient {
@@ -28,9 +36,16 @@ impl OpenCodeClient {
         while base_url.ends_with('/') {
             base_url.pop();
         }
+
+        // Create client with default timeout
+        let client = reqwest::Client::builder()
+            .timeout(DEFAULT_REQUEST_TIMEOUT)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
         Self {
             base_url,
-            client: reqwest::Client::new(),
+            client,
             default_agent,
             permissive,
         }
@@ -105,10 +120,23 @@ impl OpenCodeClient {
         let agent = agent.map(|s| s.to_string());
         let client = self.clone();
 
+        // Log the message being sent for debugging
+        let content_preview: String = content.chars().take(100).collect();
+        tracing::info!(
+            session_id = %session_id,
+            directory = %directory,
+            model = ?model,
+            agent = ?agent,
+            content_preview = %content_preview,
+            "Sending message to OpenCode"
+        );
+
         let (event_tx, event_rx) = mpsc::channel::<OpenCodeEvent>(256);
 
         // Subscribe to SSE events
         let event_url = format!("{}/event", self.base_url);
+        tracing::debug!(url = %event_url, "Connecting to OpenCode SSE endpoint");
+
         let sse_response = self
             .client
             .get(&event_url)
@@ -121,52 +149,103 @@ impl OpenCodeClient {
             anyhow::bail!("OpenCode /event failed: {}", sse_response.status());
         }
 
+        tracing::debug!(session_id = %session_id, "SSE connection established");
+
         let session_id_clone = session_id.clone();
+        let session_id_for_heartbeat = session_id.clone();
         let mut sse_state = SseState::default();
 
-        // Spawn SSE event consumer task
+        // Spawn SSE event consumer task with heartbeat logging
         let sse_handle = tokio::spawn(async move {
             let mut stream = sse_response.bytes_stream();
             let mut buffer = String::new();
+            let mut last_event_time = std::time::Instant::now();
+            let mut event_count = 0u64;
 
-            while let Some(chunk_result) = stream.next().await {
-                match chunk_result {
-                    Ok(chunk) => {
-                        if let Ok(text) = std::str::from_utf8(&chunk) {
-                            buffer.push_str(text);
+            loop {
+                tokio::select! {
+                    chunk_result = stream.next() => {
+                        match chunk_result {
+                            Some(Ok(chunk)) => {
+                                if let Ok(text) = std::str::from_utf8(&chunk) {
+                                    buffer.push_str(text);
+                                    last_event_time = std::time::Instant::now();
 
-                            // Process complete SSE events (ending with double newline)
-                            while let Some(pos) = buffer.find("\n\n") {
-                                let event_str = buffer[..pos].to_string();
-                                buffer = buffer[pos + 2..].to_string();
+                                    // Process complete SSE events (ending with double newline)
+                                    while let Some(pos) = buffer.find("\n\n") {
+                                        let event_str = buffer[..pos].to_string();
+                                        buffer = buffer[pos + 2..].to_string();
 
-                                if let Some(event) =
-                                    parse_sse_event(&event_str, &session_id_clone, &mut sse_state)
-                                {
-                                    let is_complete =
-                                        matches!(event, OpenCodeEvent::MessageComplete { .. });
-                                    if event_tx.send(event).await.is_err() {
-                                        return; // Receiver dropped
-                                    }
-                                    if is_complete {
-                                        return;
+                                        if let Some(event) =
+                                            parse_sse_event(&event_str, &session_id_clone, &mut sse_state)
+                                        {
+                                            event_count += 1;
+                                            let is_complete =
+                                                matches!(event, OpenCodeEvent::MessageComplete { .. });
+
+                                            tracing::trace!(
+                                                session_id = %session_id_clone,
+                                                event_count = event_count,
+                                                event_type = ?std::mem::discriminant(&event),
+                                                "Received OpenCode event"
+                                            );
+
+                                            if event_tx.send(event).await.is_err() {
+                                                tracing::debug!(session_id = %session_id_clone, "SSE receiver dropped");
+                                                return;
+                                            }
+                                            if is_complete {
+                                                tracing::info!(
+                                                    session_id = %session_id_clone,
+                                                    event_count = event_count,
+                                                    "OpenCode message completed"
+                                                );
+                                                return;
+                                            }
+                                        }
                                     }
                                 }
                             }
+                            Some(Err(e)) => {
+                                tracing::warn!(
+                                    session_id = %session_id_clone,
+                                    error = %e,
+                                    event_count = event_count,
+                                    "SSE stream error"
+                                );
+                                break;
+                            }
+                            None => {
+                                tracing::debug!(
+                                    session_id = %session_id_clone,
+                                    event_count = event_count,
+                                    "SSE stream ended"
+                                );
+                                break;
+                            }
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!("SSE stream error: {}", e);
-                        break;
+                    _ = tokio::time::sleep(HEARTBEAT_LOG_INTERVAL) => {
+                        let elapsed = last_event_time.elapsed();
+                        tracing::info!(
+                            session_id = %session_id_for_heartbeat,
+                            event_count = event_count,
+                            seconds_since_last_event = elapsed.as_secs(),
+                            "OpenCode SSE heartbeat - still waiting for events"
+                        );
                     }
                 }
             }
         });
 
         // Spawn message sending task
+        let session_id_for_message = session_id.clone();
         let message_handle = tokio::spawn(async move {
             // Small delay to ensure SSE subscription is ready
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+            tracing::debug!(session_id = %session_id_for_message, "Sending HTTP POST to OpenCode");
+            let start = std::time::Instant::now();
 
             let result = client
                 .send_message_internal(
@@ -177,6 +256,25 @@ impl OpenCodeClient {
                     agent.as_deref(),
                 )
                 .await;
+
+            let elapsed = start.elapsed();
+            match &result {
+                Ok(_) => {
+                    tracing::info!(
+                        session_id = %session_id_for_message,
+                        elapsed_secs = elapsed.as_secs(),
+                        "OpenCode HTTP POST completed successfully"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        session_id = %session_id_for_message,
+                        elapsed_secs = elapsed.as_secs(),
+                        error = %e,
+                        "OpenCode HTTP POST failed"
+                    );
+                }
+            }
 
             // Cancel SSE task after message completes
             sse_handle.abort();
@@ -268,6 +366,8 @@ impl OpenCodeClient {
             url.push_str(&urlencoding::encode(directory));
         }
 
+        tracing::info!(session_id = %session_id, "Aborting OpenCode session");
+
         let resp = self
             .client
             .post(&url)
@@ -281,8 +381,121 @@ impl OpenCodeClient {
             anyhow::bail!("OpenCode abort failed: {} - {}", status, text);
         }
 
+        tracing::info!(session_id = %session_id, "OpenCode session aborted successfully");
         Ok(())
     }
+
+    /// Get the status of an OpenCode session for debugging.
+    /// Returns session info and the latest messages with their tool states.
+    pub async fn get_session_status(&self, session_id: &str) -> anyhow::Result<OpenCodeSessionStatus> {
+        // Get session info
+        let session_url = format!("{}/session/{}", self.base_url, session_id);
+        let session_resp = self
+            .client
+            .get(&session_url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .context("Failed to get OpenCode session")?;
+
+        if !session_resp.status().is_success() {
+            let text = session_resp.text().await.unwrap_or_default();
+            anyhow::bail!("OpenCode session query failed: {}", text);
+        }
+
+        let session_info: serde_json::Value = session_resp
+            .json()
+            .await
+            .context("Failed to parse session info")?;
+
+        // Get session messages
+        let messages_url = format!("{}/session/{}/message", self.base_url, session_id);
+        let messages_resp = self
+            .client
+            .get(&messages_url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .context("Failed to get OpenCode messages")?;
+
+        let messages: Vec<serde_json::Value> = if messages_resp.status().is_success() {
+            messages_resp.json().await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        // Analyze tool states from the latest assistant message
+        let mut running_tools = Vec::new();
+        let mut completed_tools = Vec::new();
+
+        if let Some(last_assistant_msg) = messages.iter().rev().find(|m| {
+            m.get("info")
+                .and_then(|i| i.get("role"))
+                .and_then(|r| r.as_str())
+                == Some("assistant")
+        }) {
+            if let Some(parts) = last_assistant_msg.get("parts").and_then(|p| p.as_array()) {
+                for part in parts {
+                    if part.get("type").and_then(|t| t.as_str()) == Some("tool") {
+                        let tool_name = part
+                            .get("tool")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let call_id = part
+                            .get("callID")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let status = part
+                            .get("state")
+                            .and_then(|s| s.get("status"))
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+
+                        let tool_info = ToolStatusInfo {
+                            name: tool_name,
+                            call_id,
+                            status: status.clone(),
+                        };
+
+                        if status == "running" {
+                            running_tools.push(tool_info);
+                        } else {
+                            completed_tools.push(tool_info);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(OpenCodeSessionStatus {
+            session_id: session_id.to_string(),
+            session_info,
+            message_count: messages.len(),
+            running_tools,
+            completed_tools,
+        })
+    }
+}
+
+/// Status information about an OpenCode session for debugging.
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenCodeSessionStatus {
+    pub session_id: String,
+    pub session_info: serde_json::Value,
+    pub message_count: usize,
+    pub running_tools: Vec<ToolStatusInfo>,
+    pub completed_tools: Vec<ToolStatusInfo>,
+}
+
+/// Information about a tool call's status.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolStatusInfo {
+    pub name: String,
+    pub call_id: String,
+    pub status: String,
 }
 
 /// Events emitted by OpenCode during execution.
