@@ -276,6 +276,23 @@ async fn build_workspace(
         ));
     }
 
+    // Check if already building (prevents concurrent builds)
+    if workspace.status == WorkspaceStatus::Building {
+        return Err((
+            StatusCode::CONFLICT,
+            "Workspace build already in progress".to_string(),
+        ));
+    }
+
+    // Check if already ready
+    if workspace.status == WorkspaceStatus::Ready {
+        return Ok(Json(workspace.into()));
+    }
+
+    // Set status to Building immediately to prevent concurrent builds
+    workspace.status = WorkspaceStatus::Building;
+    state.workspaces.update(workspace.clone()).await;
+
     // Build the chroot
     match crate::workspace::build_chroot_workspace(&mut workspace, None).await {
         Ok(()) => {

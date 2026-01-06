@@ -176,9 +176,10 @@ pub async fn execute_in_chroot(
     Ok(output)
 }
 
-/// Check if a chroot environment is already created
+/// Check if a chroot environment is already created and fully functional.
+/// This checks both essential directories and required mount points.
 pub async fn is_chroot_created(chroot_path: &Path) -> bool {
-    // Check for essential directories that indicate a functional chroot
+    // Check for essential directories that indicate debootstrap completed
     let essential_paths = vec!["bin", "usr", "etc", "var"];
 
     for path in essential_paths {
@@ -186,6 +187,22 @@ pub async fn is_chroot_created(chroot_path: &Path) -> bool {
         if !full_path.exists() {
             return false;
         }
+    }
+
+    // Also check that mount points exist and are mounted
+    // This ensures the chroot is fully initialized, not just partially created
+    let mount_points = vec!["proc", "sys", "dev/pts", "dev/shm"];
+    for mount in mount_points {
+        let mount_path = chroot_path.join(mount);
+        if !mount_path.exists() {
+            return false;
+        }
+    }
+
+    // Verify /proc is actually mounted by checking for /proc/1 (init process)
+    let proc_check = chroot_path.join("proc/1");
+    if !proc_check.exists() {
+        return false;
     }
 
     true
