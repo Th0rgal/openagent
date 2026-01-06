@@ -1,61 +1,47 @@
-# Open Agent Panel - Architecture & Context
+# Open Agent Panel – Project Guide
 
-This project is a **Managed Open Code Panel**. It is a software suite installed on a server to remotely control AI agents, manage their execution environments (workspaces), and synchronize their configurations (Library).
+Open Agent is a managed control plane for OpenCode-based agents. The backend **does not** run model inference or autonomous logic; it delegates execution to an OpenCode server and focuses on orchestration, telemetry, and workspace/library management.
 
-## Core Philosophy
+## Architecture Summary
 
-1.  **Orchestration, not Execution**: The backend does not run the LLM loop itself. It delegates execution to **Open Code** (or compatible agents like Claude Code) running locally or remotely.
-2.  **Environment Management**: The panel's job is to provide the *place* for the agent to work (Workspaces, Chroots) and the *tools* it needs (Host MCP).
-3.  **Configuration as Code**: All agent configurations (skills, prompts, MCP servers) are synced from a Git repository (The Library).
+- **Backend (Rust/Axum)**: mission orchestration, workspace/chroot management, MCP registry, Library sync.
+- **OpenCode Client**: `src/opencode/` and `src/agents/opencode.rs` (thin wrapper).
+- **Dashboards**: `dashboard/` (Next.js) and `ios_dashboard/` (SwiftUI).
 
-## Tech Stack
+## Core Concepts
 
--   **Backend**: Rust (Axum, Tokio). Acts as the API server and Host MCP.
--   **Web Dashboard**: Next.js 14+ (App Router), Bun, Tailwind.
--   **iOS App**: Swift, SwiftUI.
--   **Infrastructure**: Systemd service on Ubuntu/Debian.
+- **Library**: Git-backed config repo (skills, commands, agents, MCPs). `src/library/`.
+- **Workspaces**: host or chroot environments. `src/workspace.rs` creates per-mission dirs and writes OpenCode config for MCPs.
+- **Missions**: a prompt + agent + workspace. Execution is delegated to OpenCode and streamed to the UI.
 
-## Directory Structure
+## Design Guardrails
 
--   `src/`: Rust backend source.
--   `dashboard/`: Web dashboard source.
--   `ios_dashboard/`: iOS app source.
--   `context/`: (Legacy/Reference) Previous OpenCode schemas.
+- Do **not** reintroduce autonomous agent logic (budgeting, task splitting, verification, model selection). OpenCode handles execution.
+- Keep the backend a thin orchestrator: **Start Mission → Stream Events → Store Logs**.
+- Avoid embedding provider-specific logic in the backend. Provider auth is managed via OpenCode config + dashboard flows.
 
-## Key Components
+## Common Entry Points
 
-### 1. The Backend (`src/`)
--   **Mission Runner**: Manages active agent sessions.
--   **Workspace Manager**: Creates/destroys chroot environments.
--   **Library Manager**: Syncs the `.openagent/library` repo.
--   **Host MCP**: A built-in MCP server that gives agents access to the server's filesystem and tools (within the workspace).
+- `src/api/routes.rs` – API routing and server startup.
+- `src/api/control.rs` – mission control session, SSE streaming.
+- `src/api/mission_runner.rs` – per-mission execution loop.
+- `src/workspace.rs` – workspace lifecycle + OpenCode config generation.
+- `src/opencode/` – OpenCode HTTP + SSE client.
 
-### 2. The Library
-A standard Git repository structure:
--   `skills/`: Reusable agent capabilities (YAML/JSON).
--   `commands/`: Custom shell commands/scripts.
--   `mcp/`: MCP server configurations (config.json).
+## Local Dev
 
-### 3. Workspaces
--   **Directory**: Simple folder isolation.
--   **Chroot**: Full filesystem isolation (debootstrap).
-
-## Development Workflow
-
-### Backend
 ```bash
-# Run locally
-export OPENCODE_BASE_URL="http://localhost:4096"
-cargo run
-```
+# Backend
+export OPENCODE_BASE_URL="http://127.0.0.1:4096"
+cargo run --release
 
-### Dashboard
-```bash
+# Dashboard
 cd dashboard
+bun install
 bun dev
 ```
 
-## Legacy Notes (Cleanup Targets)
--   `src/budget`: Complex budget/pricing logic might be simplified as we delegate to Open Code.
--   `src/llm`: Direct LLM clients (OpenRouter) are likely unnecessary if we fully delegate to Open Code.
--   `src/task`: Complex verification logic might be simplified.
+## Notes
+
+- OpenCode config files are generated per workspace; do not keep static `opencode.json` in the repo.
+- Chroot workspaces require root and Ubuntu/Debian tooling.
