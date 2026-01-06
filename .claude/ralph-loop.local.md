@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 2
+iteration: 3
 max_iterations: 150
 completion_promise: "OPEN_AGENT_COMPLETE"
 started_at: "2026-01-06T07:40:57Z"
