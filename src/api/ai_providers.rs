@@ -9,6 +9,8 @@
 //! - Authenticate provider (OAuth flow)
 //! - Set default provider
 
+use std::path::PathBuf;
+
 use axum::{
     extract::{Path as AxumPath, State},
     http::StatusCode,
@@ -172,6 +174,80 @@ pub struct OAuthCallbackRequest {
     pub method_index: usize,
     /// Authorization code from the OAuth flow
     pub code: String,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OpenCode Auth Sync
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Sync OAuth credentials to OpenCode's auth.json file.
+///
+/// OpenCode stores auth in `~/.local/share/opencode/auth.json` with format:
+/// ```json
+/// {
+///   "anthropic": {
+///     "type": "oauth",
+///     "refresh": "sk-ant-ort01-...",
+///     "access": "sk-ant-oat01-...",
+///     "expires": 1767743285144
+///   }
+/// }
+/// ```
+fn sync_to_opencode_auth(
+    provider_type: ProviderType,
+    refresh_token: &str,
+    access_token: &str,
+    expires_at: i64,
+) -> Result<(), String> {
+    // Get OpenCode auth path
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let auth_path = PathBuf::from(&home)
+        .join(".local/share/opencode/auth.json");
+
+    // Ensure parent directory exists
+    if let Some(parent) = auth_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create OpenCode auth directory: {}", e))?;
+    }
+
+    // Read existing auth or start fresh
+    let mut auth: serde_json::Map<String, serde_json::Value> = if auth_path.exists() {
+        let contents = std::fs::read_to_string(&auth_path)
+            .map_err(|e| format!("Failed to read OpenCode auth: {}", e))?;
+        serde_json::from_str(&contents).unwrap_or_default()
+    } else {
+        serde_json::Map::new()
+    };
+
+    // Map our provider type to OpenCode's key
+    let key = match provider_type {
+        ProviderType::Anthropic => "anthropic",
+        ProviderType::GithubCopilot => "github-copilot",
+        _ => return Ok(()), // Skip providers that OpenCode doesn't use OAuth for
+    };
+
+    // Create the auth entry in OpenCode format
+    let entry = serde_json::json!({
+        "type": "oauth",
+        "refresh": refresh_token,
+        "access": access_token,
+        "expires": expires_at
+    });
+
+    auth.insert(key.to_string(), entry);
+
+    // Write back to file
+    let contents = serde_json::to_string_pretty(&auth)
+        .map_err(|e| format!("Failed to serialize OpenCode auth: {}", e))?;
+    std::fs::write(&auth_path, contents)
+        .map_err(|e| format!("Failed to write OpenCode auth: {}", e))?;
+
+    tracing::info!(
+        "Synced OAuth credentials to OpenCode auth.json for provider: {}",
+        key
+    );
+
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -745,6 +821,17 @@ async fn oauth_callback(
                     updated.name,
                     id
                 );
+
+                // Sync to OpenCode's auth.json so OpenCode can use these credentials
+                if let Err(e) = sync_to_opencode_auth(
+                    provider.provider_type,
+                    refresh_token,
+                    access_token,
+                    expires_at,
+                ) {
+                    tracing::error!("Failed to sync credentials to OpenCode: {}", e);
+                    // Don't fail the request, but log the error
+                }
 
                 Ok(Json(updated.into()))
             }
