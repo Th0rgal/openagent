@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   getLibraryStatus,
   syncLibrary,
@@ -50,6 +50,10 @@ export default function SkillsPage() {
   const [loadingSkill, setLoadingSkill] = useState(false);
   const [showNewSkillDialog, setShowNewSkillDialog] = useState(false);
   const [newSkillName, setNewSkillName] = useState('');
+
+  // Ref to track content for dirty flag comparison
+  const skillContentRef = useRef(skillContent);
+  skillContentRef.current = skillContent;
 
   const loadData = async () => {
     try {
@@ -143,14 +147,11 @@ export default function SkillsPage() {
     try {
       setSkillSaving(true);
       await saveLibrarySkill(selectedSkill.name, contentBeingSaved);
-      // Only clear dirty if content hasn't changed during save
-      setSkillContent((current) => {
-        if (current === contentBeingSaved) {
-          setSkillDirty(false);
-        }
-        return current;
-      });
       await loadData();
+      // Only clear dirty if content hasn't changed during save
+      if (skillContentRef.current === contentBeingSaved) {
+        setSkillDirty(false);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save skill');
     } finally {

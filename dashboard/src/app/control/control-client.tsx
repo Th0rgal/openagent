@@ -1031,6 +1031,16 @@ export default function ControlClient() {
   };
 
   // Convert mission history to chat items
+  // Helper to check if mission history contains a desktop session start
+  const missionHasDesktopSession = useCallback((mission: Mission): boolean => {
+    // Check if any history entry mentions desktop_start_session
+    // This handles both tool calls and results containing the desktop session
+    return mission.history.some((entry) =>
+      entry.content.includes("desktop_start_session") ||
+      entry.content.includes("desktop_desktop_start_session")
+    );
+  }, []);
+
   const missionHistoryToItems = useCallback((mission: Mission): ChatItem[] => {
     // Estimate timestamps based on mission creation time
     const baseTime = new Date(mission.created_at).getTime();
@@ -1211,8 +1221,8 @@ export default function ControlClient() {
 
         const historyItems = missionHistoryToItems(mission);
         setItems(historyItems);
-        // Reset desktop session state when switching missions
-        setHasDesktopSession(false);
+        // Check if mission has an active desktop session in its history
+        setHasDesktopSession(missionHasDesktopSession(mission));
         // Update cache with fresh data
         setMissionItems((prev) => ({ ...prev, [missionId]: historyItems }));
         setViewingMission(mission);

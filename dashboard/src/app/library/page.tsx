@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   getLibraryStatus,
   syncLibrary,
@@ -87,6 +87,14 @@ export default function LibraryPage() {
   const [loadingCommand, setLoadingCommand] = useState(false);
   const [showNewCommandDialog, setShowNewCommandDialog] = useState(false);
   const [newCommandName, setNewCommandName] = useState('');
+
+  // Refs for dirty flag comparison
+  const mcpJsonContentRef = useRef(mcpJsonContent);
+  mcpJsonContentRef.current = mcpJsonContent;
+  const skillContentRef = useRef(skillContent);
+  skillContentRef.current = skillContent;
+  const commandContentRef = useRef(commandContent);
+  commandContentRef.current = commandContent;
 
   const loadData = async () => {
     try {
@@ -194,16 +202,13 @@ export default function LibraryPage() {
       const parsed = JSON.parse(contentBeingSaved);
       await saveLibraryMcps(parsed);
       setMcps(parsed);
-      // Only clear dirty if content hasn't changed during save
-      setMcpJsonContent((current) => {
-        if (current === contentBeingSaved) {
-          setMcpDirty(false);
-        }
-        return current;
-      });
       // Refresh status only (not data since we just saved the new state)
       const statusData = await getLibraryStatus();
       setStatus(statusData);
+      // Only clear dirty if content hasn't changed during save
+      if (mcpJsonContentRef.current === contentBeingSaved) {
+        setMcpDirty(false);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save MCPs');
     } finally {
@@ -232,14 +237,11 @@ export default function LibraryPage() {
     try {
       setSkillSaving(true);
       await saveLibrarySkill(selectedSkill.name, contentBeingSaved);
-      // Only clear dirty if content hasn't changed during save
-      setSkillContent((current) => {
-        if (current === contentBeingSaved) {
-          setSkillDirty(false);
-        }
-        return current;
-      });
       await loadData();
+      // Only clear dirty if content hasn't changed during save
+      if (skillContentRef.current === contentBeingSaved) {
+        setSkillDirty(false);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save skill');
     } finally {
@@ -305,14 +307,11 @@ Describe what this skill does.
     try {
       setCommandSaving(true);
       await saveLibraryCommand(selectedCommand.name, contentBeingSaved);
-      // Only clear dirty if content hasn't changed during save
-      setCommandContent((current) => {
-        if (current === contentBeingSaved) {
-          setCommandDirty(false);
-        }
-        return current;
-      });
       await loadData();
+      // Only clear dirty if content hasn't changed during save
+      if (commandContentRef.current === contentBeingSaved) {
+        setCommandDirty(false);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save command');
     } finally {

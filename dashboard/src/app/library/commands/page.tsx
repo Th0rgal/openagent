@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   getLibraryStatus,
   syncLibrary,
@@ -50,6 +50,10 @@ export default function CommandsPage() {
   const [loadingCommand, setLoadingCommand] = useState(false);
   const [showNewCommandDialog, setShowNewCommandDialog] = useState(false);
   const [newCommandName, setNewCommandName] = useState('');
+
+  // Ref to track content for dirty flag comparison
+  const commandContentRef = useRef(commandContent);
+  commandContentRef.current = commandContent;
 
   const loadData = async () => {
     try {
@@ -144,14 +148,14 @@ export default function CommandsPage() {
       setCommandSaving(true);
       await saveLibraryCommand(selectedCommand.name, contentBeingSaved);
       await loadData();
+      // Only clear dirty if content hasn't changed during save
+      if (commandContentRef.current === contentBeingSaved) {
+        setCommandDirty(false);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save command');
     } finally {
       setCommandSaving(false);
-      // Only clear dirty if content hasn't changed during save
-      if (commandContent === contentBeingSaved) {
-        setCommandDirty(false);
-      }
     }
   };
 

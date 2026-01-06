@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   listAgents,
   getAgent,
@@ -49,6 +49,10 @@ export default function AgentsPage() {
 
   const [dirty, setDirty] = useState(false);
   const [editedAgent, setEditedAgent] = useState<AgentConfig | null>(null);
+
+  // Ref to track agent state for dirty flag comparison
+  const editedAgentRef = useRef(editedAgent);
+  editedAgentRef.current = editedAgent;
 
   const loadData = async () => {
     try {
@@ -127,15 +131,12 @@ export default function AgentsPage() {
       });
       await loadData();
       // Only clear dirty and reload if state hasn't changed during save
-      setEditedAgent((current) => {
-        if (current && JSON.stringify(current) === JSON.stringify(agentBeingSaved)) {
-          // State unchanged - safe to reload and clear dirty
-          loadAgent(agentBeingSaved.id);
-          setDirty(false);
-        }
-        // If state changed during save, keep current state and dirty flag
-        return current;
-      });
+      const currentAgent = editedAgentRef.current;
+      if (currentAgent && JSON.stringify(currentAgent) === JSON.stringify(agentBeingSaved)) {
+        // State unchanged - safe to reload and clear dirty
+        await loadAgent(agentBeingSaved.id);
+        setDirty(false);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save agent');
     } finally {
