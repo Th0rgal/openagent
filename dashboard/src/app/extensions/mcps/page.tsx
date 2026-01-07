@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { type McpServerDef } from '@/lib/api';
+import { type McpServerDef, type McpServerState, listMcps, enableMcp, disableMcp, refreshMcp } from '@/lib/api';
 import {
   AlertCircle,
   Check,
@@ -16,6 +16,8 @@ import {
   X,
   Plug,
   Settings,
+  Power,
+  Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { LibraryUnavailable } from '@/components/library-unavailable';
@@ -212,6 +214,127 @@ function McpCard({
           {entry.def.type === 'remote' ? 'Remote MCP' : 'Local MCP'}
         </span>
         <span className="text-[10px] text-white/40">Library config</span>
+      </div>
+    </div>
+  );
+}
+
+function RuntimeMcpCard({
+  mcp,
+  onToggle,
+  onRefresh,
+}: {
+  mcp: McpServerState;
+  onToggle: (id: string, enabled: boolean) => Promise<void>;
+  onRefresh: (id: string) => Promise<void>;
+}) {
+  const [toggling, setToggling] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const statusColor = {
+    connected: 'text-emerald-400',
+    connecting: 'text-amber-400',
+    disconnected: 'text-white/40',
+    error: 'text-red-400',
+  }[mcp.status];
+
+  const statusLabel = {
+    connected: 'Connected',
+    connecting: 'Connecting...',
+    disconnected: 'Disconnected',
+    error: 'Error',
+  }[mcp.status];
+
+  const handleToggle = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setToggling(true);
+    try {
+      await onToggle(mcp.id, !mcp.enabled);
+    } finally {
+      setToggling(false);
+    }
+  };
+
+  const handleRefresh = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRefreshing(true);
+    try {
+      await onRefresh(mcp.id);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  return (
+    <div
+      className={cn(
+        'w-full rounded-xl p-4 text-left transition-all',
+        'bg-white/[0.02] border hover:bg-white/[0.04]',
+        'border-white/[0.04] hover:border-white/[0.08]'
+      )}
+    >
+      <div className="flex items-start gap-3 mb-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/10">
+          <Zap className="h-5 w-5 text-cyan-400" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="font-medium text-white truncate">{mcp.name}</h3>
+            <span className="tag bg-cyan-500/10 text-cyan-400 border-cyan-500/20">Runtime</span>
+          </div>
+          <div className="flex items-center gap-1 group">
+            <p className="text-xs text-white/40 truncate">
+              {mcp.endpoint || 'stdio'}
+            </p>
+            {mcp.endpoint && <CopyButton text={mcp.endpoint} showOnHover label="Copied endpoint" />}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-1 mb-3">
+        {mcp.tools.slice(0, 3).map((tool) => (
+          <span key={tool} className="tag">
+            {tool}
+          </span>
+        ))}
+        {mcp.tools.length > 3 && <span className="tag">+{mcp.tools.length - 3}</span>}
+        {mcp.tools.length === 0 && (
+          <span className="text-[10px] text-white/30">No tools discovered</span>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between pt-3 border-t border-white/[0.04]">
+        <div className="flex items-center gap-2">
+          <span className={cn('text-[10px]', statusColor)}>{statusLabel}</span>
+          {mcp.error && (
+            <span className="text-[10px] text-red-400 truncate max-w-[120px]" title={mcp.error}>
+              {mcp.error}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="flex h-6 w-6 items-center justify-center rounded text-white/40 hover:bg-white/[0.06] hover:text-white transition-colors disabled:opacity-50"
+            title="Refresh MCP"
+          >
+            <RefreshCw className={cn('h-3 w-3', refreshing && 'animate-spin')} />
+          </button>
+          <button
+            onClick={handleToggle}
+            disabled={toggling}
+            className={cn(
+              'flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-50',
+              mcp.enabled
+                ? 'text-emerald-400 hover:bg-emerald-500/10'
+                : 'text-white/40 hover:bg-white/[0.06]'
+            )}
+            title={mcp.enabled ? 'Disable MCP' : 'Enable MCP'}
+          >
+            <Power className="h-3 w-3" />
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -597,6 +720,57 @@ export default function McpsPage() {
   const [commitMessage, setCommitMessage] = useState('');
   const [showCommitDialog, setShowCommitDialog] = useState(false);
 
+  // Runtime MCPs state
+  const [runtimeMcps, setRuntimeMcps] = useState<McpServerState[]>([]);
+  const [runtimeLoading, setRuntimeLoading] = useState(true);
+
+  // Fetch runtime MCPs
+  useEffect(() => {
+    const fetchRuntimeMcps = async () => {
+      try {
+        const mcps = await listMcps();
+        setRuntimeMcps(mcps);
+      } catch (err) {
+        console.error('Failed to fetch runtime MCPs:', err);
+      } finally {
+        setRuntimeLoading(false);
+      }
+    };
+    fetchRuntimeMcps();
+  }, []);
+
+  const handleToggleRuntimeMcp = async (id: string, enabled: boolean) => {
+    try {
+      const updated = enabled ? await enableMcp(id) : await disableMcp(id);
+      setRuntimeMcps((prev) => prev.map((m) => (m.id === id ? updated : m)));
+      toast.success(`${enabled ? 'Enabled' : 'Disabled'} MCP`);
+    } catch {
+      toast.error('Failed to toggle MCP');
+    }
+  };
+
+  const handleRefreshRuntimeMcp = async (id: string) => {
+    try {
+      const updated = await refreshMcp(id);
+      setRuntimeMcps((prev) => prev.map((m) => (m.id === id ? updated : m)));
+      toast.success('Refreshed MCP');
+    } catch {
+      toast.error('Failed to refresh MCP');
+    }
+  };
+
+  const filteredRuntimeMcps = useMemo(() => {
+    if (!searchQuery.trim()) return runtimeMcps;
+    const query = searchQuery.toLowerCase();
+    return runtimeMcps.filter((mcp) => {
+      return (
+        mcp.name.toLowerCase().includes(query) ||
+        mcp.endpoint?.toLowerCase().includes(query) ||
+        mcp.tools.some((t) => t.toLowerCase().includes(query))
+      );
+    });
+  }, [runtimeMcps, searchQuery]);
+
   const entries = useMemo<McpEntry[]>(() => {
     return Object.entries(mcps)
       .map(([name, def]) => ({ name, def }))
@@ -830,24 +1004,72 @@ export default function McpsPage() {
             />
           </div>
 
-          {filteredEntries.length === 0 ? (
+          {/* Runtime MCPs Section */}
+          {filteredRuntimeMcps.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Zap className="h-4 w-4 text-cyan-400" />
+                <h2 className="text-sm font-medium text-white/70">Runtime MCPs</h2>
+                <span className="text-xs text-white/40">Auto-registered servers</span>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                {filteredRuntimeMcps.map((mcp) => (
+                  <RuntimeMcpCard
+                    key={mcp.id}
+                    mcp={mcp}
+                    onToggle={handleToggleRuntimeMcp}
+                    onRefresh={handleRefreshRuntimeMcp}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {runtimeLoading && filteredRuntimeMcps.length === 0 && (
+            <div className="flex items-center justify-center p-4">
+              <Loader className="h-5 w-5 animate-spin text-white/40" />
+            </div>
+          )}
+
+          {/* Library MCPs Section */}
+          {(filteredEntries.length > 0 || filteredRuntimeMcps.length > 0) && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Plug className="h-4 w-4 text-indigo-400" />
+                <h2 className="text-sm font-medium text-white/70">Library MCPs</h2>
+                <span className="text-xs text-white/40">From your config repo</span>
+              </div>
+              {filteredEntries.length === 0 ? (
+                <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-6 text-center">
+                  <p className="text-sm text-white/40">
+                    {entries.length === 0
+                      ? 'No library MCPs configured yet. Click "Add MCP" to create one.'
+                      : 'No library MCPs match your search.'}
+                  </p>
+                </div>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {filteredEntries.map((entry) => (
+                    <McpCard
+                      key={entry.name}
+                      entry={entry}
+                      isSelected={selectedName === entry.name}
+                      onSelect={(next) => setSelectedName(next?.name ?? null)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Empty state when no MCPs at all */}
+          {filteredEntries.length === 0 && filteredRuntimeMcps.length === 0 && !runtimeLoading && (
             <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-8 text-center">
               <p className="text-sm text-white/40">
-                {entries.length === 0
-                  ? 'No MCP servers configured yet.'
-                  : 'No MCPs match your search.'}
+                {searchQuery.trim()
+                  ? 'No MCPs match your search.'
+                  : 'No MCP servers configured yet.'}
               </p>
-            </div>
-          ) : (
-            <div className="grid gap-4 md:grid-cols-2">
-              {filteredEntries.map((entry) => (
-                <McpCard
-                  key={entry.name}
-                  entry={entry}
-                  isSelected={selectedName === entry.name}
-                  onSelect={(next) => setSelectedName(next?.name ?? null)}
-                />
-              ))}
             </div>
           )}
 
