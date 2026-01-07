@@ -437,13 +437,13 @@ function RuntimeMcpDetailPanel({
     }
   };
 
-  const statusColor = {
+  const statusColorMap: Record<McpStatus, string> = {
     connected: 'text-emerald-400',
     connecting: 'text-amber-400',
     disconnected: 'text-white/40',
     disabled: 'text-white/40',
     error: 'text-red-400',
-  }[mcp.status];
+  };
 
   return (
     <>
@@ -462,7 +462,7 @@ function RuntimeMcpDetailPanel({
               <span className="tag bg-cyan-500/10 text-cyan-400 border-cyan-500/20">Runtime</span>
             </div>
             <div className="flex items-center gap-2 mt-1">
-              <span className={cn('text-xs', statusColor)}>
+              <span className={cn('text-xs', statusColorMap[mcp.status])}>
                 {mcp.status.charAt(0).toUpperCase() + mcp.status.slice(1)}
               </span>
               {mcp.version && <span className="text-xs text-white/30">v{mcp.version}</span>}
