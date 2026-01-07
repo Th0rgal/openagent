@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 
 /// Default timeout for OpenCode HTTP requests (10 minutes).
@@ -133,7 +134,7 @@ impl OpenCodeClient {
 
         let (event_tx, event_rx) = mpsc::channel::<OpenCodeEvent>(256);
 
-        // Subscribe to SSE events using reqwest-eventsource for proper SSE handling
+        // Subscribe to SSE events using raw reqwest with HTTP/1.1 forced
         let event_url = format!("{}/event", self.base_url);
         tracing::debug!(url = %event_url, "Connecting to OpenCode SSE endpoint");
 
@@ -141,79 +142,103 @@ impl OpenCodeClient {
         let session_id_for_heartbeat = session_id.clone();
         let mut sse_state = SseState::default();
 
-        // Spawn SSE event consumer task using reqwest-eventsource
-        let sse_handle = tokio::spawn(async move {
-            use futures::StreamExt;
-            use reqwest_eventsource::{Event, EventSource};
+        // Create a dedicated SSE client with HTTP/1.1 only and no connection pooling
+        // This is critical for SSE to work correctly
+        let sse_client = reqwest::Client::builder()
+            .http1_only()
+            .pool_max_idle_per_host(0)
+            .tcp_nodelay(true)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
 
-            let mut es = EventSource::get(&event_url);
+        // Spawn SSE event consumer task using raw bytes_stream
+        let sse_handle = tokio::spawn(async move {
             let mut last_event_time = std::time::Instant::now();
             let mut event_count = 0u64;
+            let mut line_buffer = String::new();
 
-            tracing::warn!(session_id = %session_id_clone, "SSE consumer task started with eventsource");
+            tracing::warn!(session_id = %session_id_clone, "SSE consumer task started with raw reqwest (HTTP/1.1)");
+
+            // Make the SSE request
+            let response = match sse_client
+                .get(&event_url)
+                .header("Accept", "text/event-stream")
+                .header("Cache-Control", "no-cache")
+                .header("Connection", "keep-alive")
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!(session_id = %session_id_clone, error = %e, "Failed to connect to SSE endpoint");
+                    return;
+                }
+            };
+
+            tracing::warn!(session_id = %session_id_clone, status = %response.status(), "SSE connection established");
+
+            // Convert to byte stream and wrap in BufReader for line-by-line reading
+            let stream = response.bytes_stream();
+            let stream_reader = tokio_util::io::StreamReader::new(
+                stream.map(|result| result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+            );
+            let mut reader = BufReader::new(stream_reader);
 
             loop {
                 tokio::select! {
                     biased;
-                    maybe_event = es.next() => {
-                        match maybe_event {
-                            Some(Ok(Event::Open)) => {
-                                tracing::warn!(session_id = %session_id_clone, "SSE connection opened");
-                            }
-                            Some(Ok(Event::Message(msg))) => {
-                                last_event_time = std::time::Instant::now();
-                                let event_str = format!("data: {}", msg.data);
-
-                                tracing::warn!(
-                                    session_id = %session_id_clone,
-                                    data_len = msg.data.len(),
-                                    data_preview = %msg.data.chars().take(100).collect::<String>(),
-                                    "SSE message received"
-                                );
-
-                                if let Some(event) =
-                                    parse_sse_event(&event_str, &session_id_clone, &mut sse_state)
-                                {
-                                    event_count += 1;
-                                    let is_complete =
-                                        matches!(event, OpenCodeEvent::MessageComplete { .. });
-
-                                    tracing::trace!(
-                                        session_id = %session_id_clone,
-                                        event_count = event_count,
-                                        event_type = ?std::mem::discriminant(&event),
-                                        "Received OpenCode event"
-                                    );
-
-                                    if event_tx.send(event).await.is_err() {
-                                        tracing::debug!(session_id = %session_id_clone, "SSE receiver dropped");
-                                        return;
-                                    }
-                                    if is_complete {
-                                        tracing::info!(
-                                            session_id = %session_id_clone,
-                                            event_count = event_count,
-                                            "OpenCode message completed"
-                                        );
-                                        return;
-                                    }
-                                }
-                            }
-                            Some(Err(e)) => {
-                                tracing::warn!(
-                                    session_id = %session_id_clone,
-                                    error = %e,
-                                    event_count = event_count,
-                                    "SSE stream error"
-                                );
+                    result = reader.read_line(&mut line_buffer) => {
+                        match result {
+                            Ok(0) => {
+                                tracing::debug!(session_id = %session_id_clone, "SSE stream EOF");
                                 break;
                             }
-                            None => {
-                                tracing::debug!(
-                                    session_id = %session_id_clone,
-                                    event_count = event_count,
-                                    "SSE stream ended"
-                                );
+                            Ok(_) => {
+                                let line = line_buffer.trim_end();
+
+                                // Skip empty lines (SSE delimiter)
+                                if line.is_empty() {
+                                    line_buffer.clear();
+                                    continue;
+                                }
+
+                                // Process SSE data lines
+                                if line.starts_with("data: ") {
+                                    last_event_time = std::time::Instant::now();
+                                    let data = &line[6..]; // Skip "data: " prefix
+
+                                    tracing::warn!(
+                                        session_id = %session_id_clone,
+                                        data_len = data.len(),
+                                        data_preview = %data.chars().take(100).collect::<String>(),
+                                        "SSE data received"
+                                    );
+
+                                    if let Some(event) = parse_sse_event(line, &session_id_clone, &mut sse_state) {
+                                        event_count += 1;
+                                        let is_complete = matches!(event, OpenCodeEvent::MessageComplete { .. });
+
+                                        if event_tx.send(event).await.is_err() {
+                                            tracing::debug!(session_id = %session_id_clone, "SSE receiver dropped");
+                                            line_buffer.clear();
+                                            return;
+                                        }
+                                        if is_complete {
+                                            tracing::info!(
+                                                session_id = %session_id_clone,
+                                                event_count = event_count,
+                                                "OpenCode message completed"
+                                            );
+                                            line_buffer.clear();
+                                            return;
+                                        }
+                                    }
+                                }
+
+                                line_buffer.clear();
+                            }
+                            Err(e) => {
+                                tracing::warn!(session_id = %session_id_clone, error = %e, "SSE read error");
                                 break;
                             }
                         }
@@ -232,17 +257,10 @@ impl OpenCodeClient {
         });
 
         // Spawn message sending task
-        // Use a SEPARATE client for the HTTP POST to ensure it doesn't share connections with SSE
         let session_id_for_message = session_id.clone();
-        let post_client = reqwest::Client::builder()
-            .pool_max_idle_per_host(0)
-            .timeout(Duration::from_secs(600))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
         let message_handle = tokio::spawn(async move {
-            // Delay to ensure SSE subscription is ready
-            // EventSource needs time to connect and start receiving events
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            // Delay to ensure SSE subscription is ready and connection is established
+            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
 
             tracing::debug!(session_id = %session_id_for_message, "Sending HTTP POST to OpenCode");
             let start = std::time::Instant::now();
