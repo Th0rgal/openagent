@@ -240,8 +240,9 @@ impl OpenCodeClient {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         let message_handle = tokio::spawn(async move {
-            // Small delay to ensure SSE subscription is ready
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            // Delay to ensure SSE subscription is ready
+            // EventSource needs time to connect and start receiving events
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
             tracing::debug!(session_id = %session_id_for_message, "Sending HTTP POST to OpenCode");
             let start = std::time::Instant::now();
