@@ -1428,7 +1428,7 @@ private struct MessageBubble: View {
                     }
                 }
 
-                MarkdownText(message.content)
+                MarkdownView(message.content)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                     .background(.ultraThinMaterial)
@@ -1867,29 +1867,6 @@ private struct FlowLayout: Layout {
             }
             
             self.size.height = y + rowHeight
-        }
-    }
-}
-
-// MARK: - Markdown Text
-
-private struct MarkdownText: View {
-    let content: String
-    
-    init(_ content: String) {
-        self.content = content
-    }
-    
-    var body: some View {
-        if let attributed = try? AttributedString(markdown: content, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
-            Text(attributed)
-                .font(.body)
-                .foregroundStyle(Theme.textPrimary)
-                .tint(Theme.accent)
-        } else {
-            Text(content)
-                .font(.body)
-                .foregroundStyle(Theme.textPrimary)
         }
     }
 }

@@ -15,6 +15,7 @@ import {
   Plus,
   Save,
   Trash2,
+  FileText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { LibraryUnavailable } from '@/components/library-unavailable';
@@ -257,7 +258,16 @@ Describe what this command does.
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto p-2">
                   {commands.length === 0 ? (
-                    <p className="text-xs text-white/40 text-center py-4">No commands yet</p>
+                    <div className="text-center py-8">
+                      <FileText className="h-8 w-8 text-white/20 mx-auto mb-2" />
+                      <p className="text-xs text-white/40 mb-3">No commands yet</p>
+                      <button
+                        onClick={() => setShowNewCommandDialog(true)}
+                        className="text-xs text-indigo-400 hover:text-indigo-300"
+                      >
+                        Create your first command
+                      </button>
+                    </div>
                   ) : (
                     commands.map((command) => (
                       <button

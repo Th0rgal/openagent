@@ -3480,7 +3480,9 @@ export default function ControlClient() {
                 !items.some(
                   (it) =>
                     (it.kind === "thinking" && !it.done) || it.kind === "phase"
-                ) && (
+                ) &&
+                // Hide if the last item is an assistant message (response complete, waiting for state change)
+                items[items.length - 1]?.kind !== "assistant" && (
                   <div className="flex justify-start gap-3 animate-fade-in">
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-500/20">
                       <Bot className="h-4 w-4 text-indigo-400 animate-pulse" />

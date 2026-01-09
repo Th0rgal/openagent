@@ -30,6 +30,9 @@ test.describe('Workspace Templates Flow', () => {
     await page.getByRole('heading', { name: seedWorkspaceName }).click();
     await expect(page.getByText('Workspace details & runtime settings')).toBeVisible();
 
+    // Switch to Env & Init tab
+    await page.getByRole('button', { name: 'Env & Init' }).click();
+
     // Add env var
     await page.getByRole('button', { name: /Add variable/i }).click();
     await page.getByPlaceholder('KEY').first().fill(envKey);
@@ -45,6 +48,7 @@ test.describe('Workspace Templates Flow', () => {
     await saveSettingsButton.evaluate((button: HTMLButtonElement) => button.click());
 
     // Save as template
+    await page.getByRole('button', { name: 'Template' }).click();
     await page.getByPlaceholder('my-template').fill(templateName);
     const saveTemplateButton = page.getByRole('button', { name: /Save Template/i });
     await saveTemplateButton.scrollIntoViewIfNeeded();

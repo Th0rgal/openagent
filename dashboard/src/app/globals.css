@@ -534,3 +534,24 @@ select:focus-visible {
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   margin: 1rem 0;
 }
+
+.prose-glass table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  display: block;
+  overflow-x: auto;
+}
+
+.prose-glass th,
+.prose-glass td {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  text-align: left;
+  vertical-align: top;
+}
+
+.prose-glass th {
+  background: rgba(255, 255, 255, 0.06);
+  font-weight: 600;
+}

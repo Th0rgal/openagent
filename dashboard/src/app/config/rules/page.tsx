@@ -259,11 +259,6 @@ Describe what this rule does.
             </div>
           )}
 
-          {/* Header */}
-          <div className="flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-white">Rules</h1>
-          </div>
-
           {/* Rules Editor */}
           <div className="flex-1 min-h-0 rounded-xl bg-white/[0.02] border border-white/[0.06] overflow-hidden flex flex-col">
             <div className="flex flex-1 min-h-0">

@@ -1026,6 +1026,7 @@ Describe what this skill does.
           <div className="flex-1 min-h-0 overflow-y-auto p-2">
             {skills.length === 0 ? (
               <div className="text-center py-8">
+                <FileText className="h-8 w-8 text-white/20 mx-auto mb-2" />
                 <p className="text-xs text-white/40 mb-3">No skills yet</p>
                 <button
                   onClick={() => setShowNewSkillDialog(true)}
