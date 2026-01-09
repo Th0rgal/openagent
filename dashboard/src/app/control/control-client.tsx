@@ -1094,12 +1094,15 @@ export default function ControlClient() {
     [thinkingItems]
   );
 
-  // Auto-show thinking panel when thinking starts
+  // Auto-show thinking panel when thinking starts (only on transition to active)
+  const prevHasActiveThinking = useRef(false);
   useEffect(() => {
-    if (hasActiveThinking && !showThinkingPanel) {
+    // Only auto-show when transitioning from no active thinking to active thinking
+    if (hasActiveThinking && !prevHasActiveThinking.current) {
       setShowThinkingPanel(true);
     }
-  }, [hasActiveThinking, showThinkingPanel]);
+    prevHasActiveThinking.current = hasActiveThinking;
+  }, [hasActiveThinking]);
 
   // Group consecutive tool items for collapsed display
   // Returns array of: original items OR { kind: "tool_group", tools: [...], groupId: string }
