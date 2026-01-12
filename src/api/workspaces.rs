@@ -718,7 +718,14 @@ async fn build_workspace(
     state.workspaces.update(workspace.clone()).await;
 
     // Build the container
-    match crate::workspace::build_chroot_workspace(&mut workspace, distro, force_rebuild).await {
+    match crate::workspace::build_chroot_workspace(
+        &mut workspace,
+        distro,
+        force_rebuild,
+        &state.config.working_dir,
+    )
+    .await
+    {
         Ok(()) => {
             // Update in store
             state.workspaces.update(workspace.clone()).await;

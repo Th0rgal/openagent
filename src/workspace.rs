@@ -1450,11 +1450,69 @@ pub async fn resolve_workspace(
     }
 }
 
+fn find_host_binary(name: &str, working_dir: &Path) -> Option<PathBuf> {
+    let candidates = [
+        working_dir.join("target").join("release").join(name),
+        working_dir.join("target").join("debug").join(name),
+    ];
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let candidate = dir.join(name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+async fn copy_binary_into_container(
+    working_dir: &Path,
+    container_root: &Path,
+    binary: &str,
+) -> anyhow::Result<()> {
+    let source = find_host_binary(binary, working_dir)
+        .ok_or_else(|| anyhow::anyhow!(format!("{} binary not found in target or PATH", binary)))?;
+
+    let dest_dir = container_root.join("usr/local/bin");
+    tokio::fs::create_dir_all(&dest_dir).await?;
+    let dest = dest_dir.join(binary);
+    tokio::fs::copy(&source, &dest).await?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o755);
+        tokio::fs::set_permissions(&dest, perms).await?;
+    }
+
+    Ok(())
+}
+
+async fn sync_workspace_mcp_binaries(
+    working_dir: &Path,
+    container_root: &Path,
+) -> anyhow::Result<()> {
+    for binary in ["host-mcp", "desktop-mcp"] {
+        copy_binary_into_container(working_dir, container_root, binary).await?;
+    }
+    Ok(())
+}
+
 /// Build a container workspace.
 pub async fn build_chroot_workspace(
     workspace: &mut Workspace,
     distro: Option<NspawnDistro>,
     force_rebuild: bool,
+    working_dir: &Path,
 ) -> anyhow::Result<()> {
     if workspace.workspace_type != WorkspaceType::Chroot {
         return Err(anyhow::anyhow!("Workspace is not a container type"));
@@ -1478,6 +1536,13 @@ pub async fn build_chroot_workspace(
                         workspace.path.display(),
                         distro.as_str()
                     );
+                    if let Err(e) = sync_workspace_mcp_binaries(working_dir, &workspace.path).await
+                    {
+                        workspace.status = WorkspaceStatus::Error;
+                        workspace.error_message =
+                            Some(format!("Failed to sync MCP binaries: {}", e));
+                        return Err(e);
+                    }
                     workspace.status = WorkspaceStatus::Ready;
                     workspace.error_message = None;
                     return Ok(());
@@ -1524,6 +1589,13 @@ pub async fn build_chroot_workspace(
                 Err(e) => {
                     tracing::warn!(workspace = %workspace.name, error = %e, "Failed to seed Shard data into container")
                 }
+            }
+
+            if let Err(e) = sync_workspace_mcp_binaries(working_dir, &workspace.path).await {
+                workspace.status = WorkspaceStatus::Error;
+                workspace.error_message = Some(format!("Failed to sync MCP binaries: {}", e));
+                tracing::error!(workspace = %workspace.name, error = %e, "Failed to sync MCP binaries into container workspace");
+                return Err(e);
             }
 
             if let Err(e) = run_workspace_init_script(workspace).await {
