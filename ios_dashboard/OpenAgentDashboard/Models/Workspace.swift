@@ -112,7 +112,7 @@ extension Workspace {
         id: "12345678-1234-1234-1234-123456789012",
         name: "project-sandbox",
         workspaceType: .chroot,
-        path: "/var/lib/openagent/chroots/project-sandbox",
+        path: "/var/lib/openagent/containers/project-sandbox",
         status: .ready,
         errorMessage: nil,
         createdAt: ISO8601DateFormatter().string(from: Date())

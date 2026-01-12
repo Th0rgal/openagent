@@ -32,10 +32,15 @@ function normalizeBaseUrl(url: string): string {
 }
 
 export function getRuntimeApiBase(): string {
-  const envBase = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:3000';
-  if (typeof window === 'undefined') return normalizeBaseUrl(envBase);
+  const envBase = process.env.NEXT_PUBLIC_API_URL;
+  if (typeof window === 'undefined') {
+    return normalizeBaseUrl(envBase || 'http://127.0.0.1:3000');
+  }
   const saved = readSavedSettings().apiUrl;
-  return normalizeBaseUrl(saved || envBase);
+  if (saved) return normalizeBaseUrl(saved);
+  if (envBase) return normalizeBaseUrl(envBase);
+  const { protocol, hostname } = window.location;
+  return normalizeBaseUrl(`${protocol}//${hostname}:3000`);
 }
 
 export function getRuntimeLibraryRemote(): string | undefined {
@@ -44,7 +49,6 @@ export function getRuntimeLibraryRemote(): string | undefined {
   const trimmed = saved?.trim();
   return trimmed ? trimmed : undefined;
 }
-
 
 
 

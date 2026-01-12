@@ -30,10 +30,12 @@ use super::ai_providers as ai_providers_api;
 use super::auth::{self, AuthUser};
 use super::console;
 use super::control;
+use super::desktop;
 use super::desktop_stream;
 use super::fs;
 use super::library as library_api;
 use super::mcp as mcp_api;
+use super::monitoring;
 use super::opencode as opencode_api;
 use super::secrets as secrets_api;
 use super::types::*;
@@ -55,10 +57,13 @@ pub struct AppState {
     pub workspaces: workspace::SharedWorkspaceStore,
     /// OpenCode connection store
     pub opencode_connections: Arc<crate::opencode_config::OpenCodeStore>,
+    /// Cached OpenCode agent list
+    pub opencode_agents_cache: RwLock<opencode_api::OpenCodeAgentsCache>,
     /// AI Provider store
     pub ai_providers: Arc<crate::ai_providers::AIProviderStore>,
     /// Pending OAuth state for provider authorization
-    pub pending_oauth: Arc<RwLock<HashMap<crate::ai_providers::ProviderType, crate::ai_providers::PendingOAuth>>>,
+    pub pending_oauth:
+        Arc<RwLock<HashMap<crate::ai_providers::ProviderType, crate::ai_providers::PendingOAuth>>>,
     /// Secrets store for encrypted credentials
     pub secrets: Option<Arc<crate::secrets::SecretsStore>>,
     /// Console session pool for WebSocket reconnection
@@ -67,11 +72,17 @@ pub struct AppState {
 
 /// Start the HTTP server.
 pub async fn serve(config: Config) -> anyhow::Result<()> {
+    // Start monitoring background collector early so clients get history immediately
+    monitoring::init_monitoring();
+
     // Always use OpenCode backend
     let root_agent: AgentRef = Arc::new(OpenCodeAgent::new(config.clone()));
 
     // Initialize MCP registry
     let mcp = Arc::new(McpRegistry::new(&config.working_dir).await);
+    if let Err(e) = crate::opencode_config::ensure_global_config(&mcp).await {
+        tracing::warn!("Failed to ensure OpenCode global config: {}", e);
+    }
     // Refresh all MCPs in background
     {
         let mcp_clone = Arc::clone(&mcp);
@@ -80,18 +91,26 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         });
     }
 
-    // Initialize workspace store (loads from disk and recovers orphaned chroots)
+    // Initialize workspace store (loads from disk and recovers orphaned containers)
     let workspaces = Arc::new(workspace::WorkspaceStore::new(config.working_dir.clone()).await);
 
     // Initialize OpenCode connection store
-    let opencode_connections = Arc::new(crate::opencode_config::OpenCodeStore::new(
-        config.working_dir.join(".openagent/opencode_connections.json"),
-    ).await);
+    let opencode_connections = Arc::new(
+        crate::opencode_config::OpenCodeStore::new(
+            config
+                .working_dir
+                .join(".openagent/opencode_connections.json"),
+        )
+        .await,
+    );
 
     // Initialize AI provider store
-    let ai_providers = Arc::new(crate::ai_providers::AIProviderStore::new(
-        config.working_dir.join(".openagent/ai_providers.json"),
-    ).await);
+    let ai_providers = Arc::new(
+        crate::ai_providers::AIProviderStore::new(
+            config.working_dir.join(".openagent/ai_providers.json"),
+        )
+        .await,
+    );
     let pending_oauth = Arc::new(RwLock::new(HashMap::new()));
 
     // Initialize secrets store
@@ -116,11 +135,48 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     if let Some(library_remote) = config.library_remote.clone() {
         let library_clone = Arc::clone(&library);
         let library_path = config.library_path.clone();
+        let workspaces_clone = Arc::clone(&workspaces);
         tokio::spawn(async move {
             match crate::library::LibraryStore::new(library_path, &library_remote).await {
                 Ok(store) => {
+                    if let Ok(plugins) = store.get_plugins().await {
+                        if let Err(e) = crate::opencode_config::sync_global_plugins(&plugins).await
+                        {
+                            tracing::warn!("Failed to sync OpenCode plugins: {}", e);
+                        }
+                    }
                     tracing::info!("Configuration library initialized from {}", library_remote);
                     *library_clone.write().await = Some(Arc::new(store));
+
+                    let workspaces = workspaces_clone.list().await;
+                    if let Some(library) = library_clone.read().await.as_ref() {
+                        for workspace in workspaces {
+                            let is_default_host = workspace.id == workspace::DEFAULT_WORKSPACE_ID
+                                && workspace.workspace_type == workspace::WorkspaceType::Host;
+                            if is_default_host || !workspace.skills.is_empty() {
+                                if let Err(e) =
+                                    workspace::sync_workspace_skills(&workspace, library).await
+                                {
+                                    tracing::warn!(
+                                        workspace = %workspace.name,
+                                        error = %e,
+                                        "Failed to sync skills after library init"
+                                    );
+                                }
+                            }
+                            if is_default_host || !workspace.tools.is_empty() {
+                                if let Err(e) =
+                                    workspace::sync_workspace_tools(&workspace, library).await
+                                {
+                                    tracing::warn!(
+                                        workspace = %workspace.name,
+                                        error = %e,
+                                        "Failed to sync tools after library init"
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("Failed to initialize configuration library: {}", e);
@@ -149,22 +205,38 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         library,
         workspaces,
         opencode_connections,
+        opencode_agents_cache: RwLock::new(opencode_api::OpenCodeAgentsCache::default()),
         ai_providers,
         pending_oauth,
         secrets,
         console_pool,
     });
 
+    // Start background desktop session cleanup task
+    {
+        let state_clone = Arc::clone(&state);
+        tokio::spawn(async move {
+            desktop::start_cleanup_task(state_clone).await;
+        });
+    }
+
     let public_routes = Router::new()
         .route("/api/health", get(health))
         .route("/api/auth/login", post(auth::login))
         // WebSocket console uses subprotocol-based auth (browser can't set Authorization header)
         .route("/api/console/ws", get(console::console_ws))
+        // WebSocket workspace shell uses subprotocol-based auth
+        .route(
+            "/api/workspaces/:id/shell",
+            get(console::workspace_shell_ws),
+        )
         // WebSocket desktop stream uses subprotocol-based auth
         .route(
             "/api/desktop/stream",
             get(desktop_stream::desktop_stream_ws),
-        );
+        )
+        // WebSocket system monitoring uses subprotocol-based auth
+        .route("/api/monitoring/ws", get(monitoring::monitoring_ws));
 
     // File upload routes with increased body limit (10GB)
     let upload_route = Router::new()
@@ -188,7 +260,10 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         .route("/api/control/tree", get(control::get_tree))
         .route("/api/control/progress", get(control::get_progress))
         // Diagnostic endpoints
-        .route("/api/control/diagnostics/opencode", get(control::get_opencode_diagnostics))
+        .route(
+            "/api/control/diagnostics/opencode",
+            get(control::get_opencode_diagnostics),
+        )
         // Mission management endpoints
         .route("/api/control/missions", get(control::list_missions))
         .route("/api/control/missions", post(control::create_mission))
@@ -200,6 +275,10 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         .route(
             "/api/control/missions/:id/tree",
             get(control::get_mission_tree),
+        )
+        .route(
+            "/api/control/missions/:id/events",
+            get(control::get_mission_events),
         )
         .route(
             "/api/control/missions/:id/load",
@@ -271,10 +350,26 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         .nest("/api/workspaces", workspaces_api::routes())
         // OpenCode connection endpoints
         .nest("/api/opencode/connections", opencode_api::routes())
+        .route("/api/opencode/agents", get(opencode_api::list_agents))
+        // OpenCode settings (oh-my-opencode.json)
+        .route(
+            "/api/opencode/settings",
+            get(opencode_api::get_opencode_settings),
+        )
+        .route(
+            "/api/opencode/settings",
+            axum::routing::put(opencode_api::update_opencode_settings),
+        )
+        .route(
+            "/api/opencode/restart",
+            post(opencode_api::restart_opencode_service),
+        )
         // AI Provider endpoints
         .nest("/api/ai/providers", ai_providers_api::routes())
         // Secrets management endpoints
         .nest("/api/secrets", secrets_api::routes())
+        // Desktop session management endpoints
+        .nest("/api/desktop", desktop::routes())
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::require_auth,
@@ -491,7 +586,8 @@ async fn create_task(
     let id = Uuid::new_v4();
     let model = req
         .model
-        .unwrap_or_else(|| state.config.default_model.clone());
+        .or(state.config.default_model.clone())
+        .unwrap_or_default();
 
     let task_state = TaskState {
         id,
@@ -527,6 +623,7 @@ async fn create_task(
             model,
             budget_cents,
             working_dir,
+            None,
         )
         .await;
     });
@@ -546,6 +643,7 @@ async fn run_agent_task(
     requested_model: String,
     budget_cents: Option<u64>,
     working_dir: Option<std::path::PathBuf>,
+    agent_override: Option<String>,
 ) {
     // Update status to running
     {
@@ -598,8 +696,13 @@ async fn run_agent_task(
         }
     };
 
+    let mut config = state.config.clone();
+    if let Some(agent) = agent_override {
+        config.opencode_agent = Some(agent);
+    }
+
     // Create context with the specified working directory
-    let mut ctx = AgentContext::new(state.config.clone(), working_dir);
+    let mut ctx = AgentContext::new(config, working_dir);
     ctx.mcp = Some(Arc::clone(&state.mcp));
 
     // Run the hierarchical agent
@@ -746,9 +849,7 @@ pub struct ListRunsQuery {
 }
 
 /// List archived runs (stub - memory system removed).
-async fn list_runs(
-    Query(params): Query<ListRunsQuery>,
-) -> Json<serde_json::Value> {
+async fn list_runs(Query(params): Query<ListRunsQuery>) -> Json<serde_json::Value> {
     let limit = params.limit.unwrap_or(20);
     let offset = params.offset.unwrap_or(0);
     Json(serde_json::json!({
@@ -759,16 +860,15 @@ async fn list_runs(
 }
 
 /// Get a specific run (stub - memory system removed).
-async fn get_run(
-    Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    Err((StatusCode::NOT_FOUND, format!("Run {} not found (memory system disabled)", id)))
+async fn get_run(Path(id): Path<Uuid>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    Err((
+        StatusCode::NOT_FOUND,
+        format!("Run {} not found (memory system disabled)", id),
+    ))
 }
 
 /// Get events for a run (stub - memory system removed).
-async fn get_run_events(
-    Path(id): Path<Uuid>,
-) -> Json<serde_json::Value> {
+async fn get_run_events(Path(id): Path<Uuid>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "run_id": id,
         "events": []
@@ -776,9 +876,7 @@ async fn get_run_events(
 }
 
 /// Get tasks for a run (stub - memory system removed).
-async fn get_run_tasks(
-    Path(id): Path<Uuid>,
-) -> Json<serde_json::Value> {
+async fn get_run_tasks(Path(id): Path<Uuid>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "run_id": id,
         "tasks": []
@@ -796,9 +894,7 @@ pub struct SearchMemoryQuery {
 }
 
 /// Search memory (stub - memory system removed).
-async fn search_memory(
-    Query(params): Query<SearchMemoryQuery>,
-) -> Json<serde_json::Value> {
+async fn search_memory(Query(params): Query<SearchMemoryQuery>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "query": params.q,
         "results": []

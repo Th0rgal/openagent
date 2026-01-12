@@ -185,7 +185,7 @@ struct WorkspaceRow: View {
                 id: "1",
                 name: "project-a",
                 workspaceType: .chroot,
-                path: "/var/lib/openagent/chroots/project-a",
+                path: "/var/lib/openagent/containers/project-a",
                 status: .ready,
                 errorMessage: nil,
                 createdAt: "2025-01-05T12:00:00Z"

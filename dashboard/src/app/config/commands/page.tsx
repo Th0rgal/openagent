@@ -15,25 +15,24 @@ import {
   Plus,
   Save,
   Trash2,
-  X,
+  FileText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { LibraryUnavailable } from '@/components/library-unavailable';
 import { useLibrary } from '@/contexts/library-context';
+import { ConfigCodeEditor } from '@/components/config-code-editor';
 
 export default function CommandsPage() {
   const {
     status,
     commands,
     loading,
-    error,
     libraryUnavailable,
     libraryUnavailableMessage,
     refresh,
     sync,
     commit,
     push,
-    clearError,
     saveCommand,
     removeCommand,
     syncing,
@@ -174,16 +173,6 @@ Describe what this command does.
         <LibraryUnavailable message={libraryUnavailableMessage} onConfigured={refresh} />
       ) : (
         <>
-          {error && (
-            <div className="p-4 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 flex-shrink-0" />
-              {error}
-              <button onClick={clearError} className="ml-auto">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          )}
-
           {/* Git Status Bar */}
           {status && (
             <div className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.06]">
@@ -270,7 +259,16 @@ Describe what this command does.
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto p-2">
                   {commands.length === 0 ? (
-                    <p className="text-xs text-white/40 text-center py-4">No commands yet</p>
+                    <div className="text-center py-8">
+                      <FileText className="h-8 w-8 text-white/20 mx-auto mb-2" />
+                      <p className="text-xs text-white/40 mb-3">No commands yet</p>
+                      <button
+                        onClick={() => setShowNewCommandDialog(true)}
+                        className="text-xs text-indigo-400 hover:text-indigo-300"
+                      >
+                        Create your first command
+                      </button>
+                    </div>
                   ) : (
                     commands.map((command) => (
                       <button
@@ -333,14 +331,15 @@ Describe what this command does.
                           <Loader className="h-5 w-5 animate-spin text-white/40" />
                         </div>
                       ) : (
-                        <textarea
+                        <ConfigCodeEditor
                           value={commandContent}
-                          onChange={(e) => {
-                            setCommandContent(e.target.value);
+                          onChange={(value) => {
+                            setCommandContent(value);
                             setCommandDirty(true);
                           }}
-                          className="w-full h-full font-mono text-sm bg-[#0d0d0e] border border-white/[0.06] rounded-lg p-4 text-white/90 resize-none focus:outline-none focus:border-indigo-500/50"
-                          spellCheck={false}
+                          language="markdown"
+                          className="h-full"
+                          disabled={commandSaving}
                         />
                       )}
                     </div>

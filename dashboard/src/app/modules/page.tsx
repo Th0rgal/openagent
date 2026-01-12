@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, useMemo } from "react";
-import { toast } from "sonner";
+import { toast } from "@/components/toast";
 import { cn } from "@/lib/utils";
 import {
   listMcps,

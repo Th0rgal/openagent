@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { Toaster } from "sonner";
 import "./globals.css";
 import { Sidebar } from "@/components/sidebar";
 import { AuthGate } from "@/components/auth-gate";
 import { LibraryProvider } from "@/contexts/library-context";
+import { ToastProvider } from "@/components/toast";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -35,22 +35,13 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <AuthGate>
-          <LibraryProvider>
-            <Sidebar />
-            <main className="ml-56 min-h-screen">{children}</main>
-          </LibraryProvider>
+          <ToastProvider>
+            <LibraryProvider>
+              <Sidebar />
+              <main className="ml-56 min-h-screen">{children}</main>
+            </LibraryProvider>
+          </ToastProvider>
         </AuthGate>
-        <Toaster
-          theme="dark"
-          position="bottom-right"
-          toastOptions={{
-            style: {
-              background: 'rgba(28, 28, 30, 0.95)',
-              border: '1px solid rgba(255, 255, 255, 0.06)',
-              color: 'white',
-            },
-          }}
-        />
       </body>
     </html>
   );

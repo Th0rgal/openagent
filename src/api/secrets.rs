@@ -12,8 +12,8 @@ use axum::{
 use serde::Deserialize;
 
 use crate::secrets::{
-    InitializeKeysResult, InitializeRequest, RegistryInfo, SecretInfo, SecretsStatus,
-    SecretsStore, SetSecretRequest, UnlockRequest,
+    InitializeKeysResult, InitializeRequest, RegistryInfo, SecretInfo, SecretsStatus, SecretsStore,
+    SetSecretRequest, UnlockRequest,
 };
 
 use super::routes::AppState;
@@ -58,10 +58,10 @@ async fn initialize(
     State(state): State<Arc<AppState>>,
     Json(req): Json<InitializeRequest>,
 ) -> Result<Json<InitializeKeysResult>, (StatusCode, String)> {
-    let secrets = state
-        .secrets
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Secrets system not available".to_string()))?;
+    let secrets = state.secrets.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Secrets system not available".to_string(),
+    ))?;
 
     secrets
         .initialize(&req.key_id)
@@ -76,10 +76,10 @@ async fn unlock(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UnlockRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let secrets = state
-        .secrets
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Secrets system not available".to_string()))?;
+    let secrets = state.secrets.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Secrets system not available".to_string(),
+    ))?;
 
     secrets
         .unlock(&req.passphrase)
@@ -91,11 +91,13 @@ async fn unlock(
 
 /// POST /api/secrets/lock
 /// Lock the secrets system (clear passphrase).
-async fn lock(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let secrets = state
-        .secrets
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Secrets system not available".to_string()))?;
+async fn lock(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let secrets = state.secrets.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Secrets system not available".to_string(),
+    ))?;
 
     secrets.lock().await;
 
@@ -107,10 +109,10 @@ async fn lock(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Val
 async fn list_registries(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<RegistryInfo>>, (StatusCode, String)> {
-    let secrets = state
-        .secrets
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Secrets system not available".to_string()))?;
+    let secrets = state.secrets.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Secrets system not available".to_string(),
+    ))?;
 
     Ok(Json(secrets.list_registries().await))
 }
@@ -121,10 +123,10 @@ async fn list_secrets(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<Vec<SecretInfo>>, (StatusCode, String)> {
-    let secrets = state
-        .secrets
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Secrets system not available".to_string()))?;
+    let secrets = state.secrets.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Secrets system not available".to_string(),
+    ))?;
 
     secrets
         .list_secrets(&name)
@@ -139,10 +141,10 @@ async fn delete_registry(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let secrets = state
-        .secrets
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Secrets system not available".to_string()))?;
+    let secrets = state.secrets.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Secrets system not available".to_string(),
+    ))?;
 
     secrets
         .delete_registry(&name)
@@ -165,10 +167,10 @@ async fn get_secret(
     State(state): State<Arc<AppState>>,
     Path(SecretPath { name, key }): Path<SecretPath>,
 ) -> Result<Json<SecretInfo>, (StatusCode, String)> {
-    let secrets = state
-        .secrets
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Secrets system not available".to_string()))?;
+    let secrets = state.secrets.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Secrets system not available".to_string(),
+    ))?;
 
     let list = secrets
         .list_secrets(&name)
@@ -187,21 +189,18 @@ async fn reveal_secret(
     State(state): State<Arc<AppState>>,
     Path(SecretPath { name, key }): Path<SecretPath>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let secrets = state
-        .secrets
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Secrets system not available".to_string()))?;
+    let secrets = state.secrets.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Secrets system not available".to_string(),
+    ))?;
 
-    let value = secrets
-        .get_secret(&name, &key)
-        .await
-        .map_err(|e| {
-            if e.to_string().contains("locked") {
-                (StatusCode::UNAUTHORIZED, e.to_string())
-            } else {
-                (StatusCode::NOT_FOUND, e.to_string())
-            }
-        })?;
+    let value = secrets.get_secret(&name, &key).await.map_err(|e| {
+        if e.to_string().contains("locked") {
+            (StatusCode::UNAUTHORIZED, e.to_string())
+        } else {
+            (StatusCode::NOT_FOUND, e.to_string())
+        }
+    })?;
 
     Ok(Json(serde_json::json!({ "value": value })))
 }
@@ -213,10 +212,10 @@ async fn set_secret(
     Path(SecretPath { name, key }): Path<SecretPath>,
     Json(req): Json<SetSecretRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let secrets = state
-        .secrets
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Secrets system not available".to_string()))?;
+    let secrets = state.secrets.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Secrets system not available".to_string(),
+    ))?;
 
     secrets
         .set_secret(&name, &key, &req.value, req.metadata)
@@ -238,10 +237,10 @@ async fn delete_secret(
     State(state): State<Arc<AppState>>,
     Path(SecretPath { name, key }): Path<SecretPath>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let secrets = state
-        .secrets
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Secrets system not available".to_string()))?;
+    let secrets = state.secrets.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Secrets system not available".to_string(),
+    ))?;
 
     secrets
         .delete_secret(&name, &key)

@@ -43,6 +43,7 @@ async-recursion = "1"
 
 # For memory/storage
 chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 # For desktop tools (process management on Unix)
 libc = "0.2"
@@ -58,6 +59,9 @@ rand = "0.8"
 
 # Remote console / file manager
 base64 = "0.22"
+
+# System monitoring
+sysinfo = "0.32"
 bytes = "1"
 portable-pty = "0.9"
 md5 = "0.7"

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { toast } from 'sonner';
+import { toast } from '@/components/toast';
 import {
   getHealth,
   HealthResponse,
@@ -90,7 +90,8 @@ export default function SettingsPage() {
 
   // Check if there are unsaved changes
   const hasUnsavedChanges =
-    apiUrl !== originalValues.apiUrl || libraryRepo !== originalValues.libraryRepo;
+    apiUrl !== originalValues.apiUrl ||
+    libraryRepo !== originalValues.libraryRepo;
 
   // Validate URL
   const validateUrl = useCallback((url: string) => {
@@ -160,8 +161,8 @@ export default function SettingsPage() {
       // Use defaults if API fails
       setProviderTypes([
         { id: 'anthropic', name: 'Anthropic', uses_oauth: true, env_var: 'ANTHROPIC_API_KEY' },
-        { id: 'openai', name: 'OpenAI', uses_oauth: false, env_var: 'OPENAI_API_KEY' },
-        { id: 'google', name: 'Google AI', uses_oauth: false, env_var: 'GOOGLE_API_KEY' },
+        { id: 'openai', name: 'OpenAI', uses_oauth: true, env_var: 'OPENAI_API_KEY' },
+        { id: 'google', name: 'Google AI', uses_oauth: true, env_var: 'GOOGLE_API_KEY' },
         { id: 'open-router', name: 'OpenRouter', uses_oauth: false, env_var: 'OPENROUTER_API_KEY' },
         { id: 'groq', name: 'Groq', uses_oauth: false, env_var: 'GROQ_API_KEY' },
         { id: 'mistral', name: 'Mistral AI', uses_oauth: false, env_var: 'MISTRAL_API_KEY' },
@@ -588,16 +589,16 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* Configuration Library */}
+          {/* Git Settings */}
           <div className="rounded-xl bg-white/[0.02] border border-white/[0.04] p-5">
             <div className="flex items-center gap-3 mb-4">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/10">
                 <GitBranch className="h-5 w-5 text-indigo-400" />
               </div>
               <div>
-                <h2 className="text-sm font-medium text-white">Configuration Library</h2>
+                <h2 className="text-sm font-medium text-white">Git</h2>
                 <p className="text-xs text-white/40">
-                  Git repo for MCPs, skills, and commands
+                  Configuration library settings
                 </p>
               </div>
             </div>
@@ -613,7 +614,7 @@ export default function SettingsPage() {
                   setLibraryRepo(e.target.value);
                   validateRepo(e.target.value);
                 }}
-                placeholder="https://github.com/your/library.git"
+                placeholder="git@github.com:your/library.git"
                 className={cn(
                   'w-full rounded-lg border bg-white/[0.02] px-3 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none transition-colors',
                   repoError

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
-import { toast } from 'sonner';
+import { toast } from '@/components/toast';
 import { type Plugin } from '@/lib/api';
 import {
   AlertCircle,
@@ -493,14 +493,12 @@ export default function PluginsPage() {
     status,
     plugins,
     loading,
-    error,
     libraryUnavailable,
     libraryUnavailableMessage,
     refresh,
     sync,
     commit,
     push,
-    clearError,
     savePlugins,
     syncing,
     committing,
@@ -653,16 +651,6 @@ export default function PluginsPage() {
         <LibraryUnavailable message={libraryUnavailableMessage} onConfigured={refresh} />
       ) : (
         <>
-          {error && (
-            <div className="p-4 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 flex-shrink-0" />
-              {error}
-              <button onClick={clearError} className="ml-auto">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          )}
-
           {status && (
             <div className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.06]">
               <div className="flex items-center justify-between">

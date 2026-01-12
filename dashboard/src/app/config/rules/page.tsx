@@ -18,20 +18,19 @@ import {
 import { cn } from '@/lib/utils';
 import { LibraryUnavailable } from '@/components/library-unavailable';
 import { useLibrary } from '@/contexts/library-context';
+import { ConfigCodeEditor } from '@/components/config-code-editor';
 
 export default function RulesPage() {
   const {
     status,
     rules,
     loading,
-    error,
     libraryUnavailable,
     libraryUnavailableMessage,
     refresh,
     sync,
     commit,
     push,
-    clearError,
     saveRule,
     removeRule,
     syncing,
@@ -193,16 +192,6 @@ Describe what this rule does.
         <LibraryUnavailable message={libraryUnavailableMessage} onConfigured={refresh} />
       ) : (
         <>
-          {error && (
-            <div className="p-4 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 flex-shrink-0" />
-              {error}
-              <button onClick={clearError} className="ml-auto">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          )}
-
           {/* Git Status Bar */}
           {status && (
             <div className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.06]">
@@ -270,14 +259,6 @@ Describe what this rule does.
               </div>
             </div>
           )}
-
-          {/* Header */}
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-xl font-semibold text-white">Rules</h1>
-              <p className="text-sm text-white/40">AGENTS.md-style instructions for agents</p>
-            </div>
-          </div>
 
           {/* Rules Editor */}
           <div className="flex-1 min-h-0 rounded-xl bg-white/[0.02] border border-white/[0.06] overflow-hidden flex flex-col">
@@ -371,14 +352,15 @@ Describe what this rule does.
                           <Loader className="h-5 w-5 animate-spin text-white/40" />
                         </div>
                       ) : (
-                        <textarea
+                        <ConfigCodeEditor
                           value={ruleContent}
-                          onChange={(e) => {
-                            setRuleContent(e.target.value);
+                          onChange={(value) => {
+                            setRuleContent(value);
                             setRuleDirty(true);
                           }}
-                          className="w-full h-full font-mono text-sm bg-[#0d0d0e] border border-white/[0.06] rounded-lg p-4 text-white/90 resize-none focus:outline-none focus:border-indigo-500/50"
-                          spellCheck={false}
+                          language="markdown"
+                          className="h-full"
+                          disabled={ruleSaving}
                           placeholder="---
 description: Rule description
 ---

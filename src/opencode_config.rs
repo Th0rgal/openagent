@@ -3,11 +3,15 @@
 //! Manages multiple OpenCode server connections (e.g., Claude Code, other backends).
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::PathBuf;
+use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
+
+use crate::library::Plugin;
+use crate::mcp::{McpRegistry, McpScope, McpTransport};
 
 /// OpenCode connection configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,10 +136,7 @@ impl OpenCodeStore {
             return Some(conn.clone());
         }
         // Fallback to first enabled
-        connections
-            .values()
-            .find(|c| c.enabled)
-            .cloned()
+        connections.values().find(|c| c.enabled).cloned()
     }
 
     pub async fn add(&self, connection: OpenCodeConnection) -> Uuid {
@@ -160,7 +161,11 @@ impl OpenCodeStore {
         id
     }
 
-    pub async fn update(&self, id: Uuid, mut connection: OpenCodeConnection) -> Option<OpenCodeConnection> {
+    pub async fn update(
+        &self,
+        id: Uuid,
+        mut connection: OpenCodeConnection,
+    ) -> Option<OpenCodeConnection> {
         connection.updated_at = chrono::Utc::now();
 
         {
@@ -222,6 +227,214 @@ impl OpenCodeStore {
 
         true
     }
+}
+
+fn sanitize_key(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        .collect::<String>()
+        .to_lowercase()
+        .replace('-', "_")
+}
+
+fn resolve_command_path(cmd: &str) -> String {
+    let cmd_path = Path::new(cmd);
+    if cmd_path.is_absolute() || cmd.contains('/') {
+        return cmd.to_string();
+    }
+
+    let candidates = [
+        Path::new("/usr/local/bin").join(cmd),
+        Path::new("/usr/bin").join(cmd),
+    ];
+
+    for candidate in candidates.iter() {
+        if candidate.exists() {
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+
+    cmd.to_string()
+}
+
+fn opencode_entry_from_mcp(config: &crate::mcp::McpServerConfig) -> Value {
+    match &config.transport {
+        McpTransport::Http { endpoint, headers } => {
+            let mut entry = serde_json::Map::new();
+            entry.insert("type".to_string(), json!("http"));
+            entry.insert("endpoint".to_string(), json!(endpoint));
+            entry.insert("enabled".to_string(), json!(config.enabled));
+            if !headers.is_empty() {
+                entry.insert("headers".to_string(), json!(headers));
+            }
+            json!(entry)
+        }
+        McpTransport::Stdio { command, args, .. } => {
+            let mut cmd = vec![resolve_command_path(command)];
+            cmd.extend(args.clone());
+            json!({
+                "type": "local",
+                "command": cmd,
+                "enabled": config.enabled,
+            })
+        }
+    }
+}
+
+fn resolve_opencode_config_path() -> PathBuf {
+    if let Ok(path) = std::env::var("OPENCODE_CONFIG") {
+        if !path.trim().is_empty() {
+            return PathBuf::from(path);
+        }
+    }
+    if let Ok(dir) = std::env::var("OPENCODE_CONFIG_DIR") {
+        if !dir.trim().is_empty() {
+            return PathBuf::from(dir).join("opencode.json");
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    // OpenCode stores its config under ~/.config/opencode by default.
+    PathBuf::from(home)
+        .join(".config")
+        .join("opencode")
+        .join("opencode.json")
+}
+
+pub async fn ensure_global_config(mcp: &McpRegistry) -> anyhow::Result<()> {
+    let config_path = resolve_opencode_config_path();
+    if let Some(parent) = config_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    let mut root: Value = if config_path.exists() {
+        let contents = tokio::fs::read_to_string(&config_path)
+            .await
+            .unwrap_or_default();
+        serde_json::from_str(&contents).unwrap_or_else(|_| json!({}))
+    } else {
+        json!({})
+    };
+
+    if !root.is_object() {
+        root = json!({});
+    }
+
+    let mcp_configs = mcp.list_configs().await;
+    let mut mcp_entries = serde_json::Map::new();
+    for config in mcp_configs.iter().filter(|c| c.enabled) {
+        if config.scope != McpScope::Global {
+            continue;
+        }
+        if config.name == "desktop" || config.name == "playwright" {
+            continue;
+        }
+        let key = sanitize_key(&config.name);
+        mcp_entries.insert(key, opencode_entry_from_mcp(config));
+    }
+
+    let root_obj = root.as_object_mut().expect("config object");
+    let mcp_obj = root_obj
+        .entry("mcp")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("mcp object");
+    for (key, value) in mcp_entries {
+        mcp_obj.insert(key, value);
+    }
+
+    let tools_obj = root_obj
+        .entry("tools")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("tools object");
+    tools_obj.insert("bash".to_string(), json!(false));
+    tools_obj.insert("desktop_*".to_string(), json!(true));
+    tools_obj.insert("playwright_*".to_string(), json!(true));
+    tools_obj.insert("browser_*".to_string(), json!(true));
+    tools_obj.insert("host_*".to_string(), json!(true));
+
+    let payload = serde_json::to_string_pretty(&root)?;
+    tokio::fs::write(&config_path, payload).await?;
+    tracing::info!(path = %config_path.display(), "Ensured OpenCode global config");
+
+    Ok(())
+}
+
+fn split_package_spec(spec: &str) -> (String, Option<String>) {
+    if let Some(at_pos) = spec.rfind('@') {
+        if at_pos > 0 {
+            let base = spec[..at_pos].to_string();
+            let version = spec[at_pos + 1..].trim().to_string();
+            if !version.is_empty() {
+                return (base, Some(version));
+            }
+        }
+    }
+    (spec.to_string(), None)
+}
+
+fn package_base(spec: &str) -> String {
+    split_package_spec(spec).0
+}
+
+pub async fn sync_global_plugins(plugins: &HashMap<String, Plugin>) -> anyhow::Result<()> {
+    let config_path = resolve_opencode_config_path();
+    if let Some(parent) = config_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    let mut root: Value = if config_path.exists() {
+        let contents = tokio::fs::read_to_string(&config_path)
+            .await
+            .unwrap_or_default();
+        serde_json::from_str(&contents).unwrap_or_else(|_| json!({}))
+    } else {
+        json!({})
+    };
+
+    if !root.is_object() {
+        root = json!({});
+    }
+
+    let root_obj = root.as_object_mut().expect("config object");
+    let existing_plugins: Vec<String> = root_obj
+        .get("plugin")
+        .or_else(|| root_obj.get("plugins"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|value| value.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let mut merged = existing_plugins;
+    let mut seen = HashSet::new();
+    merged.retain(|entry| seen.insert(entry.clone()));
+
+    for plugin in plugins.values().filter(|plugin| plugin.enabled) {
+        let spec = plugin.package.trim();
+        if spec.is_empty() {
+            continue;
+        }
+        let (base, version) = split_package_spec(spec);
+        if version.is_some() {
+            merged.retain(|entry| package_base(entry) != base);
+            if !merged.iter().any(|entry| entry == spec) {
+                merged.push(spec.to_string());
+            }
+        } else if !merged.iter().any(|entry| package_base(entry) == base) {
+            merged.push(spec.to_string());
+        }
+    }
+
+    root_obj.insert("plugin".to_string(), json!(merged));
+
+    let payload = serde_json::to_string_pretty(&root)?;
+    tokio::fs::write(&config_path, payload).await?;
+    tracing::info!(path = %config_path.display(), "Synced OpenCode global plugins");
+
+    Ok(())
 }
 
 /// Shared store type.

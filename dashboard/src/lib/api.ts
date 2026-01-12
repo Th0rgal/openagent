@@ -47,6 +47,21 @@ export interface LoginResponse {
   exp: number;
 }
 
+export function isNetworkError(error: unknown): boolean {
+  if (!error) return false;
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes("failed to fetch") ||
+      message.includes("networkerror") ||
+      message.includes("load failed") ||
+      message.includes("network request failed") ||
+      message.includes("offline")
+    );
+  }
+  return false;
+}
+
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const headers: Record<string, string> = {
     ...(init?.headers ? (init.headers as Record<string, string>) : {}),
@@ -139,6 +154,13 @@ export async function getStats(): Promise<StatsResponse> {
 export async function listTasks(): Promise<TaskState[]> {
   const res = await apiFetch("/api/tasks");
   if (!res.ok) throw new Error("Failed to fetch tasks");
+  return res.json();
+}
+
+// List OpenCode agents
+export async function listOpenCodeAgents(): Promise<unknown> {
+  const res = await apiFetch("/api/opencode/agents");
+  if (!res.ok) throw new Error("Failed to fetch OpenCode agents");
   return res.json();
 }
 
@@ -308,11 +330,24 @@ export interface MissionHistoryEntry {
   content: string;
 }
 
+export interface DesktopSessionInfo {
+  display: string;
+  resolution?: string;
+  started_at: string;
+  stopped_at?: string;
+  screenshots_dir?: string;
+  browser?: string;
+  url?: string;
+}
+
 export interface Mission {
   id: string;
   status: MissionStatus;
   title: string | null;
+  workspace_id?: string;
+  workspace_name?: string;
   history: MissionHistoryEntry[];
+  desktop_sessions?: DesktopSessionInfo[];
   created_at: string;
   updated_at: string;
   interrupted_at?: string;
@@ -346,6 +381,8 @@ export interface CreateMissionOptions {
   workspaceId?: string;
   /** Agent name from library (e.g., "code-reviewer") */
   agent?: string;
+  /** Override model for this mission (provider/model) */
+  modelOverride?: string;
 }
 
 export async function createMission(
@@ -355,11 +392,13 @@ export async function createMission(
     title?: string;
     workspace_id?: string;
     agent?: string;
+    model_override?: string;
   } = {};
 
   if (options?.title) body.title = options.title;
   if (options?.workspaceId) body.workspace_id = options.workspaceId;
   if (options?.agent) body.agent = options.agent;
+  if (options?.modelOverride) body.model_override = options.modelOverride;
 
   const res = await apiFetch("/api/control/missions", {
     method: "POST",
@@ -498,7 +537,7 @@ export type ControlAgentEvent =
       queue_len: number;
       mission_id?: string;
     }
-  | { type: "user_message"; id: string; content: string; mission_id?: string }
+  | { type: "user_message"; id: string; content: string; mission_id?: string; queued?: boolean }
   | {
       type: "assistant_message";
       id: string;
@@ -528,12 +567,17 @@ export type ControlAgentEvent =
   | { type: "error"; message: string; mission_id?: string };
 
 export async function postControlMessage(
-  content: string
+  content: string,
+  options?: { agent?: string }
 ): Promise<{ id: string; queued: boolean }> {
+  const body: { content: string; agent?: string } = { content };
+  if (options?.agent) {
+    body.agent = options.agent;
+  }
   const res = await apiFetch("/api/control/message", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error("Failed to post control message");
   return res.json();
@@ -600,16 +644,37 @@ export async function getProgress(): Promise<ExecutionProgress> {
   return res.json();
 }
 
+export type StreamDiagnosticPhase = "connecting" | "open" | "chunk" | "event" | "closed" | "error";
+
+export type StreamDiagnosticUpdate = {
+  phase: StreamDiagnosticPhase;
+  url: string;
+  status?: number;
+  headers?: Record<string, string>;
+  bytes?: number;
+  error?: string;
+  timestamp: number;
+};
+
 export function streamControl(
-  onEvent: (event: { type: string; data: unknown }) => void
+  onEvent: (event: { type: string; data: unknown }) => void,
+  onDiagnostics?: (update: StreamDiagnosticUpdate) => void
 ): () => void {
   const controller = new AbortController();
   const decoder = new TextDecoder();
   let buffer = "";
+  let bytesRead = 0;
+  const streamUrl = apiUrl("/api/control/stream");
+
+  onDiagnostics?.({
+    phase: "connecting",
+    url: streamUrl,
+    timestamp: Date.now(),
+  });
 
   void (async () => {
     try {
-      const res = await apiFetch("/api/control/stream", {
+      const res = await apiFetch(streamUrl, {
         method: "GET",
         headers: { Accept: "text/event-stream" },
         signal: controller.signal,
@@ -623,6 +688,13 @@ export function streamControl(
             status: res.status,
           },
         });
+        onDiagnostics?.({
+          phase: "error",
+          url: streamUrl,
+          status: res.status,
+          error: `Stream request failed (${res.status})`,
+          timestamp: Date.now(),
+        });
         return;
       }
       if (!res.body) {
@@ -630,14 +702,49 @@ export function streamControl(
           type: "error",
           data: { message: "Stream response had no body" },
         });
+        onDiagnostics?.({
+          phase: "error",
+          url: streamUrl,
+          status: res.status,
+          error: "Stream response had no body",
+          timestamp: Date.now(),
+        });
         return;
       }
+
+      const headers: Record<string, string> = {};
+      res.headers.forEach((value, key) => {
+        headers[key.toLowerCase()] = value;
+      });
+      onDiagnostics?.({
+        phase: "open",
+        url: streamUrl,
+        status: res.status,
+        headers,
+        timestamp: Date.now(),
+      });
 
       const reader = res.body.getReader();
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        if (value) {
+          bytesRead += value.length;
+        }
+        let chunk = decoder.decode(value, { stream: true });
+        if (buffer.endsWith("\r") && chunk.startsWith("\n")) {
+          buffer = buffer.slice(0, -1);
+        }
+        buffer += chunk;
+        if (buffer.includes("\r")) {
+          buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        }
+        onDiagnostics?.({
+          phase: "chunk",
+          url: streamUrl,
+          bytes: bytesRead,
+          timestamp: Date.now(),
+        });
 
         let idx = buffer.indexOf("\n\n");
         while (idx !== -1) {
@@ -659,6 +766,12 @@ export function streamControl(
           if (!data) continue;
           try {
             onEvent({ type: eventType, data: JSON.parse(data) });
+            onDiagnostics?.({
+              phase: "event",
+              url: streamUrl,
+              bytes: bytesRead,
+              timestamp: Date.now(),
+            });
           } catch {
             // ignore parse errors
           }
@@ -669,6 +782,12 @@ export function streamControl(
       onEvent({
         type: "error",
         data: { message: "Stream ended - server closed connection" },
+      });
+      onDiagnostics?.({
+        phase: "closed",
+        url: streamUrl,
+        bytes: bytesRead,
+        timestamp: Date.now(),
       });
     } catch (err) {
       if (!controller.signal.aborted) {
@@ -681,6 +800,12 @@ export function streamControl(
           type: "error",
           data: { message: errorMessage },
         });
+        onDiagnostics?.({
+          phase: "error",
+          url: streamUrl,
+          error: errorMessage,
+          timestamp: Date.now(),
+        });
       }
     }
   })();
@@ -691,9 +816,10 @@ export function streamControl(
 // ==================== MCP Management ====================
 
 export type McpStatus = "connected" | "connecting" | "disconnected" | "error" | "disabled";
+export type McpScope = "global" | "workspace";
 
 export interface McpTransport {
-  http?: { endpoint: string };
+  http?: { endpoint: string; headers: Record<string, string> };
   stdio?: { command: string; args: string[]; env: Record<string, string> };
 }
 
@@ -702,6 +828,7 @@ export interface McpServerConfig {
   name: string;
   transport: McpTransport;
   endpoint: string;
+  scope: McpScope;
   description: string | null;
   enabled: boolean;
   version: string | null;
@@ -743,6 +870,7 @@ export async function addMcp(data: {
   name: string;
   endpoint: string;
   description?: string;
+  scope?: McpScope;
 }): Promise<McpServerState> {
   const res = await apiFetch("/api/mcp", {
     method: "POST",
@@ -786,6 +914,7 @@ export interface UpdateMcpRequest {
   description?: string;
   enabled?: boolean;
   transport?: McpTransport;
+  scope?: McpScope;
 }
 
 export async function updateMcp(id: string, data: UpdateMcpRequest): Promise<McpServerState> {
@@ -841,7 +970,7 @@ export interface UploadProgress {
 // Upload a file to the remote filesystem with progress tracking
 export function uploadFile(
   file: File,
-  remotePath: string = "/root/context/",
+  remotePath: string = "./context/",
   onProgress?: (progress: UploadProgress) => void
 ): Promise<UploadResult> {
   return new Promise((resolve, reject) => {
@@ -903,7 +1032,7 @@ export interface ChunkedUploadProgress extends UploadProgress {
 
 export async function uploadFileChunked(
   file: File,
-  remotePath: string = "/root/context/",
+  remotePath: string = "./context/",
   onProgress?: (progress: ChunkedUploadProgress) => void
 ): Promise<UploadResult> {
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
@@ -1011,7 +1140,7 @@ async function finalizeChunkedUpload(
 // Download file from URL to server filesystem
 export async function downloadFromUrl(
   url: string,
-  remotePath: string = "/root/context/",
+  remotePath: string = "./context/",
   fileName?: string
 ): Promise<UploadResult> {
   const res = await apiFetch("/api/fs/download-url", {
@@ -1167,7 +1296,6 @@ export interface LibraryAgent {
   model: string | null;
   tools: Record<string, boolean>;
   permissions: Record<string, string>;
-  skills: string[];
   rules: string[];
 }
 
@@ -1543,6 +1671,80 @@ export async function deleteLibraryTool(name: string): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Workspace Templates
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface WorkspaceTemplateSummary {
+  name: string;
+  description?: string;
+  path: string;
+  distro?: string;
+  skills?: string[];
+}
+
+export interface WorkspaceTemplate {
+  name: string;
+  description?: string;
+  path: string;
+  distro?: string;
+  skills: string[];
+  env_vars: Record<string, string>;
+  init_script: string;
+}
+
+export async function listWorkspaceTemplates(): Promise<WorkspaceTemplateSummary[]> {
+  const res = await apiFetch("/api/library/workspace-template");
+  await ensureLibraryResponse(res, "Failed to fetch workspace templates");
+  return res.json();
+}
+
+export async function getWorkspaceTemplate(name: string): Promise<WorkspaceTemplate> {
+  const res = await apiFetch(`/api/library/workspace-template/${encodeURIComponent(name)}`);
+  await ensureLibraryResponse(res, "Failed to fetch workspace template");
+  return res.json();
+}
+
+export async function saveWorkspaceTemplate(
+  name: string,
+  data: {
+    description?: string;
+    distro?: string;
+    skills?: string[];
+    env_vars?: Record<string, string>;
+    init_script?: string;
+  }
+): Promise<void> {
+  const res = await apiFetch(`/api/library/workspace-template/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  await ensureLibraryResponse(res, "Failed to save workspace template");
+}
+
+export async function deleteWorkspaceTemplate(name: string): Promise<void> {
+  const res = await apiFetch(`/api/library/workspace-template/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+  await ensureLibraryResponse(res, "Failed to delete workspace template");
+}
+
+export async function renameWorkspaceTemplate(oldName: string, newName: string): Promise<void> {
+  // Get the existing template
+  const template = await getWorkspaceTemplate(oldName);
+  // Save with new name
+  await saveWorkspaceTemplate(newName, {
+    description: template.description,
+    distro: template.distro,
+    skills: template.skills,
+    env_vars: template.env_vars,
+    init_script: template.init_script,
+  });
+  // Delete old template
+  await deleteWorkspaceTemplate(oldName);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Library Migration
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1568,6 +1770,10 @@ export interface Workspace {
   created_at: string;
   skills: string[];
   plugins: string[];
+  template?: string | null;
+  distro?: string | null;
+  env_vars: Record<string, string>;
+  init_script?: string | null;
 }
 
 // List workspaces
@@ -1591,6 +1797,10 @@ export async function createWorkspace(data: {
   path?: string;
   skills?: string[];
   plugins?: string[];
+  template?: string;
+  distro?: string;
+  env_vars?: Record<string, string>;
+  init_script?: string;
 }): Promise<Workspace> {
   const res = await apiFetch("/api/workspaces", {
     method: "POST",
@@ -1608,6 +1818,10 @@ export async function updateWorkspace(
     name?: string;
     skills?: string[];
     plugins?: string[];
+    template?: string | null;
+    distro?: string | null;
+    env_vars?: Record<string, string>;
+    init_script?: string | null;
   }
 ): Promise<Workspace> {
   const res = await apiFetch(`/api/workspaces/${id}`, {
@@ -1632,6 +1846,38 @@ export async function syncWorkspace(id: string): Promise<Workspace> {
 export async function deleteWorkspace(id: string): Promise<void> {
   const res = await apiFetch(`/api/workspaces/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error("Failed to delete workspace");
+}
+
+// Supported Linux distributions for chroot workspaces
+export type ChrootDistro =
+  | "ubuntu-noble"
+  | "ubuntu-jammy"
+  | "debian-bookworm"
+  | "arch-linux";
+
+export const CHROOT_DISTROS: { value: ChrootDistro; label: string }[] = [
+  { value: "ubuntu-noble", label: "Ubuntu 24.04 LTS (Noble)" },
+  { value: "ubuntu-jammy", label: "Ubuntu 22.04 LTS (Jammy)" },
+  { value: "debian-bookworm", label: "Debian 12 (Bookworm)" },
+  { value: "arch-linux", label: "Arch Linux (Base)" },
+];
+
+// Build a chroot workspace
+export async function buildWorkspace(
+  id: string,
+  distro?: ChrootDistro,
+  rebuild?: boolean
+): Promise<Workspace> {
+  const res = await apiFetch(`/api/workspaces/${id}/build`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: distro || rebuild ? JSON.stringify({ distro, rebuild }) : undefined,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Failed to build workspace");
+  }
+  return res.json();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1723,7 +1969,90 @@ export async function testOpenCodeConnection(id: string): Promise<TestConnection
 // Set default connection
 export async function setDefaultOpenCodeConnection(id: string): Promise<OpenCodeConnection> {
   const res = await apiFetch(`/api/opencode/connections/${id}/default`, { method: "POST" });
-  if (!res.ok) throw new Error("Failed to set default OpenCode connection");
+  if (!res.ok) throw new Error("Failed to set default OpenCodeconnection");
+  return res.json();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OpenCode Settings API (oh-my-opencode.json)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Get OpenCode settings (oh-my-opencode.json)
+export async function getOpenCodeSettings(): Promise<Record<string, unknown>> {
+  const res = await apiFetch("/api/opencode/settings");
+  if (!res.ok) throw new Error("Failed to get OpenCode settings");
+  return res.json();
+}
+
+// Update OpenCode settings (oh-my-opencode.json)
+export async function updateOpenCodeSettings(settings: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const res = await apiFetch("/api/opencode/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) throw new Error("Failed to update OpenCode settings");
+  return res.json();
+}
+
+// Restart OpenCode service (to apply settings changes)
+export async function restartOpenCodeService(): Promise<{ success: boolean; message: string }> {
+  const res = await apiFetch("/api/opencode/restart", { method: "POST" });
+  if (!res.ok) throw new Error("Failed to restart OpenCode service");
+  return res.json();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Library-backed OpenCode Settings API
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Get OpenCode settings from Library (oh-my-opencode.json)
+export async function getLibraryOpenCodeSettings(): Promise<Record<string, unknown>> {
+  const res = await apiFetch("/api/library/opencode/settings");
+  if (!res.ok) throw new Error("Failed to get Library OpenCode settings");
+  return res.json();
+}
+
+// Save OpenCode settings to Library and sync to system
+export async function saveLibraryOpenCodeSettings(settings: Record<string, unknown>): Promise<void> {
+  const res = await apiFetch("/api/library/opencode/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) throw new Error("Failed to save Library OpenCode settings");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OpenAgent Config API
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface OpenAgentConfig {
+  hidden_agents: string[];
+  default_agent: string | null;
+}
+
+// Get OpenAgent config from Library
+export async function getOpenAgentConfig(): Promise<OpenAgentConfig> {
+  const res = await apiFetch("/api/library/openagent/config");
+  if (!res.ok) throw new Error("Failed to get OpenAgent config");
+  return res.json();
+}
+
+// Save OpenAgent config to Library
+export async function saveOpenAgentConfig(config: OpenAgentConfig): Promise<void> {
+  const res = await apiFetch("/api/library/openagent/config", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) throw new Error("Failed to save OpenAgent config");
+}
+
+// Get visible agents (filtered by OpenAgent config)
+export async function getVisibleAgents(): Promise<unknown> {
+  const res = await apiFetch("/api/library/openagent/agents");
+  if (!res.ok) throw new Error("Failed to get visible agents");
   return res.json();
 }
 
@@ -2042,4 +2371,81 @@ export async function deleteSecretRegistry(registryName: string): Promise<void> 
     method: 'DELETE',
   });
   if (!res.ok) throw new Error('Failed to delete registry');
+}
+
+// ============================================================
+// Desktop Session Management
+// ============================================================
+
+export type DesktopSessionStatus = 'active' | 'orphaned' | 'stopped' | 'unknown';
+
+export interface DesktopSessionDetail {
+  display: string;
+  status: DesktopSessionStatus;
+  mission_id?: string;
+  mission_title?: string;
+  mission_status?: string;
+  started_at: string;
+  stopped_at?: string;
+  keep_alive_until?: string;
+  auto_close_in_secs?: number;
+  process_running: boolean;
+}
+
+export interface ListSessionsResponse {
+  sessions: DesktopSessionDetail[];
+}
+
+export interface OperationResponse {
+  success: boolean;
+  message?: string;
+}
+
+// List all desktop sessions
+export async function listDesktopSessions(): Promise<DesktopSessionDetail[]> {
+  const res = await apiFetch('/api/desktop/sessions');
+  if (!res.ok) throw new Error('Failed to list desktop sessions');
+  const data: ListSessionsResponse = await res.json();
+  return data.sessions;
+}
+
+// Close a desktop session
+export async function closeDesktopSession(display: string): Promise<OperationResponse> {
+  // Remove leading colon for URL path
+  const displayNum = display.replace(/^:/, '');
+  const res = await apiFetch(`/api/desktop/sessions/:${displayNum}/close`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || 'Failed to close desktop session');
+  }
+  return res.json();
+}
+
+// Extend keep-alive for a desktop session
+export async function keepAliveDesktopSession(
+  display: string,
+  extensionSecs: number = 7200
+): Promise<OperationResponse> {
+  const displayNum = display.replace(/^:/, '');
+  const res = await apiFetch(`/api/desktop/sessions/:${displayNum}/keep-alive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ extension_secs: extensionSecs }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || 'Failed to extend keep-alive');
+  }
+  return res.json();
+}
+
+// Close all orphaned desktop sessions
+export async function cleanupOrphanedDesktopSessions(): Promise<OperationResponse> {
+  const res = await apiFetch('/api/desktop/sessions/cleanup', {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error('Failed to cleanup orphaned sessions');
+  return res.json();
 }

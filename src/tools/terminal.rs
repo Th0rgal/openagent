@@ -6,14 +6,19 @@
 //! - `run_command("ls")` → lists workspace contents
 //! - `run_command("cat output/report.md")` → reads workspace file
 
-use std::path::Path;
-use std::process::Stdio;
+use std::collections::HashMap;
+use std::env;
+use std::path::{Path, PathBuf};
+use std::process::{Output, Stdio};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use super::{resolve_path_simple as resolve_path, Tool};
+use crate::nspawn;
 
 /// Sanitize command output to be safe for LLM consumption.
 /// Removes binary garbage while preserving valid text.
@@ -80,21 +85,76 @@ const DANGEROUS_PATTERNS: &[(&str, &str)] = &[
 /// Returns Ok(()) if safe, Err with suggestion if blocked.
 fn validate_command(cmd: &str) -> Result<(), String> {
     let cmd_trimmed = cmd.trim();
+    let prefixes = ["sudo ", "time ", "nice ", "nohup "];
+
+    let is_safe_root_find = {
+        let mut safe = false;
+        if cmd_trimmed.starts_with("find /root") {
+            safe = true;
+        } else {
+            for prefix in prefixes {
+                if cmd_trimmed.starts_with(prefix) {
+                    let after_prefix = cmd_trimmed[prefix.len()..].trim_start();
+                    if after_prefix.starts_with("find /root") {
+                        safe = true;
+                        break;
+                    }
+                }
+            }
+        }
+        safe
+    };
+
+    let is_safe_root_grep = {
+        let mut safe = false;
+        let grep_prefixes = ["grep -r /root", "grep -rn /root", "grep -R /root"];
+        if grep_prefixes.iter().any(|p| cmd_trimmed.starts_with(p)) {
+            safe = true;
+        } else {
+            for prefix in prefixes {
+                if cmd_trimmed.starts_with(prefix) {
+                    let after_prefix = cmd_trimmed[prefix.len()..].trim_start();
+                    if grep_prefixes.iter().any(|p| after_prefix.starts_with(p)) {
+                        safe = true;
+                        break;
+                    }
+                }
+            }
+        }
+        safe
+    };
 
     for (pattern, suggestion) in DANGEROUS_PATTERNS {
         // Check if command starts with the dangerous pattern
         if cmd_trimmed.starts_with(pattern) {
+            if (pattern == &"find /" || pattern == &"find / ") && is_safe_root_find {
+                continue;
+            }
+            if (pattern == &"grep -r /" || pattern == &"grep -rn /" || pattern == &"grep -R /")
+                && is_safe_root_grep
+            {
+                continue;
+            }
             return Err(format!(
                 "Blocked dangerous command pattern '{}'. {}",
                 pattern, suggestion
             ));
         }
         // Also check for the pattern after common prefixes (sudo, time, etc.)
-        let prefixes = ["sudo ", "time ", "nice ", "nohup "];
         for prefix in prefixes {
             if cmd_trimmed.starts_with(prefix) {
                 let after_prefix = &cmd_trimmed[prefix.len()..];
                 if after_prefix.starts_with(pattern) {
+                    if (pattern == &"find /" || pattern == &"find / ") && is_safe_root_find {
+                        continue;
+                    }
+                    if (pattern == &"grep -r /"
+                        || pattern == &"grep -rn /"
+                        || pattern == &"grep -R /")
+                        && is_safe_root_grep
+                    {
+                        continue;
+                    }
                     return Err(format!(
                         "Blocked dangerous command pattern '{}'. {}",
                         pattern, suggestion
@@ -105,6 +165,457 @@ fn validate_command(cmd: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn container_root_from_env() -> Option<PathBuf> {
+    let workspace_type = env::var("OPEN_AGENT_WORKSPACE_TYPE").ok()?;
+    if workspace_type != "chroot" && workspace_type != "nspawn" && workspace_type != "container" {
+        return None;
+    }
+    let root = env::var("OPEN_AGENT_WORKSPACE_ROOT").ok()?;
+    Some(PathBuf::from(root))
+}
+
+#[derive(Debug, Clone)]
+struct CommandOptions {
+    timeout: Duration,
+    env: HashMap<String, String>,
+    clear_env: bool,
+    stdin: Option<String>,
+    shell: Option<String>,
+    max_output_chars: usize,
+    raw_output: bool,
+}
+
+const DEFAULT_MAX_OUTPUT_CHARS: usize = 10_000;
+const MAX_OUTPUT_CHARS_LIMIT: usize = 50_000;
+const DEFAULT_COMMAND_TIMEOUT_SECS: f64 = 300.0;
+
+fn default_timeout_from_env() -> Duration {
+    if let Ok(raw) = env::var("OPEN_AGENT_COMMAND_TIMEOUT_SECS") {
+        if let Ok(value) = raw.parse::<f64>() {
+            if value > 0.0 {
+                return Duration::from_secs_f64(value);
+            }
+        }
+    }
+    Duration::from_secs_f64(DEFAULT_COMMAND_TIMEOUT_SECS)
+}
+
+fn parse_timeout(args: &Value) -> Duration {
+    if let Some(ms) = args.get("timeout_ms").and_then(|v| v.as_u64()) {
+        return Duration::from_millis(ms.max(1));
+    }
+    if let Some(secs) = args.get("timeout_secs").and_then(|v| v.as_u64()) {
+        return Duration::from_secs(secs.max(1));
+    }
+    if let Some(secs) = args.get("timeout").and_then(|v| v.as_f64()) {
+        if secs > 0.0 {
+            return Duration::from_secs_f64(secs);
+        }
+    }
+    default_timeout_from_env()
+}
+
+fn parse_env(args: &Value) -> HashMap<String, String> {
+    let mut envs = HashMap::new();
+    let Some(obj) = args.get("env").and_then(|v| v.as_object()) else {
+        return envs;
+    };
+    for (key, value) in obj.iter() {
+        if let Some(val) = value.as_str() {
+            envs.insert(key.clone(), val.to_string());
+        }
+    }
+    envs
+}
+
+fn workspace_env_vars() -> HashMap<String, String> {
+    let mut envs = HashMap::new();
+    let Ok(raw) = env::var("OPEN_AGENT_WORKSPACE_ENV_VARS") else {
+        return envs;
+    };
+    if raw.trim().is_empty() {
+        return envs;
+    }
+    if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&raw) {
+        envs.extend(map);
+    }
+    envs
+}
+
+fn parse_max_output_chars(args: &Value) -> usize {
+    let max = args
+        .get("max_output_chars")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(DEFAULT_MAX_OUTPUT_CHARS);
+    max.clamp(1, MAX_OUTPUT_CHARS_LIMIT)
+}
+
+fn parse_command_options(args: &Value) -> CommandOptions {
+    CommandOptions {
+        timeout: parse_timeout(args),
+        env: parse_env(args),
+        clear_env: args
+            .get("clear_env")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        stdin: args
+            .get("stdin")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        shell: args
+            .get("shell")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        max_output_chars: parse_max_output_chars(args),
+        raw_output: args.get("raw").and_then(|v| v.as_bool()).unwrap_or(false),
+    }
+}
+
+fn shell_exists(shell: &str, container_root: Option<&Path>) -> bool {
+    if let Some(root) = container_root {
+        let rel = shell.strip_prefix('/').unwrap_or(shell);
+        return root.join(rel).exists();
+    }
+    Path::new(shell).exists()
+}
+
+fn resolve_shell(shell: Option<&str>, container_root: Option<&Path>) -> String {
+    if let Some(shell) = shell {
+        if shell_exists(shell, container_root) {
+            return shell.to_string();
+        }
+        // Fall back to /bin/sh if requested shell isn't available.
+        if shell_exists("/bin/sh", container_root) {
+            return "/bin/sh".to_string();
+        }
+        return shell.to_string();
+    }
+
+    if shell_exists("/bin/sh", container_root) {
+        return "/bin/sh".to_string();
+    }
+
+    "/bin/sh".to_string()
+}
+
+async fn run_shell_command(
+    program: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+    options: &CommandOptions,
+) -> anyhow::Result<Output> {
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+    if options.clear_env {
+        cmd.env_clear();
+    }
+    if !options.env.is_empty() {
+        cmd.envs(&options.env);
+    }
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to execute command: {}", e))?;
+
+    if let Some(input) = options.stdin.as_deref() {
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(input.as_bytes())
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to write to stdin: {}", e))?;
+        }
+    }
+
+    let output = tokio::time::timeout(options.timeout, child.wait_with_output()).await;
+
+    match output {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(e)) => Err(anyhow::anyhow!("Failed to execute command: {}", e)),
+        Err(_) => Err(anyhow::anyhow!(
+            "Command timed out after {} seconds",
+            options.timeout.as_secs_f64()
+        )),
+    }
+}
+
+async fn run_host_command(
+    cwd: &Path,
+    command: &str,
+    options: &CommandOptions,
+) -> anyhow::Result<Output> {
+    let (shell, shell_arg) = if cfg!(target_os = "windows") {
+        ("cmd".to_string(), "/C".to_string())
+    } else {
+        (
+            resolve_shell(options.shell.as_deref(), None),
+            "-c".to_string(),
+        )
+    };
+    let args = vec![shell_arg, command.to_string()];
+    run_shell_command(&shell, &args, Some(cwd), options).await
+}
+
+fn runtime_display_path() -> Option<PathBuf> {
+    if let Ok(path) = env::var("OPEN_AGENT_RUNTIME_DISPLAY_FILE") {
+        if !path.trim().is_empty() {
+            return Some(PathBuf::from(path));
+        }
+    }
+
+    let candidates = [
+        env::var("WORKING_DIR").ok(),
+        env::var("OPEN_AGENT_WORKSPACE_ROOT").ok(),
+        env::var("HOME").ok(),
+    ];
+
+    for base in candidates.into_iter().flatten() {
+        let path = PathBuf::from(base)
+            .join(".openagent")
+            .join("runtime")
+            .join("current_display.json");
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+fn read_runtime_display() -> Option<String> {
+    if let Ok(display) = env::var("DESKTOP_DISPLAY") {
+        if !display.trim().is_empty() {
+            return Some(display);
+        }
+    }
+
+    let path = runtime_display_path()?;
+    let contents = std::fs::read_to_string(path).ok()?;
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&contents) {
+        return json
+            .get("display")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+    }
+
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+async fn run_container_command(
+    container_root: &Path,
+    cwd: &Path,
+    command: &str,
+    options: &CommandOptions,
+) -> anyhow::Result<Output> {
+    let root = container_root
+        .canonicalize()
+        .unwrap_or_else(|_| container_root.to_path_buf());
+    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+
+    if !cwd.starts_with(&root) {
+        return Err(anyhow::anyhow!(
+            "Working directory is outside container root: {}",
+            cwd.display()
+        ));
+    }
+
+    let rel = cwd.strip_prefix(&root).unwrap_or_else(|_| Path::new(""));
+    let rel_str = if rel.as_os_str().is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", rel.to_string_lossy())
+    };
+
+    // If a container is already running (e.g., MCP server), run commands via nsenter.
+    if let Ok(machine_name) = env::var("OPEN_AGENT_WORKSPACE_NAME") {
+        let machine_name = machine_name.trim();
+        if !machine_name.is_empty() {
+            if let Some(leader) = running_container_leader(machine_name, options).await {
+                if let Ok(output) = run_nsenter_command(&leader, &rel_str, command, options).await {
+                    return Ok(output);
+                }
+            }
+        }
+    }
+
+    let mut args = vec![
+        "-D".to_string(),
+        root.to_string_lossy().to_string(),
+        "--quiet".to_string(),
+        "--timezone=off".to_string(),
+        "--chdir".to_string(),
+        rel_str,
+    ];
+
+    // Bind mission context into containers so uploaded files are accessible.
+    if let Ok(context_root) = env::var("OPEN_AGENT_CONTEXT_ROOT") {
+        let context_root = context_root.trim();
+        if !context_root.is_empty() && Path::new(context_root).exists() {
+            args.push(format!("--bind={}:/root/context", context_root));
+            args.push("--setenv=OPEN_AGENT_CONTEXT_ROOT=/root/context".to_string());
+            if let Ok(mission_id) = env::var("OPEN_AGENT_MISSION_ID") {
+                let mission_id = mission_id.trim();
+                if !mission_id.is_empty() {
+                    args.push(format!(
+                        "--setenv=OPEN_AGENT_MISSION_CONTEXT=/root/context/{}",
+                        mission_id
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Some(display) = read_runtime_display() {
+        if Path::new("/tmp/.X11-unix").exists() {
+            args.push("--bind=/tmp/.X11-unix".to_string());
+            args.push(format!("--setenv=DISPLAY={}", display));
+        }
+    }
+
+    let mut merged_env = workspace_env_vars();
+    merged_env.extend(options.env.clone());
+
+    for arg in nspawn::tailscale_nspawn_extra_args(&merged_env) {
+        args.push(arg);
+    }
+
+    for (key, value) in &merged_env {
+        args.push(format!("--setenv={}={}", key, value));
+    }
+
+    let shell = resolve_shell(options.shell.as_deref(), Some(&root));
+    args.push(shell);
+    args.push("-c".to_string());
+    args.push(command.to_string());
+
+    let mut output = run_shell_command("systemd-nspawn", &args, None, options).await?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let is_busy = stderr.contains("Directory tree") && stderr.contains("busy");
+    if is_busy {
+        // If the container is already running without an active desktop, terminate it and retry.
+        if read_runtime_display().is_none() {
+            if let Ok(machine_name) = env::var("OPEN_AGENT_WORKSPACE_NAME") {
+                let machine_name = machine_name.trim();
+                if !machine_name.is_empty() {
+                    let terminate_args = vec!["terminate".to_string(), machine_name.to_string()];
+                    let machinectl = if Path::new("/usr/bin/machinectl").exists() {
+                        "/usr/bin/machinectl"
+                    } else {
+                        "machinectl"
+                    };
+                    let _ = run_shell_command(machinectl, &terminate_args, None, options).await;
+                }
+            }
+        }
+
+        // Retry a few times in case another nspawn process is holding the root.
+        for attempt in 1..=3 {
+            tokio::time::sleep(Duration::from_millis(200 * attempt)).await;
+            output = run_shell_command("systemd-nspawn", &args, None, options).await?;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !(stderr.contains("Directory tree") && stderr.contains("busy")) {
+                break;
+            }
+        }
+    }
+
+    Ok(output)
+}
+
+async fn running_container_leader(machine_name: &str, options: &CommandOptions) -> Option<String> {
+    let machinectl = if Path::new("/usr/bin/machinectl").exists() {
+        "/usr/bin/machinectl"
+    } else {
+        "machinectl"
+    };
+    let args = vec![
+        "show".to_string(),
+        machine_name.to_string(),
+        "-p".to_string(),
+        "Leader".to_string(),
+        "--value".to_string(),
+    ];
+    let output = run_shell_command(machinectl, &args, None, options)
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let leader = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if leader.is_empty() {
+        None
+    } else {
+        Some(leader)
+    }
+}
+
+fn nsenter_command(rel_str: &str, command: &str) -> String {
+    let mut exports = Vec::new();
+    exports.push("export OPEN_AGENT_CONTEXT_ROOT=/root/context".to_string());
+    if let Ok(context_dir) = env::var("OPEN_AGENT_CONTEXT_DIR_NAME") {
+        if !context_dir.trim().is_empty() {
+            exports.push(format!(
+                "export OPEN_AGENT_CONTEXT_DIR_NAME={}",
+                context_dir.trim()
+            ));
+        }
+    }
+    if let Ok(mission_id) = env::var("OPEN_AGENT_MISSION_ID") {
+        let mission_id = mission_id.trim();
+        if !mission_id.is_empty() {
+            exports.push(format!("export OPEN_AGENT_MISSION_ID={}", mission_id));
+            exports.push(format!(
+                "export OPEN_AGENT_MISSION_CONTEXT=/root/context/{}",
+                mission_id
+            ));
+        }
+    }
+    let prelude = if exports.is_empty() {
+        String::new()
+    } else {
+        format!("{}; ", exports.join("; "))
+    };
+    format!("{}cd {} && {}", prelude, rel_str, command)
+}
+
+async fn run_nsenter_command(
+    leader_pid: &str,
+    rel_str: &str,
+    command: &str,
+    options: &CommandOptions,
+) -> anyhow::Result<Output> {
+    let nsenter = if Path::new("/usr/bin/nsenter").exists() {
+        "/usr/bin/nsenter"
+    } else {
+        "nsenter"
+    };
+    let args = vec![
+        "--target".to_string(),
+        leader_pid.to_string(),
+        "--mount".to_string(),
+        "--uts".to_string(),
+        "--ipc".to_string(),
+        "--net".to_string(),
+        "--pid".to_string(),
+        "/bin/sh".to_string(),
+        "-lc".to_string(),
+        nsenter_command(rel_str, command),
+    ];
+    run_shell_command(nsenter, &args, None, options).await
 }
 
 /// Run a shell command.
@@ -134,7 +645,40 @@ impl Tool for RunCommand {
                 },
                 "timeout_secs": {
                     "type": "integer",
-                    "description": "Timeout in seconds (default: 60)"
+                    "description": "Timeout in seconds (default: 60)."
+                },
+                "timeout_ms": {
+                    "type": "integer",
+                    "description": "Timeout in milliseconds (overrides timeout_secs)."
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": "Timeout in seconds (float allowed)."
+                },
+                "env": {
+                    "type": "object",
+                    "description": "Environment variables to set for the command.",
+                    "additionalProperties": { "type": "string" }
+                },
+                "clear_env": {
+                    "type": "boolean",
+                    "description": "If true, clear the environment before applying env vars."
+                },
+                "stdin": {
+                    "type": "string",
+                    "description": "Optional: string to pass to stdin."
+                },
+                "shell": {
+                    "type": "string",
+                    "description": "Optional: shell executable path (default: /bin/sh)."
+                },
+                "max_output_chars": {
+                    "type": "integer",
+                    "description": "Maximum output characters to return (default: 10000)."
+                },
+                "raw": {
+                    "type": "boolean",
+                    "description": "Return combined stdout/stderr only (no headers or exit code)."
                 }
             },
             "required": ["command"]
@@ -156,42 +700,15 @@ impl Tool for RunCommand {
             .as_str()
             .map(|p| resolve_path(p, working_dir))
             .unwrap_or_else(|| working_dir.to_path_buf());
-        let timeout_secs = args["timeout_secs"].as_u64().unwrap_or(60);
+        let options = parse_command_options(&args);
 
         tracing::info!("Executing command in {:?}: {}", cwd, command);
 
-        // Determine shell based on OS - use absolute paths to ensure shell is found
-        let (shell, shell_arg) = if cfg!(target_os = "windows") {
-            ("cmd", "/C")
-        } else {
-            // Use absolute path to shell to avoid PATH issues
-            ("/bin/sh", "-c")
-        };
-
-        let output = match tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            Command::new(shell)
-                .arg(shell_arg)
-                .arg(command)
-                .current_dir(&cwd)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output(),
-        )
-        .await
-        {
-            Ok(Ok(output)) => output,
-            Ok(Err(e)) => {
-                tracing::error!("Command execution failed: {}", e);
-                return Err(anyhow::anyhow!("Failed to execute command: {}", e));
+        let output = match container_root_from_env() {
+            Some(container_root) => {
+                run_container_command(&container_root, &cwd, command, &options).await?
             }
-            Err(_) => {
-                tracing::error!("Command timed out after {} seconds", timeout_secs);
-                return Err(anyhow::anyhow!(
-                    "Command timed out after {} seconds",
-                    timeout_secs
-                ));
-            }
+            None => run_host_command(&cwd, command, &options).await?,
         };
 
         let stdout = sanitize_output(&output.stdout);
@@ -205,28 +722,44 @@ impl Tool for RunCommand {
             stderr.len()
         );
 
-        let mut result = String::new();
+        let result = if options.raw_output {
+            let mut raw = String::new();
+            if !stdout.is_empty() {
+                raw.push_str(&stdout);
+            }
+            if !stderr.is_empty() {
+                if !raw.is_empty() {
+                    raw.push('\n');
+                }
+                raw.push_str(&stderr);
+            }
+            raw
+        } else {
+            let mut result = String::new();
 
-        result.push_str(&format!("Exit code: {}\n", exit_code));
+            result.push_str(&format!("Exit code: {}\n", exit_code));
 
-        // Add hint when non-zero exit but output exists (common with tools that warn but succeed)
-        if exit_code != 0 && !stdout.is_empty() {
-            result.push_str("Note: Non-zero exit code but output was produced. The command may have succeeded with warnings - verify output files exist.\n");
-        }
+            // Add hint when non-zero exit but output exists (common with tools that warn but succeed)
+            if exit_code != 0 && !stdout.is_empty() {
+                result.push_str("Note: Non-zero exit code but output was produced. The command may have succeeded with warnings - verify output files exist.\n");
+            }
 
-        if !stdout.is_empty() {
-            result.push_str("\n--- stdout ---\n");
-            result.push_str(&stdout);
-        }
+            if !stdout.is_empty() {
+                result.push_str("\n--- stdout ---\n");
+                result.push_str(&stdout);
+            }
 
-        if !stderr.is_empty() {
-            result.push_str("\n--- stderr ---\n");
-            result.push_str(&stderr);
-        }
+            if !stderr.is_empty() {
+                result.push_str("\n--- stderr ---\n");
+                result.push_str(&stderr);
+            }
 
-        // Truncate if too long
-        if result.len() > 10000 {
-            result.truncate(10000);
+            result
+        };
+
+        let mut result = result;
+        if result.len() > options.max_output_chars {
+            result.truncate(options.max_output_chars);
             result.push_str("\n... [output truncated]");
         }
 

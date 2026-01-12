@@ -17,6 +17,12 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 /// Interval for logging heartbeat while waiting for SSE events (30 seconds).
 const HEARTBEAT_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Number of retries for transient network failures.
+const NETWORK_RETRY_COUNT: u32 = 3;
+
+/// Delay between retries (with exponential backoff).
+const NETWORK_RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
+
 #[derive(Clone)]
 pub struct OpenCodeClient {
     base_url: String,
@@ -80,23 +86,48 @@ impl OpenCodeClient {
             );
         }
 
-        let resp = self
-            .client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .context("Failed to call OpenCode /session")?;
+        let mut last_error = None;
+        for attempt in 0..NETWORK_RETRY_COUNT {
+            if attempt > 0 {
+                let delay = NETWORK_RETRY_BASE_DELAY * 2u32.pow(attempt - 1);
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    max_attempts = NETWORK_RETRY_COUNT,
+                    delay_ms = delay.as_millis(),
+                    "Retrying OpenCode session creation after transient failure"
+                );
+                tokio::time::sleep(delay).await;
+            }
 
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            anyhow::bail!("OpenCode /session failed: {} - {}", status, text);
+            match self.client.post(&url).json(&body).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    if !status.is_success() {
+                        anyhow::bail!("OpenCode /session failed: {} - {}", status, text);
+                    }
+
+                    let session: OpenCodeSession =
+                        serde_json::from_str(&text).with_context(|| {
+                            format!("Failed to parse OpenCode session response: {}", text)
+                        })?;
+                    return Ok(session);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        error = %e,
+                        "OpenCode session creation failed"
+                    );
+                    last_error = Some(e);
+                }
+            }
         }
 
-        let session: OpenCodeSession = serde_json::from_str(&text)
-            .with_context(|| format!("Failed to parse OpenCode session response: {}", text))?;
-        Ok(session)
+        Err(last_error
+            .map(|e| anyhow::anyhow!(e))
+            .unwrap_or_else(|| anyhow::anyhow!("Unknown error"))
+            .context("Failed to call OpenCode /session after retries"))
     }
 
     /// Send a message and stream events in real-time.
@@ -132,8 +163,12 @@ impl OpenCodeClient {
 
         let (event_tx, event_rx) = mpsc::channel::<OpenCodeEvent>(256);
 
-        // Subscribe to SSE events (global stream, filter by session ID locally)
-        let event_url = format!("{}/event", self.base_url);
+        // Subscribe to SSE events (scoped to the session directory, filter by session ID locally)
+        let mut event_url = format!("{}/event", self.base_url);
+        if !directory.is_empty() {
+            event_url.push_str("?directory=");
+            event_url.push_str(&urlencoding::encode(&directory));
+        }
         tracing::debug!(url = %event_url, "Connecting to OpenCode SSE endpoint");
 
         let session_id_clone = session_id.clone();
@@ -149,10 +184,12 @@ impl OpenCodeClient {
             // Use tokio::process to spawn curl for SSE
             let mut child = match tokio::process::Command::new("curl")
                 .args([
-                    "-N",                      // No buffering
-                    "-s",                      // Silent
-                    "-H", "Accept: text/event-stream",
-                    "-H", "Cache-Control: no-cache",
+                    "-N", // No buffering
+                    "-s", // Silent
+                    "-H",
+                    "Accept: text/event-stream",
+                    "-H",
+                    "Cache-Control: no-cache",
                     &event_url,
                 ])
                 .stdout(std::process::Stdio::piped())
@@ -203,9 +240,15 @@ impl OpenCodeClient {
                                     "SSE event block received"
                                 );
 
-                                if let Some(event) = parse_sse_event(&data, event_name, &session_id_clone, &mut sse_state) {
+                                if let Some(event) = parse_sse_event(
+                                    &data,
+                                    event_name,
+                                    &session_id_clone,
+                                    &mut sse_state,
+                                ) {
                                     event_count += 1;
-                                    let is_complete = matches!(event, OpenCodeEvent::MessageComplete { .. });
+                                    let is_complete =
+                                        matches!(event, OpenCodeEvent::MessageComplete { .. });
 
                                     if event_tx.send(event).await.is_err() {
                                         tracing::debug!(session_id = %session_id_clone, "SSE receiver dropped");
@@ -229,13 +272,13 @@ impl OpenCodeClient {
                             continue;
                         }
 
-                        if let Some(rest) = trimmed.strip_prefix("event: ") {
-                            current_event = Some(rest.to_string());
+                        if let Some(rest) = trimmed.strip_prefix("event:") {
+                            current_event = Some(rest.trim_start().to_string());
                             continue;
                         }
 
-                        if let Some(rest) = trimmed.strip_prefix("data: ") {
-                            data_lines.push(rest.to_string());
+                        if let Some(rest) = trimmed.strip_prefix("data:") {
+                            data_lines.push(rest.trim_start().to_string());
                             continue;
                         }
 
@@ -303,12 +346,16 @@ impl OpenCodeClient {
     async fn send_message_internal(
         &self,
         session_id: &str,
-        _directory: &str,
+        directory: &str,
         content: &str,
         model: Option<&str>,
         agent: Option<&str>,
     ) -> anyhow::Result<OpenCodeMessageResponse> {
-        let url = format!("{}/session/{}/message", self.base_url, session_id);
+        let mut url = format!("{}/session/{}/message", self.base_url, session_id);
+        if !directory.is_empty() {
+            url.push_str("?directory=");
+            url.push_str(&urlencoding::encode(directory));
+        }
 
         let mut body = serde_json::Map::new();
         body.insert(
@@ -338,23 +385,84 @@ impl OpenCodeClient {
             }
         }
 
-        let resp = self
-            .client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .context("Failed to call OpenCode /session/{id}/message")?;
+        let mut last_error = None;
+        for attempt in 0..NETWORK_RETRY_COUNT {
+            if attempt > 0 {
+                let delay = NETWORK_RETRY_BASE_DELAY * 2u32.pow(attempt - 1);
+                tracing::warn!(
+                    session_id = %session_id,
+                    attempt = attempt + 1,
+                    max_attempts = NETWORK_RETRY_COUNT,
+                    delay_ms = delay.as_millis(),
+                    "Retrying OpenCode message send after transient failure"
+                );
+                tokio::time::sleep(delay).await;
+            }
 
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            anyhow::bail!("OpenCode message failed: {} - {}", status, text);
+            match self.client.post(&url).json(&body).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    if !status.is_success() {
+                        anyhow::bail!("OpenCode message failed: {} - {}", status, text);
+                    }
+                    return self.parse_message_response(&text);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        attempt = attempt + 1,
+                        error = %e,
+                        "OpenCode message send failed"
+                    );
+                    last_error = Some(e);
+                }
+            }
         }
 
-        let message: OpenCodeMessageResponse = serde_json::from_str(&text)
+        Err(last_error
+            .map(|e| anyhow::anyhow!(e))
+            .unwrap_or_else(|| anyhow::anyhow!("Unknown error"))
+            .context(format!(
+                "Failed to call OpenCode /session/{}/message after retries",
+                session_id
+            )))
+    }
+
+    /// Parse a message response from OpenCode, handling various response shapes.
+    fn parse_message_response(&self, text: &str) -> anyhow::Result<OpenCodeMessageResponse> {
+        if text.trim().is_empty() {
+            // Newer OpenCode servers may return an empty body for message POSTs.
+            return Ok(OpenCodeMessageResponse::empty());
+        }
+
+        // Try the legacy response shape first.
+        if let Ok(message) = serde_json::from_str::<OpenCodeMessageResponse>(text) {
+            return Ok(message);
+        }
+
+        // Fallback to wrapped response shapes (e.g., { "message": { ... } } or { "data": { ... } }).
+        let value: serde_json::Value = serde_json::from_str(text)
             .with_context(|| format!("Failed to parse OpenCode message response: {}", text))?;
-        Ok(message)
+        let maybe_message = value
+            .get("message")
+            .or_else(|| value.get("data"))
+            .or_else(|| value.get("result"));
+        if let Some(inner) = maybe_message {
+            let message: OpenCodeMessageResponse = serde_json::from_value(inner.clone())
+                .with_context(|| {
+                    format!(
+                        "Failed to parse wrapped OpenCode message response: {}",
+                        text
+                    )
+                })?;
+            return Ok(message);
+        }
+
+        Err(anyhow::anyhow!(
+            "Failed to parse OpenCode message response: {}",
+            text
+        ))
     }
 
     /// Legacy non-streaming send_message for backwards compatibility.
@@ -398,7 +506,10 @@ impl OpenCodeClient {
 
     /// Get the status of an OpenCode session for debugging.
     /// Returns session info and the latest messages with their tool states.
-    pub async fn get_session_status(&self, session_id: &str) -> anyhow::Result<OpenCodeSessionStatus> {
+    pub async fn get_session_status(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<OpenCodeSessionStatus> {
         // Get session info
         let session_url = format!("{}/session/{}", self.base_url, session_id);
         let session_resp = self
@@ -489,6 +600,86 @@ impl OpenCodeClient {
             completed_tools,
         })
     }
+
+    /// Fetch all messages for a session (newest last).
+    pub async fn get_session_messages(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let messages_url = format!("{}/session/{}/message", self.base_url, session_id);
+        let resp = self
+            .client
+            .get(&messages_url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .context("Failed to get OpenCode messages")?;
+
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("OpenCode messages query failed: {}", text);
+        }
+
+        let messages: Vec<serde_json::Value> = resp
+            .json()
+            .await
+            .context("Failed to parse OpenCode messages")?;
+        Ok(messages)
+    }
+
+    pub async fn list_questions(&self, directory: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+        let mut url = format!("{}/question", self.base_url);
+        if !directory.is_empty() {
+            url.push_str("?directory=");
+            url.push_str(&urlencoding::encode(directory));
+        }
+        let resp = self
+            .client
+            .get(&url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .context("Failed to get OpenCode questions")?;
+
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("OpenCode question list failed: {}", text);
+        }
+
+        let questions: Vec<serde_json::Value> = resp
+            .json()
+            .await
+            .context("Failed to parse OpenCode questions")?;
+        Ok(questions)
+    }
+
+    pub async fn reply_question(
+        &self,
+        directory: &str,
+        request_id: &str,
+        answers: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let mut url = format!("{}/question/{}/reply", self.base_url, request_id);
+        if !directory.is_empty() {
+            url.push_str("?directory=");
+            url.push_str(&urlencoding::encode(directory));
+        }
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&json!({ "answers": answers }))
+            .send()
+            .await
+            .context("Failed to reply to OpenCode question")?;
+
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("OpenCode question reply failed: {}", text);
+        }
+        Ok(())
+    }
 }
 
 /// Status information about an OpenCode session for debugging.
@@ -540,6 +731,11 @@ struct SseState {
     part_buffers: HashMap<String, String>,
     emitted_tool_calls: HashMap<String, ()>,
     emitted_tool_results: HashMap<String, ()>,
+    response_tool_args: HashMap<String, String>,
+    response_tool_names: HashMap<String, String>,
+    /// Track last emitted thinking/text content to deduplicate identical events
+    last_emitted_thinking: Option<String>,
+    last_emitted_text: Option<String>,
 }
 
 fn extract_str<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
@@ -553,11 +749,9 @@ fn extract_str<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a st
 
 fn extract_part_text<'a>(part: &'a serde_json::Value, part_type: &str) -> Option<&'a str> {
     if part_type == "thinking" {
-        part.get("thinking")
-            .and_then(|v| v.as_str())
-            .or_else(|| part.get("text").and_then(|v| v.as_str()))
+        extract_str(part, &["thinking", "text", "content"])
     } else {
-        part.get("text").and_then(|v| v.as_str())
+        extract_str(part, &["text", "content", "output_text"])
     }
 }
 
@@ -577,7 +771,7 @@ fn handle_part_update(props: &serde_json::Value, state: &mut SseState) -> Option
         return handle_tool_part_update(part, state);
     }
 
-    if !matches!(part_type, "text" | "reasoning" | "thinking") {
+    if !matches!(part_type, "text" | "output_text" | "reasoning" | "thinking") {
         return None;
     }
 
@@ -613,11 +807,23 @@ fn handle_part_update(props: &serde_json::Value, state: &mut SseState) -> Option
         return None;
     };
 
-    if role.is_none() && part_type == "text" && looks_like_user_prompt(&content) {
+    if role.is_none()
+        && matches!(part_type, "text" | "output_text")
+        && looks_like_user_prompt(&content)
+    {
         return None;
     }
 
     if matches!(part_type, "reasoning" | "thinking") {
+        // Skip if content is identical to last emitted thinking
+        if state.last_emitted_thinking.as_ref() == Some(&content) {
+            tracing::debug!(
+                content_len = content.len(),
+                "Skipping duplicate Thinking event"
+            );
+            return None;
+        }
+        state.last_emitted_thinking = Some(content.clone());
         tracing::info!(
             part_type = %part_type,
             content_len = content.len(),
@@ -626,6 +832,15 @@ fn handle_part_update(props: &serde_json::Value, state: &mut SseState) -> Option
         );
         Some(OpenCodeEvent::Thinking { content })
     } else {
+        // Skip if content is identical to last emitted text
+        if state.last_emitted_text.as_ref() == Some(&content) {
+            tracing::debug!(
+                content_len = content.len(),
+                "Skipping duplicate TextDelta event"
+            );
+            return None;
+        }
+        state.last_emitted_text = Some(content.clone());
         tracing::info!(
             part_type = %part_type,
             content_len = content.len(),
@@ -748,13 +963,39 @@ fn parse_sse_event(
     session_id: &str,
     state: &mut SseState,
 ) -> Option<OpenCodeEvent> {
-    let json: serde_json::Value = serde_json::from_str(data_str).ok()?;
+    let json: serde_json::Value = match serde_json::from_str(data_str) {
+        Ok(value) => value,
+        Err(err) => {
+            if data_str.contains('\n') {
+                let compact = data_str.replace('\n', "");
+                match serde_json::from_str(&compact) {
+                    Ok(value) => value,
+                    Err(second_err) => {
+                        tracing::warn!(
+                            error = %err,
+                            secondary_error = %second_err,
+                            data_preview = %data_str.chars().take(200).collect::<String>(),
+                            "Failed to parse OpenCode SSE JSON payload"
+                        );
+                        return None;
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    error = %err,
+                    data_preview = %data_str.chars().take(200).collect::<String>(),
+                    "Failed to parse OpenCode SSE JSON payload"
+                );
+                return None;
+            }
+        }
+    };
 
-    let event_type = json
-        .get("type")
-        .and_then(|v| v.as_str())
-        .or(event_name)?;
-    let props = json.get("properties").cloned().unwrap_or(json!({}));
+    let event_type = json.get("type").and_then(|v| v.as_str()).or(event_name)?;
+    let props = json
+        .get("properties")
+        .cloned()
+        .unwrap_or_else(|| json.clone());
 
     // Log all event types for debugging
     tracing::warn!(
@@ -791,6 +1032,115 @@ fn parse_sse_event(
     }
 
     match event_type {
+        // OpenAI Responses-style streaming
+        "response.output_text.delta" => {
+            let delta = props
+                .get("delta")
+                .or_else(|| props.get("text"))
+                .or_else(|| props.get("output_text_delta"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if delta.is_empty() {
+                return None;
+            }
+
+            let response_id = props
+                .get("response")
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str());
+            let key = response_id.unwrap_or("response.output_text").to_string();
+            let buffer = state.part_buffers.entry(key).or_default();
+            buffer.push_str(delta);
+            Some(OpenCodeEvent::TextDelta {
+                content: buffer.clone(),
+            })
+        }
+        "response.completed" | "response.incomplete" => Some(OpenCodeEvent::MessageComplete {
+            session_id: session_id.to_string(),
+        }),
+        "response.output_item.added" => {
+            if let Some(item) = props.get("item") {
+                if item.get("type").and_then(|v| v.as_str()) == Some("function_call") {
+                    let call_id = item
+                        .get("call_id")
+                        .or_else(|| item.get("id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    state.response_tool_names.insert(call_id.clone(), name);
+                    if let Some(args) = item.get("arguments").and_then(|v| v.as_str()) {
+                        if !args.is_empty() {
+                            state
+                                .response_tool_args
+                                .insert(call_id.clone(), args.to_string());
+                        }
+                    }
+                }
+            }
+            None
+        }
+        "response.function_call_arguments.delta" => {
+            let call_id = props
+                .get("item_id")
+                .or_else(|| props.get("call_id"))
+                .or_else(|| props.get("id"))
+                .and_then(|v| v.as_str());
+            let delta = props.get("delta").and_then(|v| v.as_str()).unwrap_or("");
+            if let (Some(call_id), false) = (call_id, delta.is_empty()) {
+                let entry = state
+                    .response_tool_args
+                    .entry(call_id.to_string())
+                    .or_default();
+                entry.push_str(delta);
+            }
+            None
+        }
+        "response.output_item.done" => {
+            if let Some(item) = props.get("item") {
+                if item.get("type").and_then(|v| v.as_str()) == Some("function_call") {
+                    let call_id = item
+                        .get("call_id")
+                        .or_else(|| item.get("id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    if state.emitted_tool_calls.contains_key(&call_id) {
+                        return None;
+                    }
+
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| state.response_tool_names.get(&call_id).cloned())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let args_str = item
+                        .get("arguments")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| state.response_tool_args.get(&call_id).cloned())
+                        .unwrap_or_default();
+                    let args = if args_str.trim().is_empty() {
+                        json!({})
+                    } else {
+                        serde_json::from_str(&args_str)
+                            .unwrap_or_else(|_| json!({ "arguments": args_str }))
+                    };
+                    state.emitted_tool_calls.insert(call_id.clone(), ());
+                    return Some(OpenCodeEvent::ToolCall {
+                        tool_call_id: call_id,
+                        name,
+                        args,
+                    });
+                }
+            }
+            None
+        }
         // Message info updates
         "message.updated" => {
             if let Some(info) = props.get("info") {
@@ -810,7 +1160,10 @@ fn parse_sse_event(
 
         // Message part streaming events
         "message.part.updated" => {
-            let part_type = props.get("part").and_then(|p| p.get("type")).and_then(|v| v.as_str());
+            let part_type = props
+                .get("part")
+                .and_then(|p| p.get("type"))
+                .and_then(|v| v.as_str());
             tracing::info!(
                 part_type = ?part_type,
                 has_delta = props.get("delta").is_some(),
@@ -874,11 +1227,31 @@ pub struct OpenCodeAssistantInfo {
     pub error: Option<serde_json::Value>,
 }
 
+impl Default for OpenCodeAssistantInfo {
+    fn default() -> Self {
+        Self {
+            provider_id: None,
+            model_id: None,
+            error: None,
+        }
+    }
+}
+
+impl OpenCodeMessageResponse {
+    pub fn empty() -> Self {
+        Self {
+            info: OpenCodeAssistantInfo::default(),
+            parts: Vec::new(),
+        }
+    }
+}
+
 pub fn extract_text(parts: &[serde_json::Value]) -> String {
     let mut out = Vec::new();
     for part in parts {
-        if part.get("type").and_then(|v| v.as_str()) == Some("text") {
-            if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+        let part_type = part.get("type").and_then(|v| v.as_str());
+        if matches!(part_type, Some("text" | "output_text")) {
+            if let Some(text) = extract_str(part, &["text", "content", "output_text"]) {
                 out.push(text.to_string());
             }
         }

@@ -160,9 +160,9 @@ impl SecretsCrypto {
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         // Decrypt
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext.as_ref())
-            .map_err(|_| CryptoError::DecryptionFailed("Invalid passphrase or corrupted data".to_string()))?;
+        let plaintext = cipher.decrypt(nonce, ciphertext.as_ref()).map_err(|_| {
+            CryptoError::DecryptionFailed("Invalid passphrase or corrupted data".to_string())
+        })?;
 
         String::from_utf8(plaintext)
             .map_err(|e| CryptoError::DecryptionFailed(format!("Invalid UTF-8: {}", e)))

@@ -27,6 +27,7 @@ use crate::workspace;
 use super::control::{
     AgentEvent, AgentTreeNode, ControlStatus, ExecutionProgress, FrontendToolHub,
 };
+use super::library::SharedLibrary;
 
 /// State of a running mission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +63,8 @@ pub enum MissionHealth {
 pub struct QueuedMessage {
     pub id: Uuid,
     pub content: String,
+    /// Optional agent override for this specific message (e.g., from @agent mention)
+    pub agent: Option<String>,
 }
 
 /// Isolated runner for a single mission.
@@ -74,6 +77,9 @@ pub struct MissionRunner {
 
     /// Current state
     pub state: MissionRunState,
+
+    /// Agent override for this mission
+    pub agent_override: Option<String>,
 
     /// Message queue for this mission
     pub queue: VecDeque<QueuedMessage>,
@@ -105,11 +111,12 @@ pub struct MissionRunner {
 
 impl MissionRunner {
     /// Create a new mission runner.
-    pub fn new(mission_id: Uuid, workspace_id: Uuid) -> Self {
+    pub fn new(mission_id: Uuid, workspace_id: Uuid, agent_override: Option<String>) -> Self {
         Self {
             mission_id,
             workspace_id,
             state: MissionRunState::Queued,
+            agent_override,
             queue: VecDeque::new(),
             history: Vec::new(),
             cancel_token: None,
@@ -184,11 +191,8 @@ impl MissionRunner {
     }
 
     /// Queue a message for this mission.
-    pub fn queue_message(&mut self, id: Uuid, content: String) {
-        self.queue.push_back(QueuedMessage {
-            id,
-            content,
-        });
+    pub fn queue_message(&mut self, id: Uuid, content: String, agent: Option<String>) {
+        self.queue.push_back(QueuedMessage { id, content, agent });
     }
 
     /// Cancel the current execution.
@@ -206,6 +210,7 @@ impl MissionRunner {
         root_agent: AgentRef,
         mcp: Arc<McpRegistry>,
         workspaces: workspace::SharedWorkspaceStore,
+        library: SharedLibrary,
         events_tx: broadcast::Sender<AgentEvent>,
         tool_hub: Arc<FrontendToolHub>,
         status: Arc<RwLock<ControlStatus>>,
@@ -233,8 +238,17 @@ impl MissionRunner {
         let progress_ref = Arc::clone(&self.progress_snapshot);
         let mission_id = self.mission_id;
         let workspace_id = self.workspace_id;
+        let agent_override = self.agent_override.clone();
         let user_message = msg.content.clone();
         let msg_id = msg.id;
+        tracing::info!(
+            mission_id = %mission_id,
+            workspace_id = %workspace_id,
+            agent_override = ?agent_override,
+            message_id = %msg_id,
+            message_len = user_message.len(),
+            "Mission runner starting"
+        );
 
         // Create mission control for complete_mission tool
         let mission_ctrl = crate::tools::mission::MissionControl {
@@ -246,6 +260,7 @@ impl MissionRunner {
         let _ = events_tx.send(AgentEvent::UserMessage {
             id: msg_id,
             content: user_message.clone(),
+            queued: false,
             mission_id: Some(mission_id),
         });
 
@@ -255,6 +270,7 @@ impl MissionRunner {
                 root_agent,
                 mcp,
                 workspaces,
+                library,
                 events_tx,
                 tool_hub,
                 status,
@@ -266,6 +282,7 @@ impl MissionRunner {
                 progress_ref,
                 mission_id,
                 Some(workspace_id),
+                agent_override,
             )
             .await;
             (msg_id, user_message, result)
@@ -355,6 +372,7 @@ async fn run_mission_turn(
     root_agent: AgentRef,
     mcp: Arc<McpRegistry>,
     workspaces: workspace::SharedWorkspaceStore,
+    library: SharedLibrary,
     events_tx: broadcast::Sender<AgentEvent>,
     tool_hub: Arc<FrontendToolHub>,
     status: Arc<RwLock<ControlStatus>>,
@@ -366,7 +384,21 @@ async fn run_mission_turn(
     progress_snapshot: Arc<RwLock<ExecutionProgress>>,
     mission_id: Uuid,
     workspace_id: Option<Uuid>,
+    agent_override: Option<String>,
 ) -> AgentResult {
+    let mut config = config;
+    if let Some(agent) = agent_override {
+        config.opencode_agent = Some(agent);
+    }
+    tracing::info!(
+        mission_id = %mission_id,
+        workspace_id = ?workspace_id,
+        opencode_agent = ?config.opencode_agent,
+        history_len = history.len(),
+        user_message_len = user_message.len(),
+        "Mission turn started"
+    );
+
     // Build context with history
     let max_history_chars = config.context.max_history_total_chars;
     let history_context = build_history_context(&history, max_history_chars);
@@ -428,23 +460,27 @@ async fn run_mission_turn(
     };
 
     // Ensure mission workspace exists and is configured for OpenCode.
-    let workspace_root =
-        workspace::resolve_workspace_root(&workspaces, &config, workspace_id).await;
-    let mission_work_dir =
-        match workspace::prepare_mission_workspace_in(&workspace_root, &mcp, mission_id).await {
-            Ok(dir) => {
-                tracing::info!(
-                    "Mission {} workspace directory: {}",
-                    mission_id,
-                    dir.display()
-                );
-                dir
-            }
-            Err(e) => {
-                tracing::warn!("Failed to prepare mission workspace, using default: {}", e);
-                workspace_root
-            }
-        };
+    let workspace = workspace::resolve_workspace(&workspaces, &config, workspace_id).await;
+    let workspace_root = workspace.path.clone();
+    let mission_work_dir = match {
+        let lib_guard = library.read().await;
+        let lib_ref = lib_guard.as_ref().map(|l| l.as_ref());
+        workspace::prepare_mission_workspace_with_skills(&workspace, &mcp, lib_ref, mission_id)
+            .await
+    } {
+        Ok(dir) => {
+            tracing::info!(
+                "Mission {} workspace directory: {}",
+                mission_id,
+                dir.display()
+            );
+            dir
+        }
+        Err(e) => {
+            tracing::warn!("Failed to prepare mission workspace, using default: {}", e);
+            workspace_root
+        }
+    };
 
     let mut ctx = AgentContext::new(config.clone(), mission_work_dir);
     ctx.mission_control = mission_control;
@@ -457,7 +493,16 @@ async fn run_mission_turn(
     ctx.mission_id = Some(mission_id);
     ctx.mcp = Some(mcp);
 
-    root_agent.execute(&mut task, &ctx).await
+    let result = root_agent.execute(&mut task, &ctx).await;
+    tracing::info!(
+        mission_id = %mission_id,
+        success = result.success,
+        cost_cents = result.cost_cents,
+        model = ?result.model_used,
+        terminal_reason = ?result.terminal_reason,
+        "Mission turn finished"
+    );
+    result
 }
 
 /// Compact info about a running mission (for API responses).

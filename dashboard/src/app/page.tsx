@@ -1,21 +1,26 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import Link from 'next/link';
-import { toast } from 'sonner';
+import { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { toast } from '@/components/toast';
 import { StatsCard } from '@/components/stats-card';
 import { ConnectionStatus } from '@/components/connection-status';
 import { RecentTasks } from '@/components/recent-tasks';
 import { ShimmerStat } from '@/components/ui/shimmer';
-import { getStats, StatsResponse } from '@/lib/api';
-import { Activity, CheckCircle, DollarSign, Zap, Plus } from 'lucide-react';
+import { createMission, getStats, isNetworkError, listWorkspaces, type StatsResponse, type Workspace } from '@/lib/api';
+import { Activity, CheckCircle, DollarSign, Zap } from 'lucide-react';
 import { formatCents } from '@/lib/utils';
+import { SystemMonitor } from '@/components/system-monitor';
+import { NewMissionDialog } from '@/components/new-mission-dialog';
 
 export default function OverviewPage() {
+  const router = useRouter();
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [isActive, setIsActive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [creatingMission, setCreatingMission] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -50,6 +55,37 @@ export default function OverviewPage() {
     };
   }, []);
 
+  useEffect(() => {
+    listWorkspaces()
+      .then((data) => {
+        setWorkspaces(data);
+      })
+      .catch((err) => {
+        if (isNetworkError(err)) return;
+        console.error('Failed to fetch workspaces:', err);
+      });
+  }, []);
+
+  const handleNewMission = useCallback(
+    async (options?: { workspaceId?: string; agent?: string }) => {
+      try {
+        setCreatingMission(true);
+        const mission = await createMission({
+          workspaceId: options?.workspaceId,
+          agent: options?.agent,
+        });
+        toast.success('New mission created');
+        router.push(`/control?mission=${mission.id}`);
+      } catch (err) {
+        console.error('Failed to create mission:', err);
+        toast.error('Failed to create new mission');
+      } finally {
+        setCreatingMission(false);
+      }
+    },
+    [router]
+  );
+
   return (
     <div className="flex min-h-screen">
       {/* Main content */}
@@ -74,54 +110,16 @@ export default function OverviewPage() {
           </div>
           
           {/* Quick Actions */}
-          <Link
-            href="/control"
-            className="flex items-center gap-2 rounded-lg bg-indigo-500/20 px-3 py-2 text-sm font-medium text-indigo-400 hover:bg-indigo-500/30 transition-colors"
-          >
-            <Plus className="h-4 w-4" />
-            New Mission
-          </Link>
+          <NewMissionDialog
+            workspaces={workspaces}
+            disabled={creatingMission}
+            onCreate={handleNewMission}
+          />
         </div>
 
-        {/* Visualization Area (placeholder for radar/globe) - takes remaining space */}
-        <div className="flex-1 flex items-center justify-center rounded-2xl bg-white/[0.01] border border-white/[0.04] mb-6 min-h-[300px]">
-          {/* Circular radar visualization */}
-          <div className="relative">
-            {/* Outer rings */}
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="h-64 w-64 rounded-full border border-white/[0.06]" />
-            </div>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="h-48 w-48 rounded-full border border-white/[0.05]" />
-            </div>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="h-32 w-32 rounded-full border border-white/[0.04]" />
-            </div>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="h-16 w-16 rounded-full border border-white/[0.03]" />
-            </div>
-            
-            {/* Cross lines */}
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="h-64 w-[1px] bg-white/[0.04]" />
-            </div>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="h-[1px] w-64 bg-white/[0.04]" />
-            </div>
-            
-            {/* Center dot */}
-            <div className="relative h-64 w-64 flex items-center justify-center">
-              <div className={`h-3 w-3 rounded-full ${isActive ? 'bg-emerald-400 animate-pulse' : 'bg-white/20'}`} />
-              
-              {/* Activity dots (mock) */}
-              {isActive && (
-                <>
-                  <div className="absolute top-1/4 left-1/3 h-2 w-2 rounded-full bg-indigo-400/60 animate-pulse-subtle" />
-                  <div className="absolute bottom-1/3 right-1/4 h-2 w-2 rounded-full bg-emerald-400/60 animate-pulse-subtle" style={{ animationDelay: '0.5s' }} />
-                </>
-              )}
-            </div>
-          </div>
+        {/* System Metrics Area */}
+        <div className="flex-1 flex items-center justify-center rounded-2xl bg-white/[0.01] border border-white/[0.04] mb-6 min-h-[300px] p-6">
+          <SystemMonitor className="w-full max-w-4xl" />
         </div>
 
         {/* Stats grid - at bottom */}

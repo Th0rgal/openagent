@@ -39,6 +39,7 @@ pub struct AuthMethod {
 pub struct PendingOAuth {
     pub verifier: String,
     pub mode: String, // "max" or "console"
+    pub state: Option<String>,
     pub created_at: std::time::Instant,
 }
 
@@ -176,12 +177,36 @@ impl ProviderType {
 
     /// Returns whether this provider uses OAuth authentication.
     pub fn uses_oauth(&self) -> bool {
-        matches!(self, Self::Anthropic | Self::GithubCopilot)
+        matches!(
+            self,
+            Self::Anthropic | Self::GithubCopilot | Self::OpenAI | Self::Google
+        )
     }
 
     /// Returns available authentication methods for this provider.
     pub fn auth_methods(&self) -> Vec<AuthMethod> {
         match self {
+            Self::OpenAI => vec![
+                AuthMethod {
+                    label: "ChatGPT Plus/Pro (Codex Subscription)".to_string(),
+                    method_type: AuthMethodType::Oauth,
+                    description: Some(
+                        "Use your ChatGPT Plus/Pro subscription via official OAuth".to_string(),
+                    ),
+                },
+                AuthMethod {
+                    label: "ChatGPT Plus/Pro (Manual URL Paste)".to_string(),
+                    method_type: AuthMethodType::Oauth,
+                    description: Some(
+                        "Paste the full redirect URL if automatic callback fails".to_string(),
+                    ),
+                },
+                AuthMethod {
+                    label: "Manually enter API Key".to_string(),
+                    method_type: AuthMethodType::Api,
+                    description: Some("Enter an existing OpenAI API key".to_string()),
+                },
+            ],
             Self::Anthropic => vec![
                 AuthMethod {
                     label: "Claude Pro/Max".to_string(),
@@ -203,13 +228,24 @@ impl ProviderType {
                     description: Some("Enter an existing Anthropic API key".to_string()),
                 },
             ],
-            Self::GithubCopilot => vec![
+            Self::GithubCopilot => vec![AuthMethod {
+                label: "GitHub Copilot".to_string(),
+                method_type: AuthMethodType::Oauth,
+                description: Some("Connect your GitHub Copilot subscription".to_string()),
+            }],
+            Self::Google => vec![
                 AuthMethod {
-                    label: "GitHub Copilot".to_string(),
+                    label: "OAuth with Google (Gemini CLI)".to_string(),
                     method_type: AuthMethodType::Oauth,
                     description: Some(
-                        "Connect your GitHub Copilot subscription".to_string(),
+                        "Use your Gemini plan/quotas (including free tier) via Google OAuth"
+                            .to_string(),
                     ),
+                },
+                AuthMethod {
+                    label: "Manually enter API Key".to_string(),
+                    method_type: AuthMethodType::Api,
+                    description: Some("Enter an existing Google AI API key".to_string()),
                 },
             ],
             _ => vec![AuthMethod {

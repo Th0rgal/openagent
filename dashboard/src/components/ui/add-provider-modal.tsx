@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { X, ExternalLink, Key, Loader, Cpu } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/components/toast';
 import { cn } from '@/lib/utils';
 import {
   createAIProvider,
@@ -42,6 +42,31 @@ const getProviderAuthMethods = (providerType: AIProviderType): AIProviderAuthMet
       { label: 'Claude Pro/Max', type: 'oauth', description: 'Use your Claude subscription' },
       { label: 'Create API Key', type: 'oauth', description: 'Create a new key via OAuth' },
       { label: 'Enter API Key', type: 'api', description: 'Use an existing API key' },
+    ];
+  }
+  if (providerType === 'openai') {
+    return [
+      {
+        label: 'ChatGPT Plus/Pro (Codex Subscription)',
+        type: 'oauth',
+        description: 'Use your ChatGPT Plus/Pro subscription via official OAuth',
+      },
+      {
+        label: 'ChatGPT Plus/Pro (Manual URL Paste)',
+        type: 'oauth',
+        description: 'Paste the full redirect URL if the callback fails',
+      },
+      { label: 'Enter API Key', type: 'api', description: 'Use an existing API key' },
+    ];
+  }
+  if (providerType === 'google') {
+    return [
+      {
+        label: 'OAuth with Google (Gemini CLI)',
+        type: 'oauth',
+        description: 'Use your Gemini plan/quotas (including free tier) via Google OAuth',
+      },
+      { label: 'Enter API Key', type: 'api', description: 'Use an existing Google AI API key' },
     ];
   }
   if (providerType === 'github-copilot') {
@@ -323,13 +348,13 @@ export function AddProviderModal({ open, onClose, onSuccess, providerTypes }: Ad
           {step === 'oauth-callback' && oauthResponse && (
             <div className="space-y-4">
               <p className="text-sm text-white/60">
-                Paste the authorization code from the browser window that opened.
+                {oauthResponse.instructions}
               </p>
               <input
                 type="text"
                 value={oauthCode}
                 onChange={(e) => setOauthCode(e.target.value)}
-                placeholder="Authorization code"
+                placeholder="Authorization code or redirect URL"
                 autoFocus
                 className="w-full rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 text-sm text-white placeholder-white/30 focus:outline-none focus:border-indigo-500/50 font-mono"
               />

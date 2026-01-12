@@ -20,19 +20,9 @@ impl McpConfigStore {
     pub async fn new(working_dir: &Path) -> Self {
         let config_dir = working_dir.join(".openagent").join("mcp");
         let config_path = config_dir.join("config.json");
-        let legacy_path = working_dir
-            .join(".open_agent")
-            .join("mcp")
-            .join("config.json");
 
         let configs = if config_path.exists() {
             tokio::fs::read_to_string(&config_path)
-                .await
-                .ok()
-                .and_then(|content| serde_json::from_str(&content).ok())
-                .unwrap_or_default()
-        } else if legacy_path.exists() {
-            tokio::fs::read_to_string(&legacy_path)
                 .await
                 .ok()
                 .and_then(|content| serde_json::from_str(&content).ok())

@@ -33,6 +33,38 @@ fn sanitize_mcp_prefix(name: &str) -> String {
         .replace('-', "_")
 }
 
+fn command_exists(command: &str) -> bool {
+    if command.trim().is_empty() {
+        return false;
+    }
+
+    let path = Path::new(command);
+    if path.is_absolute() || command.contains('/') {
+        return path.exists();
+    }
+
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+
+    for dir in std::env::split_paths(&paths) {
+        let candidate = dir.join(command);
+        if candidate.is_file() {
+            return true;
+        }
+        #[cfg(windows)]
+        {
+            for ext in ["exe", "cmd", "bat"] {
+                if candidate.with_extension(ext).is_file() {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
 /// Handle for a stdio MCP process
 struct StdioProcess {
     child: Child,
@@ -56,6 +88,9 @@ pub struct McpRegistry {
     request_id: AtomicU64,
 }
 
+const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+const MCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 impl McpRegistry {
     /// Create a new MCP registry.
     pub async fn new(working_dir: &Path) -> Self {
@@ -69,10 +104,10 @@ impl McpRegistry {
             states.insert(config.id, McpServerState::from_config(config));
         }
 
-        // Use very short timeouts to avoid blocking for too long
+        // Use generous timeouts for long-running MCP tools (e.g., Minecraft launches)
         let http_client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .connect_timeout(Duration::from_millis(5000))
+            .timeout(MCP_REQUEST_TIMEOUT)
+            .connect_timeout(MCP_CONNECT_TIMEOUT)
             .build()
             .unwrap_or_default();
 
@@ -101,36 +136,55 @@ impl McpRegistry {
             desktop_env.insert("DESKTOP_RESOLUTION".to_string(), "1920x1080".to_string());
         }
 
-        let repo_desktop = working_dir
-            .join("target")
-            .join("release")
-            .join("desktop-mcp");
-        let desktop_command = if repo_desktop.exists() {
-            repo_desktop.to_string_lossy().to_string()
-        } else {
-            "desktop-mcp".to_string()
+        let desktop_command = {
+            let release = working_dir
+                .join("target")
+                .join("release")
+                .join("desktop-mcp");
+            let debug = working_dir.join("target").join("debug").join("desktop-mcp");
+            if release.exists() {
+                release.to_string_lossy().to_string()
+            } else if debug.exists() {
+                debug.to_string_lossy().to_string()
+            } else {
+                "desktop-mcp".to_string()
+            }
         };
-        let desktop = McpServerConfig::new_stdio(
+        let mut desktop = McpServerConfig::new_stdio(
             "desktop".to_string(),
             desktop_command,
             Vec::new(),
             desktop_env,
         );
-        let repo_host = working_dir.join("target").join("release").join("host-mcp");
-        let host_command = if repo_host.exists() {
-            repo_host.to_string_lossy().to_string()
-        } else {
-            "host-mcp".to_string()
+        desktop.scope = McpScope::Workspace;
+
+        let host_command = {
+            let release = working_dir.join("target").join("release").join("host-mcp");
+            let debug = working_dir.join("target").join("debug").join("host-mcp");
+            if release.exists() {
+                release.to_string_lossy().to_string()
+            } else if debug.exists() {
+                debug.to_string_lossy().to_string()
+            } else {
+                "host-mcp".to_string()
+            }
         };
-        let host = McpServerConfig::new_stdio(
+        let mut host = McpServerConfig::new_stdio(
             "host".to_string(),
             host_command,
             Vec::new(),
             HashMap::new(),
         );
-        let playwright = McpServerConfig::new_stdio(
+        host.scope = McpScope::Workspace;
+        // Prefer bunx (Bun) when present, but fall back to npx for compatibility.
+        let js_runner = if command_exists("bunx") {
+            "bunx"
+        } else {
+            "npx"
+        };
+        let mut playwright = McpServerConfig::new_stdio(
             "playwright".to_string(),
-            "npx".to_string(),
+            js_runner.to_string(),
             vec![
                 "@playwright/mcp@latest".to_string(),
                 "--isolated".to_string(),
@@ -138,6 +192,8 @@ impl McpRegistry {
             ],
             HashMap::new(),
         );
+        playwright.scope = McpScope::Workspace;
+
         vec![host, desktop, playwright]
     }
 
@@ -146,6 +202,18 @@ impl McpRegistry {
         mut configs: Vec<McpServerConfig>,
         working_dir: &Path,
     ) -> Vec<McpServerConfig> {
+        fn resolve_local_binary(working_dir: &Path, name: &str) -> Option<String> {
+            let release = working_dir.join("target").join("release").join(name);
+            if release.exists() {
+                return Some(release.to_string_lossy().to_string());
+            }
+            let debug = working_dir.join("target").join("debug").join(name);
+            if debug.exists() {
+                return Some(debug.to_string_lossy().to_string());
+            }
+            None
+        }
+
         let defaults = Self::default_configs(working_dir);
         for config in defaults {
             if configs.iter().any(|c| c.name == config.name) {
@@ -161,6 +229,16 @@ impl McpRegistry {
         for config in configs.iter_mut() {
             if config.name != "playwright" {
                 continue;
+            }
+
+            if config.scope != McpScope::Workspace {
+                config.scope = McpScope::Workspace;
+                let id = config.id;
+                let _ = config_store
+                    .update(id, |c| {
+                        c.scope = McpScope::Workspace;
+                    })
+                    .await;
             }
 
             let missing_flags: Vec<&str> = match &config.transport {
@@ -196,6 +274,47 @@ impl McpRegistry {
                 .await;
         }
 
+        // Prefer repo-local MCP binaries for host/desktop (debug or release),
+        // so default configs work without installing to PATH.
+        for config in configs.iter_mut() {
+            let binary_name = match config.name.as_str() {
+                "host" => Some("host-mcp"),
+                "desktop" => Some("desktop-mcp"),
+                _ => None,
+            };
+
+            let Some(binary_name) = binary_name else {
+                continue;
+            };
+            let Some(resolved) = resolve_local_binary(working_dir, binary_name) else {
+                continue;
+            };
+
+            if let McpTransport::Stdio { command, .. } = &mut config.transport {
+                if command != &resolved {
+                    *command = resolved.clone();
+                    let id = config.id;
+                    let _ = config_store
+                        .update(id, |c| {
+                            if let McpTransport::Stdio { command, .. } = &mut c.transport {
+                                *command = resolved.clone();
+                            }
+                        })
+                        .await;
+                }
+            }
+
+            if config.scope != McpScope::Workspace {
+                config.scope = McpScope::Workspace;
+                let id = config.id;
+                let _ = config_store
+                    .update(id, |c| {
+                        c.scope = McpScope::Workspace;
+                    })
+                    .await;
+            }
+        }
+
         configs
     }
 
@@ -210,16 +329,21 @@ impl McpRegistry {
         endpoint: &str,
         method: &str,
         params: Option<serde_json::Value>,
+        headers: &HashMap<String, String>,
     ) -> anyhow::Result<serde_json::Value> {
         let request = JsonRpcRequest::new(self.next_request_id(), method, params);
 
-        let response = self
+        let mut req_builder = self
             .http_client
             .post(endpoint)
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await?;
+            .header("Content-Type", "application/json");
+
+        // Add custom headers
+        for (key, value) in headers {
+            req_builder = req_builder.header(key.as_str(), value.as_str());
+        }
+
+        let response = req_builder.json(&request).send().await?;
 
         if !response.status().is_success() {
             anyhow::bail!("HTTP {}", response.status());
@@ -259,7 +383,7 @@ impl McpRegistry {
 
         // Read with timeout
         let read_result =
-            tokio::time::timeout(Duration::from_secs(30), stdout.read_line(&mut line)).await;
+            tokio::time::timeout(MCP_REQUEST_TIMEOUT, stdout.read_line(&mut line)).await;
 
         match read_result {
             Ok(Ok(0)) => anyhow::bail!("MCP process closed stdout"),
@@ -318,7 +442,11 @@ impl McpRegistry {
     }
 
     /// Initialize connection with an MCP server (HTTP)
-    async fn initialize_mcp_http(&self, endpoint: &str) -> anyhow::Result<InitializeResult> {
+    async fn initialize_mcp_http(
+        &self,
+        endpoint: &str,
+        headers: &HashMap<String, String>,
+    ) -> anyhow::Result<InitializeResult> {
         let params = InitializeParams {
             protocol_version: MCP_PROTOCOL_VERSION.to_string(),
             capabilities: ClientCapabilities::default(),
@@ -329,16 +457,27 @@ impl McpRegistry {
         };
 
         let result = self
-            .send_jsonrpc_http(endpoint, "initialize", Some(serde_json::to_value(params)?))
+            .send_jsonrpc_http(
+                endpoint,
+                "initialize",
+                Some(serde_json::to_value(params)?),
+                headers,
+            )
             .await?;
 
         let init_result: InitializeResult = serde_json::from_value(result)?;
 
         // Send initialized notification (no response expected, but some servers require it)
-        let _ = self
+        let mut req_builder = self
             .http_client
             .post(endpoint)
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+
+        for (key, value) in headers {
+            req_builder = req_builder.header(key.as_str(), value.as_str());
+        }
+
+        let _ = req_builder
             .json(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "notifications/initialized"
@@ -397,10 +536,8 @@ impl McpRegistry {
     /// Add a new MCP server.
     /// Note: This does NOT automatically attempt to connect. Use refresh() after adding.
     pub async fn add(&self, req: AddMcpRequest) -> anyhow::Result<McpServerState> {
-        let transport = req.effective_transport();
-
-        let mut config = match &transport {
-            McpTransport::Http { endpoint } => {
+        let mut config = match &req.transport {
+            McpTransport::Http { endpoint, .. } => {
                 McpServerConfig::new(req.name.clone(), endpoint.clone())
             }
             McpTransport::Stdio { command, args, env } => McpServerConfig::new_stdio(
@@ -411,6 +548,9 @@ impl McpRegistry {
             ),
         };
         config.description = req.description;
+        if let Some(scope) = req.scope {
+            config.scope = scope;
+        }
 
         // Save to persistent store
         let config = self.config_store.add(config).await?;
@@ -528,14 +668,11 @@ impl McpRegistry {
                 if let Some(enabled) = req.enabled {
                     c.enabled = enabled;
                 }
+                if let Some(scope) = req.scope {
+                    c.scope = scope;
+                }
                 if let Some(transport) = &req.transport {
                     c.transport = transport.clone();
-                    // Update deprecated endpoint field for backwards compat
-                    if let McpTransport::Http { endpoint } = transport {
-                        c.endpoint = endpoint.clone();
-                    } else {
-                        c.endpoint = String::new();
-                    }
                 }
             })
             .await?;
@@ -625,7 +762,10 @@ impl McpRegistry {
         }
 
         match &state.config.transport {
-            McpTransport::Http { endpoint } => self.refresh_http(id, endpoint.clone()).await,
+            McpTransport::Http { endpoint, headers } => {
+                self.refresh_http(id, endpoint.clone(), headers.clone())
+                    .await
+            }
             McpTransport::Stdio { command, args, env } => {
                 self.refresh_stdio(id, command.clone(), args.clone(), env.clone())
                     .await
@@ -634,11 +774,16 @@ impl McpRegistry {
     }
 
     /// Refresh an HTTP MCP server
-    async fn refresh_http(&self, id: Uuid, endpoint: String) -> anyhow::Result<McpServerState> {
+    async fn refresh_http(
+        &self,
+        id: Uuid,
+        endpoint: String,
+        headers: HashMap<String, String>,
+    ) -> anyhow::Result<McpServerState> {
         let endpoint = endpoint.trim_end_matches('/').to_string();
 
         // Step 1: Initialize the MCP connection with JSON-RPC
-        let init_result = match self.initialize_mcp_http(&endpoint).await {
+        let init_result = match self.initialize_mcp_http(&endpoint, &headers).await {
             Ok(result) => result,
             Err(e) => {
                 self.update_state_error(id, format!("Initialize failed: {}", e))
@@ -657,7 +802,10 @@ impl McpRegistry {
             .and_then(|s| s.version.clone());
 
         // Step 2: List tools using JSON-RPC
-        match self.send_jsonrpc_http(&endpoint, "tools/list", None).await {
+        match self
+            .send_jsonrpc_http(&endpoint, "tools/list", None, &headers)
+            .await
+        {
             Ok(result) => {
                 match serde_json::from_value::<McpToolsResponse>(result) {
                     Ok(tools_response) => {
@@ -839,9 +987,9 @@ impl McpRegistry {
         });
 
         let result = match &state.config.transport {
-            McpTransport::Http { endpoint } => {
+            McpTransport::Http { endpoint, headers } => {
                 let endpoint = endpoint.trim_end_matches('/');
-                self.send_jsonrpc_http(endpoint, "tools/call", Some(params))
+                self.send_jsonrpc_http(endpoint, "tools/call", Some(params), headers)
                     .await
             }
             McpTransport::Stdio { .. } => {
@@ -996,5 +1144,4 @@ impl McpRegistry {
             prefixed_name.to_string()
         }
     }
-
 }

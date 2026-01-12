@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import Link from "next/link";
-import { toast } from "sonner";
+import { toast } from "@/components/toast";
 import { cn } from "@/lib/utils";
 import { listMissions, getMissionTree, deleteMission, cleanupEmptyMissions, Mission } from "@/lib/api";
 import { ShimmerTableRow } from "@/components/ui/shimmer";

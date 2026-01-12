@@ -36,10 +36,10 @@
 pub mod agents;
 pub mod ai_providers;
 pub mod api;
-pub mod chroot;
 pub mod config;
 pub mod library;
 pub mod mcp;
+pub mod nspawn;
 pub mod opencode;
 pub mod opencode_config;
 pub mod secrets;

@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { toast } from 'sonner';
-import { type McpServerDef, type McpServerState, type McpTransport, type McpStatus, listMcps, enableMcp, disableMcp, refreshMcp, updateMcp } from '@/lib/api';
+import { toast } from '@/components/toast';
+import { type McpScope, type McpServerDef, type McpServerState, type McpTransport, type McpStatus, type UpdateMcpRequest, listMcps, enableMcp, disableMcp, refreshMcp, updateMcp } from '@/lib/api';
 import {
   AlertCircle,
   Check,
@@ -271,12 +271,23 @@ function RuntimeMcpCard({
     }
   };
 
+  const handleSelect = () => onSelect(isSelected ? null : mcp);
+
   return (
-    <button
-      onClick={() => onSelect(isSelected ? null : mcp)}
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={isSelected}
+      onClick={handleSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          handleSelect();
+        }
+      }}
       className={cn(
-        'w-full rounded-xl p-4 text-left transition-all',
-        'bg-white/[0.02] border hover:bg-white/[0.04]',
+        'w-full rounded-xl p-4 text-left transition-all cursor-pointer',
+        'bg-white/[0.02] border hover:bg-white/[0.04] focus:outline-none focus:ring-1 focus:ring-cyan-500/40',
         isSelected
           ? 'border-cyan-500/40 bg-cyan-500/5'
           : 'border-white/[0.04] hover:border-white/[0.08]'
@@ -290,6 +301,16 @@ function RuntimeMcpCard({
           <div className="flex items-center gap-2">
             <h3 className="font-medium text-white truncate">{mcp.name}</h3>
             <span className="tag bg-cyan-500/10 text-cyan-400 border-cyan-500/20">Runtime</span>
+            <span
+              className={cn(
+                'tag',
+                mcp.scope === 'workspace'
+                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                  : 'bg-white/[0.04] text-white/50 border-white/[0.08]'
+              )}
+            >
+              {mcp.scope === 'workspace' ? 'Workspace' : 'Global'}
+            </span>
           </div>
           <div className="flex items-center gap-1 group">
             <p className="text-xs text-white/40 truncate">
@@ -314,6 +335,14 @@ function RuntimeMcpCard({
 
       <div className="flex items-center justify-between pt-3 border-t border-white/[0.04]">
         <div className="flex items-center gap-2">
+          <span className={cn(
+            'h-2 w-2 rounded-full',
+            mcp.status === 'connected' && 'bg-emerald-400',
+            mcp.status === 'connecting' && 'bg-amber-400 animate-pulse',
+            mcp.status === 'disconnected' && 'bg-white/40',
+            mcp.status === 'disabled' && 'bg-white/40',
+            mcp.status === 'error' && 'bg-red-400'
+          )} />
           <span className={cn('text-[10px]', statusColor[mcp.status])}>{statusLabel[mcp.status]}</span>
           {mcp.error && (
             <span className="text-[10px] text-red-400 truncate max-w-[120px]" title={mcp.error}>
@@ -345,7 +374,7 @@ function RuntimeMcpCard({
           </button>
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -357,27 +386,43 @@ function RuntimeMcpDetailPanel({
 }: {
   mcp: McpServerState;
   onClose: () => void;
-  onUpdate: (id: string, transport: McpTransport) => Promise<void>;
+  onUpdate: (id: string, updates: UpdateMcpRequest) => Promise<void>;
   onRefresh: (id: string) => Promise<void>;
 }) {
   const isStdio = 'stdio' in (mcp.transport ?? {});
+  const isHttp = 'http' in (mcp.transport ?? {});
   const stdioConfig = isStdio ? (mcp.transport as { stdio: { command: string; args: string[]; env: Record<string, string> } }).stdio : null;
+  const httpConfig = isHttp ? (mcp.transport as { http: { endpoint: string; headers: Record<string, string> } }).http : null;
+  const [scope, setScope] = useState<McpScope>(mcp.scope ?? 'global');
 
-  const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>(
-    () => Object.entries(stdioConfig?.env ?? {}).map(([key, value]) => ({ key, value }))
+  // For stdio: env vars; for http: headers
+  const [keyValuePairs, setKeyValuePairs] = useState<Array<{ key: string; value: string }>>(
+    () => {
+      if (isStdio) {
+        return Object.entries(stdioConfig?.env ?? {}).map(([key, value]) => ({ key, value }));
+      }
+      if (isHttp) {
+        return Object.entries(httpConfig?.headers ?? {}).map(([key, value]) => ({ key, value }));
+      }
+      return [];
+    }
   );
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Sync envVars state when mcp prop changes (e.g., after refresh)
+  // Sync state when mcp prop changes (e.g., after refresh)
   useEffect(() => {
-    const newStdioConfig = 'stdio' in (mcp.transport ?? {})
-      ? (mcp.transport as { stdio: { command: string; args: string[]; env: Record<string, string> } }).stdio
-      : null;
-    setEnvVars(Object.entries(newStdioConfig?.env ?? {}).map(([key, value]) => ({ key, value })));
-  }, [mcp.transport]);
+    if ('stdio' in (mcp.transport ?? {})) {
+      const config = (mcp.transport as { stdio: { command: string; args: string[]; env: Record<string, string> } }).stdio;
+      setKeyValuePairs(Object.entries(config?.env ?? {}).map(([key, value]) => ({ key, value })));
+    } else if ('http' in (mcp.transport ?? {})) {
+      const config = (mcp.transport as { http: { endpoint: string; headers: Record<string, string> } }).http;
+      setKeyValuePairs(Object.entries(config?.headers ?? {}).map(([key, value]) => ({ key, value })));
+    }
+    setScope(mcp.scope ?? 'global');
+  }, [mcp.transport, mcp.scope]);
 
   // Handle Escape key to close panel
   useEffect(() => {
@@ -390,42 +435,56 @@ function RuntimeMcpDetailPanel({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
 
-  const handleAddEnvVar = () => {
+  const handleAddKeyValue = () => {
     if (!newKey.trim()) return;
-    setEnvVars((prev) => [...prev, { key: newKey.trim(), value: newValue }]);
+    setKeyValuePairs((prev) => [...prev, { key: newKey.trim(), value: newValue }]);
     setNewKey('');
     setNewValue('');
   };
 
-  const handleRemoveEnvVar = (index: number) => {
-    setEnvVars((prev) => prev.filter((_, i) => i !== index));
+  const handleRemoveKeyValue = (index: number) => {
+    setKeyValuePairs((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleUpdateEnvVar = (index: number, field: 'key' | 'value', value: string) => {
-    setEnvVars((prev) =>
+  const handleUpdateKeyValue = (index: number, field: 'key' | 'value', value: string) => {
+    setKeyValuePairs((prev) =>
       prev.map((item, i) => (i === index ? { ...item, [field]: value } : item))
     );
   };
 
   const handleSave = async () => {
-    if (!stdioConfig) return;
+    if (!stdioConfig && !httpConfig) return;
     setSaving(true);
     try {
-      const newEnv: Record<string, string> = {};
-      envVars.forEach(({ key, value }) => {
+      const newMap: Record<string, string> = {};
+      keyValuePairs.forEach(({ key, value }) => {
         if (key.trim()) {
-          newEnv[key.trim()] = value;
+          newMap[key.trim()] = value;
         }
       });
-      const transport: McpTransport = {
-        stdio: {
-          command: stdioConfig.command,
-          args: stdioConfig.args,
-          env: newEnv,
-        },
-      };
-      await onUpdate(mcp.id, transport);
-      toast.success('Saved environment variables');
+
+      let transport: McpTransport;
+      if (stdioConfig) {
+        transport = {
+          stdio: {
+            command: stdioConfig.command,
+            args: stdioConfig.args,
+            env: newMap,
+          },
+        };
+      } else if (httpConfig) {
+        transport = {
+          http: {
+            endpoint: httpConfig.endpoint,
+            headers: newMap,
+          },
+        };
+      } else {
+        return;
+      }
+
+      await onUpdate(mcp.id, { transport, scope });
+      toast.success(isStdio ? 'Saved environment variables' : 'Saved headers');
     } catch {
       toast.error('Failed to save');
     } finally {
@@ -468,8 +527,26 @@ function RuntimeMcpDetailPanel({
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-semibold text-white">{mcp.name}</h2>
               <span className="tag bg-cyan-500/10 text-cyan-400 border-cyan-500/20">Runtime</span>
+              <span
+                className={cn(
+                  'tag',
+                  scope === 'workspace'
+                    ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                    : 'bg-white/[0.04] text-white/50 border-white/[0.08]'
+                )}
+              >
+                {scope === 'workspace' ? 'Workspace' : 'Global'}
+              </span>
             </div>
             <div className="flex items-center gap-2 mt-1">
+              <span className={cn(
+                'h-2 w-2 rounded-full',
+                mcp.status === 'connected' && 'bg-emerald-400',
+                mcp.status === 'connecting' && 'bg-amber-400 animate-pulse',
+                mcp.status === 'disconnected' && 'bg-white/40',
+                mcp.status === 'disabled' && 'bg-white/40',
+                mcp.status === 'error' && 'bg-red-400'
+              )} />
               <span className={cn('text-xs', statusColorMap[mcp.status])}>
                 {mcp.status.charAt(0).toUpperCase() + mcp.status.slice(1)}
               </span>
@@ -485,6 +562,23 @@ function RuntimeMcpDetailPanel({
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-4">
+            <p className="text-xs text-white/40 mb-2">Scope</p>
+            <div className="flex items-center gap-2">
+              <select
+                value={scope}
+                onChange={(e) => setScope(e.target.value as McpScope)}
+                className="w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-2 text-xs text-white focus:border-cyan-500/50 focus:outline-none"
+              >
+                <option value="global">Global (host-level)</option>
+                <option value="workspace">Workspace (installed per workspace)</option>
+              </select>
+            </div>
+            <p className="mt-2 text-[11px] text-white/40">
+              Workspace-scoped MCPs must be installed in the workspace init script.
+            </p>
+          </div>
+
           {isStdio && stdioConfig && (
             <>
               <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-4">
@@ -504,28 +598,28 @@ function RuntimeMcpDetailPanel({
                   <p className="text-xs text-white/40">Environment Variables</p>
                 </div>
 
-                {envVars.length === 0 ? (
+                {keyValuePairs.length === 0 ? (
                   <p className="text-sm text-white/40 mb-3">No environment variables configured</p>
                 ) : (
                   <div className="space-y-2 mb-3">
-                    {envVars.map((item, idx) => (
+                    {keyValuePairs.map((item, idx) => (
                       <div key={idx} className="flex items-center gap-2">
                         <input
                           type="text"
                           value={item.key}
-                          onChange={(e) => handleUpdateEnvVar(idx, 'key', e.target.value)}
+                          onChange={(e) => handleUpdateKeyValue(idx, 'key', e.target.value)}
                           placeholder="KEY"
                           className="flex-1 min-w-0 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1.5 text-xs text-white placeholder-white/30 focus:border-cyan-500/50 focus:outline-none"
                         />
                         <input
                           type="text"
                           value={item.value}
-                          onChange={(e) => handleUpdateEnvVar(idx, 'value', e.target.value)}
+                          onChange={(e) => handleUpdateKeyValue(idx, 'value', e.target.value)}
                           placeholder="value"
                           className="flex-[2] min-w-0 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1.5 text-xs text-white placeholder-white/30 focus:border-cyan-500/50 focus:outline-none"
                         />
                         <button
-                          onClick={() => handleRemoveEnvVar(idx)}
+                          onClick={() => handleRemoveKeyValue(idx)}
                           className="flex h-7 w-7 items-center justify-center rounded-lg text-white/40 hover:bg-red-500/10 hover:text-red-400 transition-colors"
                         >
                           <X className="h-3 w-3" />
@@ -542,7 +636,7 @@ function RuntimeMcpDetailPanel({
                     onChange={(e) => setNewKey(e.target.value)}
                     placeholder="NEW_KEY"
                     className="flex-1 min-w-0 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1.5 text-xs text-white placeholder-white/30 focus:border-cyan-500/50 focus:outline-none"
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddEnvVar()}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddKeyValue()}
                   />
                   <input
                     type="text"
@@ -550,10 +644,10 @@ function RuntimeMcpDetailPanel({
                     onChange={(e) => setNewValue(e.target.value)}
                     placeholder="value"
                     className="flex-[2] min-w-0 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1.5 text-xs text-white placeholder-white/30 focus:border-cyan-500/50 focus:outline-none"
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddEnvVar()}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddKeyValue()}
                   />
                   <button
-                    onClick={handleAddEnvVar}
+                    onClick={handleAddKeyValue}
                     disabled={!newKey.trim()}
                     className="flex h-7 w-7 items-center justify-center rounded-lg bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 transition-colors disabled:opacity-50"
                   >
@@ -564,16 +658,81 @@ function RuntimeMcpDetailPanel({
             </>
           )}
 
-          {!isStdio && (
-            <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-4">
-              <p className="text-xs text-white/40 mb-2">Endpoint</p>
-              <div className="flex items-center gap-2 group">
-                <p className="text-sm text-white break-all">
-                  {mcp.endpoint || 'HTTP transport'}
-                </p>
-                {mcp.endpoint && <CopyButton text={mcp.endpoint} showOnHover label="Copied endpoint" />}
+          {isHttp && httpConfig && (
+            <>
+              <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-4">
+                <p className="text-xs text-white/40 mb-2">Endpoint</p>
+                <div className="flex items-center gap-2 group">
+                  <p className="text-sm text-white break-all">
+                    {httpConfig.endpoint || 'HTTP transport'}
+                  </p>
+                  {httpConfig.endpoint && <CopyButton text={httpConfig.endpoint} showOnHover label="Copied endpoint" />}
+                </div>
               </div>
-            </div>
+
+              <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs text-white/40">Headers</p>
+                </div>
+
+                {keyValuePairs.length === 0 ? (
+                  <p className="text-sm text-white/40 mb-3">No headers configured</p>
+                ) : (
+                  <div className="space-y-2 mb-3">
+                    {keyValuePairs.map((item, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={item.key}
+                          onChange={(e) => handleUpdateKeyValue(idx, 'key', e.target.value)}
+                          placeholder="Header-Name"
+                          className="flex-1 min-w-0 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1.5 text-xs text-white placeholder-white/30 focus:border-cyan-500/50 focus:outline-none"
+                        />
+                        <input
+                          type="text"
+                          value={item.value}
+                          onChange={(e) => handleUpdateKeyValue(idx, 'value', e.target.value)}
+                          placeholder="value"
+                          className="flex-[2] min-w-0 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1.5 text-xs text-white placeholder-white/30 focus:border-cyan-500/50 focus:outline-none"
+                        />
+                        <button
+                          onClick={() => handleRemoveKeyValue(idx)}
+                          className="flex h-7 w-7 items-center justify-center rounded-lg text-white/40 hover:bg-red-500/10 hover:text-red-400 transition-colors"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2 pt-2 border-t border-white/[0.04]">
+                  <input
+                    type="text"
+                    value={newKey}
+                    onChange={(e) => setNewKey(e.target.value)}
+                    placeholder="Authorization"
+                    className="flex-1 min-w-0 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1.5 text-xs text-white placeholder-white/30 focus:border-cyan-500/50 focus:outline-none"
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddKeyValue()}
+                  />
+                  <input
+                    type="text"
+                    value={newValue}
+                    onChange={(e) => setNewValue(e.target.value)}
+                    placeholder="Bearer ..."
+                    className="flex-[2] min-w-0 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1.5 text-xs text-white placeholder-white/30 focus:border-cyan-500/50 focus:outline-none"
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddKeyValue()}
+                  />
+                  <button
+                    onClick={handleAddKeyValue}
+                    disabled={!newKey.trim()}
+                    className="flex h-7 w-7 items-center justify-center rounded-lg bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 transition-colors disabled:opacity-50"
+                  >
+                    <Plus className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+            </>
           )}
 
           <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-4">
@@ -600,7 +759,7 @@ function RuntimeMcpDetailPanel({
         </div>
 
         <div className="border-t border-white/[0.06] p-4 flex items-center gap-2">
-          {isStdio && (
+          {(isStdio || isHttp) && (
             <button
               onClick={handleSave}
               disabled={saving}
@@ -981,14 +1140,12 @@ export default function McpsPage() {
     status,
     mcps,
     loading,
-    error,
     libraryUnavailable,
     libraryUnavailableMessage,
     refresh,
     sync,
     commit,
     push,
-    clearError,
     saveMcps,
     syncing,
     committing,
@@ -1009,7 +1166,7 @@ export default function McpsPage() {
   const [runtimeLoading, setRuntimeLoading] = useState(true);
   const [selectedRuntimeMcp, setSelectedRuntimeMcp] = useState<McpServerState | null>(null);
 
-  // Fetch runtime MCPs
+  // Fetch runtime MCPs with polling for status updates
   useEffect(() => {
     const fetchRuntimeMcps = async () => {
       try {
@@ -1022,6 +1179,24 @@ export default function McpsPage() {
       }
     };
     fetchRuntimeMcps();
+
+    // Poll every 5 seconds for status updates
+    const interval = setInterval(async () => {
+      try {
+        const mcps = await listMcps();
+        setRuntimeMcps(mcps);
+        // Update selected MCP if it changed
+        setSelectedRuntimeMcp((prev) => {
+          if (!prev) return null;
+          const updated = mcps.find((m) => m.id === prev.id);
+          return updated ?? null;
+        });
+      } catch (err) {
+        console.error('Failed to poll runtime MCPs:', err);
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
   }, []);
 
   const handleToggleRuntimeMcp = async (id: string, enabled: boolean) => {
@@ -1046,8 +1221,8 @@ export default function McpsPage() {
     }
   };
 
-  const handleUpdateRuntimeMcp = async (id: string, transport: McpTransport) => {
-    const updated = await updateMcp(id, { transport });
+  const handleUpdateRuntimeMcp = async (id: string, updates: UpdateMcpRequest) => {
+    const updated = await updateMcp(id, updates);
     setRuntimeMcps((prev) => prev.map((m) => (m.id === id ? updated : m)));
     setSelectedRuntimeMcp((prev) => (prev?.id === id ? updated : prev));
   };
@@ -1195,16 +1370,6 @@ export default function McpsPage() {
         <LibraryUnavailable message={libraryUnavailableMessage} onConfigured={refresh} />
       ) : (
         <>
-          {error && (
-            <div className="p-4 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 flex-shrink-0" />
-              {error}
-              <button onClick={clearError} className="ml-auto">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          )}
-
           {status && (
             <div className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.06]">
               <div className="flex items-center justify-between">

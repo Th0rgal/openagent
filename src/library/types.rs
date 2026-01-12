@@ -138,9 +138,6 @@ pub struct LibraryAgent {
     /// Permission levels: {"bash": "ask", "write": "allow"}
     #[serde(default)]
     pub permissions: HashMap<String, String>,
-    /// Skills to include by name
-    #[serde(default)]
-    pub skills: Vec<String>,
     /// Rules to include by name
     #[serde(default)]
     pub rules: Vec<String>,
@@ -174,6 +171,52 @@ pub struct LibraryTool {
     pub path: String,
     /// Full TypeScript content
     pub content: String,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Workspace Template Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Workspace template summary for listing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceTemplateSummary {
+    /// Template name
+    pub name: String,
+    /// Description from template file
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Path relative to library root (e.g., "workspace-template/basic-ubuntu.json")
+    pub path: String,
+    /// Preferred distro (if set)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distro: Option<String>,
+    /// Skills enabled for this template (optional summary)
+    #[serde(default)]
+    pub skills: Vec<String>,
+}
+
+/// Full workspace template definition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceTemplate {
+    /// Template name
+    pub name: String,
+    /// Optional description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Path relative to library root
+    pub path: String,
+    /// Preferred distro (if set)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distro: Option<String>,
+    /// Skills enabled for this workspace template
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// Environment variables for the workspace
+    #[serde(default)]
+    pub env_vars: HashMap<String, String>,
+    /// Init script to run on build
+    #[serde(default)]
+    pub init_script: String,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -288,6 +331,89 @@ pub struct MigrationReport {
     pub errors: Vec<String>,
     /// Whether migration was successful overall
     pub success: bool,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OpenAgent Config Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Desktop session lifecycle configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesktopConfig {
+    /// Grace period in seconds before auto-closing orphaned desktop sessions.
+    /// Orphaned sessions are those where the owning mission has completed.
+    /// Set to 0 to disable auto-close. Default: 7200 (2 hours).
+    #[serde(default = "default_auto_close_grace_period")]
+    pub auto_close_grace_period_secs: u64,
+
+    /// Interval in seconds for the background cleanup sweep.
+    /// Default: 900 (15 minutes).
+    #[serde(default = "default_cleanup_interval")]
+    pub cleanup_interval_secs: u64,
+
+    /// Number of seconds before auto-close to show a warning notification.
+    /// Set to 0 to disable warnings. Default: 300 (5 minutes).
+    #[serde(default = "default_warning_before_close")]
+    pub warning_before_close_secs: u64,
+}
+
+fn default_auto_close_grace_period() -> u64 {
+    7200 // 2 hours
+}
+
+fn default_cleanup_interval() -> u64 {
+    900 // 15 minutes
+}
+
+fn default_warning_before_close() -> u64 {
+    300 // 5 minutes
+}
+
+impl Default for DesktopConfig {
+    fn default() -> Self {
+        Self {
+            auto_close_grace_period_secs: default_auto_close_grace_period(),
+            cleanup_interval_secs: default_cleanup_interval(),
+            warning_before_close_secs: default_warning_before_close(),
+        }
+    }
+}
+
+/// OpenAgent configuration stored in the Library.
+/// Controls agent visibility and defaults in the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAgentConfig {
+    /// Agents to hide from the mission dialog selector.
+    /// These are typically internal/system agents that users shouldn't select directly.
+    #[serde(default)]
+    pub hidden_agents: Vec<String>,
+    /// Default agent to pre-select in the mission dialog.
+    #[serde(default)]
+    pub default_agent: Option<String>,
+    /// Desktop session lifecycle configuration.
+    #[serde(default)]
+    pub desktop: DesktopConfig,
+}
+
+impl Default for OpenAgentConfig {
+    fn default() -> Self {
+        Self {
+            hidden_agents: vec![
+                "build".to_string(),
+                "plan".to_string(),
+                "general".to_string(),
+                "explore".to_string(),
+                "compaction".to_string(),
+                "title".to_string(),
+                "summary".to_string(),
+                "Metis (Plan Consultant)".to_string(),
+                "Momus (Plan Reviewer)".to_string(),
+                "orchestrator-sisyphus".to_string(),
+            ],
+            default_agent: Some("Sisyphus".to_string()),
+            desktop: DesktopConfig::default(),
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

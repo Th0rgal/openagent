@@ -378,7 +378,10 @@ impl SecretsStore {
         }
 
         // Delete file
-        let path = self.base_dir.join("registries").join(format!("{}.json", registry_name));
+        let path = self
+            .base_dir
+            .join("registries")
+            .join(format!("{}.json", registry_name));
         if path.exists() {
             fs::remove_file(&path).await?;
         }
@@ -446,11 +449,7 @@ impl SecretsStore {
     }
 
     /// Import secrets from a JSON file.
-    pub async fn import_from_json(
-        &self,
-        registry_name: &str,
-        json_content: &str,
-    ) -> Result<usize> {
+    pub async fn import_from_json(&self, registry_name: &str, json_content: &str) -> Result<usize> {
         let secrets: HashMap<String, serde_json::Value> = serde_json::from_str(json_content)?;
 
         let mut count = 0;
@@ -466,7 +465,8 @@ impl SecretsStore {
                 anyhow::bail!("Invalid secret format for key: {}", key);
             };
 
-            self.set_secret(registry_name, &key, &secret_value, None).await?;
+            self.set_secret(registry_name, &key, &secret_value, None)
+                .await?;
             count += 1;
         }
 
@@ -516,7 +516,10 @@ mod tests {
         assert_eq!(secrets[0].key, "api-key");
 
         // Delete secret
-        store.delete_secret("test-registry", "api-key").await.unwrap();
+        store
+            .delete_secret("test-registry", "api-key")
+            .await
+            .unwrap();
         let secrets = store.list_secrets("test-registry").await.unwrap();
         assert_eq!(secrets.len(), 0);
     }
@@ -529,7 +532,10 @@ mod tests {
         // Initialize and set a secret with one passphrase
         store.initialize("default").await.unwrap();
         store.unlock("correct-passphrase").await.unwrap();
-        store.set_secret("test", "key", "value", None).await.unwrap();
+        store
+            .set_secret("test", "key", "value", None)
+            .await
+            .unwrap();
 
         // Lock and try to unlock with wrong passphrase
         store.lock().await;

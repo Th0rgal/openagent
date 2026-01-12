@@ -8,7 +8,11 @@ use uuid::Uuid;
 #[serde(rename_all = "snake_case")]
 pub enum McpTransport {
     /// HTTP JSON-RPC transport (server must be running and listening)
-    Http { endpoint: String },
+    Http {
+        endpoint: String,
+        #[serde(default)]
+        headers: std::collections::HashMap<String, String>,
+    },
     /// Stdio transport (spawn process, communicate via stdin/stdout)
     Stdio {
         command: String,
@@ -23,6 +27,7 @@ impl Default for McpTransport {
     fn default() -> Self {
         McpTransport::Http {
             endpoint: "http://127.0.0.1:3000".to_string(),
+            headers: std::collections::HashMap::new(),
         }
     }
 }
@@ -39,6 +44,20 @@ pub enum McpStatus {
     Error,
     /// Server is disabled by user
     Disabled,
+}
+
+/// Scope for MCP servers (global or workspace-scoped).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpScope {
+    Global,
+    Workspace,
+}
+
+impl Default for McpScope {
+    fn default() -> Self {
+        Self::Global
+    }
 }
 
 // ==================== JSON-RPC 2.0 Types ====================
@@ -155,9 +174,9 @@ pub struct McpServerConfig {
     pub name: String,
     /// Transport configuration (HTTP or stdio)
     pub transport: McpTransport,
-    /// Server endpoint URL (e.g., "http://127.0.0.1:4011") - DEPRECATED, use transport
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub endpoint: String,
+    /// Scope for this MCP (global or workspace-scoped)
+    #[serde(default)]
+    pub scope: McpScope,
     /// Optional description
     pub description: Option<String>,
     /// Whether this MCP is enabled
@@ -183,9 +202,10 @@ impl McpServerConfig {
             id: Uuid::new_v4(),
             name,
             transport: McpTransport::Http {
-                endpoint: endpoint.clone(),
+                endpoint,
+                headers: std::collections::HashMap::new(),
             },
-            endpoint, // Keep for backwards compat
+            scope: McpScope::Global,
             description: None,
             enabled: true,
             version: None,
@@ -207,7 +227,7 @@ impl McpServerConfig {
             id: Uuid::new_v4(),
             name,
             transport: McpTransport::Stdio { command, args, env },
-            endpoint: String::new(),
+            scope: McpScope::Global,
             description: None,
             enabled: true,
             version: None,
@@ -215,14 +235,6 @@ impl McpServerConfig {
             tool_descriptors: Vec::new(),
             created_at: chrono::Utc::now(),
             last_connected_at: None,
-        }
-    }
-
-    /// Get the effective endpoint (for backwards compat)
-    pub fn effective_endpoint(&self) -> Option<&str> {
-        match &self.transport {
-            McpTransport::Http { endpoint } => Some(endpoint.as_str()),
-            McpTransport::Stdio { .. } => None,
         }
     }
 }
@@ -279,38 +291,21 @@ pub struct McpTool {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AddMcpRequest {
     pub name: String,
-    /// HTTP endpoint (for backwards compat, use transport instead)
-    #[serde(default)]
-    pub endpoint: Option<String>,
-    /// Transport configuration (preferred)
-    #[serde(default)]
-    pub transport: Option<McpTransport>,
+    /// Transport configuration
+    pub transport: McpTransport,
     pub description: Option<String>,
-}
-
-impl AddMcpRequest {
-    /// Get the effective transport from the request
-    pub fn effective_transport(&self) -> McpTransport {
-        if let Some(transport) = &self.transport {
-            transport.clone()
-        } else if let Some(endpoint) = &self.endpoint {
-            McpTransport::Http {
-                endpoint: endpoint.clone(),
-            }
-        } else {
-            McpTransport::default()
-        }
-    }
+    #[serde(default)]
+    pub scope: Option<McpScope>,
 }
 
 /// Request to update an MCP server.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateMcpRequest {
     pub name: Option<String>,
-    pub endpoint: Option<String>,
     pub transport: Option<McpTransport>,
     pub description: Option<String>,
     pub enabled: Option<bool>,
+    pub scope: Option<McpScope>,
 }
 
 /// MCP tool list response from server.

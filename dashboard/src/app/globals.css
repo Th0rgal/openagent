@@ -73,6 +73,30 @@
   box-sizing: border-box;
 }
 
+/* =========================================================================
+   Pointer Cursor for Interactive Elements
+   ========================================================================= */
+button,
+[role="button"],
+[type="button"],
+[type="submit"],
+[type="reset"],
+select,
+summary,
+a[href],
+label[for],
+input[type="checkbox"],
+input[type="radio"],
+input[type="file"],
+input[type="range"] {
+  cursor: pointer;
+}
+
+button:disabled,
+[disabled] {
+  cursor: not-allowed;
+}
+
 body {
   background-color: rgb(var(--background));
   color: rgb(var(--foreground));
@@ -178,6 +202,59 @@ select:focus-visible {
   }
 }
 
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes scale-in-simple {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(16px) scale(0.96);
+  }
+}
+
 .animate-fade-in {
   animation: fade-in 150ms ease-out forwards;
 }
@@ -194,6 +271,22 @@ select:focus-visible {
   animation: pulse-subtle 2s ease-in-out infinite;
 }
 
+.animate-scale-in {
+  animation: scale-in 200ms ease-out forwards;
+}
+
+.animate-scale-in-simple {
+  animation: scale-in-simple 200ms ease-out forwards;
+}
+
+.animate-toast-in {
+  animation: toast-in 200ms ease-out forwards;
+}
+
+.animate-toast-out {
+  animation: toast-out 200ms ease-out forwards;
+}
+
 /* =========================================================================
    Glass Panels
    ========================================================================= */
@@ -206,13 +299,6 @@ select:focus-visible {
 .glass {
   background: rgb(var(--background-elevated) / 0.7);
   backdrop-filter: blur(20px) saturate(180%);
-}
-
-/* Legacy panel class - maps to glass-panel */
-.panel {
-  background: rgba(255, 255, 255, 0.03);
-  backdrop-filter: blur(20px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 /* =========================================================================
@@ -449,4 +535,139 @@ select:focus-visible {
   border: none;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   margin: 1rem 0;
+}
+
+.prose-glass table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  display: block;
+  overflow-x: auto;
+}
+
+.prose-glass th,
+.prose-glass td {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  text-align: left;
+  vertical-align: top;
+}
+
+.prose-glass th {
+  background: rgba(255, 255, 255, 0.06);
+  font-weight: 600;
+}
+
+/* =========================================================================
+   Prism Syntax Highlighting Theme (Dark)
+   ========================================================================= */
+.init-script-editor {
+  caret-color: white;
+}
+
+.init-script-editor textarea {
+  caret-color: white !important;
+}
+
+.init-script-editor textarea::placeholder {
+  color: rgba(255, 255, 255, 0.25);
+}
+
+.config-code-editor {
+  caret-color: white;
+}
+
+.config-code-editor textarea {
+  caret-color: white !important;
+}
+
+.config-code-editor textarea::placeholder {
+  color: rgba(255, 255, 255, 0.25);
+}
+
+/* Prism tokens */
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: #6a9955;
+}
+
+.token.punctuation {
+  color: #d4d4d4;
+}
+
+.token.property,
+.token.tag,
+.token.boolean,
+.token.number,
+.token.constant,
+.token.symbol,
+.token.deleted {
+  color: #b5cea8;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+  color: #ce9178;
+}
+
+.token.operator,
+.token.entity,
+.token.url,
+.language-css .token.string,
+.style .token.string {
+  color: #d4d4d4;
+}
+
+.token.atrule,
+.token.attr-value,
+.token.keyword {
+  color: #c586c0;
+}
+
+.token.function,
+.token.class-name {
+  color: #dcdcaa;
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+  color: #d16969;
+}
+
+.token.important,
+.token.bold {
+  font-weight: bold;
+}
+
+.token.italic {
+  font-style: italic;
+}
+
+.token.entity {
+  cursor: help;
+}
+
+/* Bash specific */
+.token.shebang {
+  color: #6a9955;
+}
+
+.token.shebang .token.important {
+  color: #6a9955;
+  font-weight: normal;
+}
+
+.token.assign-left {
+  color: #9cdcfe;
+}
+
+.token.environment {
+  color: #9cdcfe;
 }

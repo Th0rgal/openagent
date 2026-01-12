@@ -83,11 +83,25 @@ fn content_type_from_extension(extension: &str) -> &'static str {
 fn file_kind_from_content_type(content_type: &str) -> &'static str {
     if content_type.starts_with("image/") {
         "image"
-    } else if content_type.starts_with("text/") || content_type.contains("json") || content_type.contains("xml") {
+    } else if content_type.starts_with("text/")
+        || content_type.contains("json")
+        || content_type.contains("xml")
+    {
         "code"
-    } else if content_type.contains("pdf") || content_type.contains("document") || content_type.contains("word") || content_type.contains("sheet") || content_type.contains("presentation") {
+    } else if content_type.contains("pdf")
+        || content_type.contains("document")
+        || content_type.contains("word")
+        || content_type.contains("sheet")
+        || content_type.contains("presentation")
+    {
         "document"
-    } else if content_type.contains("zip") || content_type.contains("tar") || content_type.contains("gzip") || content_type.contains("compress") || content_type.contains("rar") || content_type.contains("7z") {
+    } else if content_type.contains("zip")
+        || content_type.contains("tar")
+        || content_type.contains("gzip")
+        || content_type.contains("compress")
+        || content_type.contains("rar")
+        || content_type.contains("7z")
+    {
         "archive"
     } else {
         "other"
@@ -119,8 +133,7 @@ impl Tool for ShareFile {
         Returns structured metadata that the dashboard uses to render the file appropriately.\n\n\
         Example:\n\
         1. share_file{path: \"/path/to/screenshot.png\", title: \"Screenshot\"}\n\
-        2. The dashboard will automatically display the image inline\n\n\
-        For backwards compatibility, the response also includes 'markdown' for images."
+        2. The dashboard will automatically display the image inline"
     }
 
     fn parameters_schema(&self) -> Value {
@@ -196,7 +209,11 @@ impl Tool for ShareFile {
         let upload_path = format!("{}.{}", file_id, extension);
 
         // Determine bucket based on file kind
-        let bucket = if file_kind == "image" { "images" } else { "files" };
+        let bucket = if file_kind == "image" {
+            "images"
+        } else {
+            "files"
+        };
 
         tracing::info!(
             local_path = %file_path.display(),
@@ -246,7 +263,7 @@ impl Tool for ShareFile {
         );
 
         // Build response with structured metadata
-        let mut response = json!({
+        let response = json!({
             "success": true,
             "url": public_url,
             "name": title,
@@ -256,66 +273,7 @@ impl Tool for ShareFile {
             "path": upload_path,
         });
 
-        // Add markdown for backwards compatibility with images
-        if file_kind == "image" {
-            response["markdown"] = json!(format!("![{}]({})", title, public_url));
-        }
-
         Ok(response.to_string())
-    }
-}
-
-/// Legacy alias for share_file - uploads images to cloud storage.
-/// Kept for backwards compatibility.
-pub struct UploadImage;
-
-#[async_trait]
-impl Tool for UploadImage {
-    fn name(&self) -> &str {
-        "upload_image"
-    }
-
-    fn description(&self) -> &str {
-        "Upload an image file to cloud storage and get a public URL.\n\n\
-        DEPRECATED: Use 'share_file' instead, which supports all file types.\n\n\
-        CRITICAL: After uploading, you MUST include the returned markdown in your response!\n\n\
-        The tool returns: {\"markdown\": \"![description](url)\", ...}\n\n\
-        You MUST:\n\
-        1. Copy the EXACT 'markdown' value from the result\n\
-        2. Include it in your message text (not just in complete_mission summary)\n\
-        3. Do this BEFORE calling complete_mission\n\n\
-        Example workflow:\n\
-        1. browser_screenshot → saves to /path/screenshot.png\n\
-        2. upload_image{path: \"/path/screenshot.png\"} → returns {\"markdown\": \"![image](https://...)\"}\n\
-        3. Include \"Here is the screenshot: ![image](https://...)\" in your response\n\n\
-        If you don't include the markdown, the user will NOT see the image!\n\n\
-        Supports: PNG, JPEG, GIF, WebP, SVG"
-    }
-
-    fn parameters_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the local image file to upload (e.g., 'screenshots/screenshot_20240101_120000.png')"
-                },
-                "description": {
-                    "type": "string",
-                    "description": "Optional description for the image (used in alt text)"
-                }
-            },
-            "required": ["path"]
-        })
-    }
-
-    async fn execute(&self, args: Value, working_dir: &Path) -> anyhow::Result<String> {
-        // Delegate to ShareFile with mapped parameters
-        let share_args = json!({
-            "path": args["path"],
-            "title": args["description"].as_str().unwrap_or("image"),
-        });
-        ShareFile.execute(share_args, working_dir).await
     }
 }
 
@@ -329,7 +287,10 @@ mod tests {
         assert_eq!(content_type_from_extension("PDF"), "application/pdf");
         assert_eq!(content_type_from_extension("zip"), "application/zip");
         assert_eq!(content_type_from_extension("rs"), "text/x-rust");
-        assert_eq!(content_type_from_extension("unknown"), "application/octet-stream");
+        assert_eq!(
+            content_type_from_extension("unknown"),
+            "application/octet-stream"
+        );
     }
 
     #[test]
@@ -338,12 +299,14 @@ mod tests {
         assert_eq!(file_kind_from_content_type("application/pdf"), "document");
         assert_eq!(file_kind_from_content_type("application/zip"), "archive");
         assert_eq!(file_kind_from_content_type("text/x-rust"), "code");
-        assert_eq!(file_kind_from_content_type("application/octet-stream"), "other");
+        assert_eq!(
+            file_kind_from_content_type("application/octet-stream"),
+            "other"
+        );
     }
 
     #[test]
     fn test_tool_names() {
         assert_eq!(ShareFile.name(), "share_file");
-        assert_eq!(UploadImage.name(), "upload_image");
     }
 }

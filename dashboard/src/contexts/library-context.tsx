@@ -9,6 +9,7 @@ import {
   useMemo,
   type ReactNode,
 } from 'react';
+import { useToast } from '@/components/toast';
 import {
   getLibraryStatus,
   getLibraryMcps,
@@ -64,7 +65,6 @@ interface LibraryContextValue {
   libraryAgents: LibraryAgentSummary[];
   libraryTools: LibraryToolSummary[];
   loading: boolean;
-  error: string | null;
   libraryUnavailable: boolean;
   libraryUnavailableMessage: string | null;
 
@@ -74,7 +74,6 @@ interface LibraryContextValue {
   sync: () => Promise<void>;
   commit: (message: string) => Promise<void>;
   push: () => Promise<void>;
-  clearError: () => void;
 
   // MCP operations
   saveMcps: (mcps: Record<string, McpServerDef>) => Promise<void>;
@@ -130,6 +129,7 @@ interface LibraryProviderProps {
 }
 
 export function LibraryProvider({ children }: LibraryProviderProps) {
+  const { showError } = useToast();
   const [status, setStatus] = useState<LibraryStatus | null>(null);
   const [mcps, setMcps] = useState<Record<string, McpServerDef>>({});
   const [skills, setSkills] = useState<SkillSummary[]>([]);
@@ -139,7 +139,6 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
   const [libraryAgents, setLibraryAgents] = useState<LibraryAgentSummary[]>([]);
   const [libraryTools, setLibraryTools] = useState<LibraryToolSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [libraryUnavailable, setLibraryUnavailable] = useState(false);
   const [libraryUnavailableMessage, setLibraryUnavailableMessage] = useState<string | null>(null);
 
@@ -150,7 +149,6 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
   const refresh = useCallback(async () => {
     try {
       setLoading(true);
-      setError(null);
       setLibraryUnavailable(false);
       setLibraryUnavailableMessage(null);
 
@@ -187,11 +185,11 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
         setLibraryTools([]);
         return;
       }
-      setError(err instanceof Error ? err.message : 'Failed to load library data');
+      showError(err instanceof Error ? err.message : 'Failed to load library data');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showError]);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -214,12 +212,12 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       await syncLibrary();
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to sync');
+      showError(err instanceof Error ? err.message : 'Failed to sync');
       throw err;
     } finally {
       setSyncing(false);
     }
-  }, [refresh]);
+  }, [refresh, showError]);
 
   const commit = useCallback(async (message: string) => {
     try {
@@ -227,12 +225,12 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       await commitLibrary(message);
       await refreshStatus();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to commit');
+      showError(err instanceof Error ? err.message : 'Failed to commit');
       throw err;
     } finally {
       setCommitting(false);
     }
-  }, [refreshStatus]);
+  }, [refreshStatus, showError]);
 
   const push = useCallback(async () => {
     try {
@@ -240,12 +238,12 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       await pushLibrary();
       await refreshStatus();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to push');
+      showError(err instanceof Error ? err.message : 'Failed to push');
       throw err;
     } finally {
       setPushing(false);
     }
-  }, [refreshStatus]);
+  }, [refreshStatus, showError]);
 
   const saveMcps = useCallback(async (newMcps: Record<string, McpServerDef>) => {
     await saveLibraryMcps(newMcps);
@@ -340,7 +338,6 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       model: null,
       tools: {},
       permissions: {},
-      skills: [],
       rules: [],
     };
     await apiSaveLibraryAgent(name, agent);
@@ -391,10 +388,6 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
     }
   }, []);
 
-  const clearError = useCallback(() => {
-    setError(null);
-  }, []);
-
   const value = useMemo<LibraryContextValue>(
     () => ({
       status,
@@ -406,7 +399,6 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       libraryAgents,
       libraryTools,
       loading,
-      error,
       libraryUnavailable,
       libraryUnavailableMessage,
       refresh,
@@ -414,7 +406,6 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       sync,
       commit,
       push,
-      clearError,
       saveMcps,
       saveSkill,
       removeSkill,
@@ -448,7 +439,6 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       libraryAgents,
       libraryTools,
       loading,
-      error,
       libraryUnavailable,
       libraryUnavailableMessage,
       refresh,
@@ -456,7 +446,6 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       sync,
       commit,
       push,
-      clearError,
       saveMcps,
       saveSkill,
       removeSkill,
