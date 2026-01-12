@@ -714,15 +714,16 @@ async fn write_opencode_config(
     // workspaces, allow MCP-hosted browser/desktop tools. For host workspaces,
     // keep browser/desktop tools disabled by default.
     let mut tools = serde_json::Map::new();
-    tools.insert("bash".to_string(), json!(false));
     match workspace_type {
         WorkspaceType::Chroot => {
+            tools.insert("bash".to_string(), json!(true));
             tools.insert("desktop_*".to_string(), json!(true));
             tools.insert("playwright_*".to_string(), json!(true));
             tools.insert("browser_*".to_string(), json!(true));
             tools.insert("host_*".to_string(), json!(true));
         }
         WorkspaceType::Host => {
+            tools.insert("bash".to_string(), json!(false));
             tools.insert("desktop_*".to_string(), json!(false));
             tools.insert("playwright_*".to_string(), json!(false));
             tools.insert("browser_*".to_string(), json!(false));

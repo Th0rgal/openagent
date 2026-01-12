@@ -2275,8 +2275,8 @@ async fn control_actor_loop(
                                 runner.history.push((entry.role.clone(), entry.content.clone()));
                             }
 
-                            // Queue the initial message
-                            runner.queue_message(Uuid::new_v4(), content);
+                            // Queue the initial message (no per-message agent override for parallel start)
+                            runner.queue_message(Uuid::new_v4(), content, None);
 
                             // Start execution
                             let started = runner.start_next(

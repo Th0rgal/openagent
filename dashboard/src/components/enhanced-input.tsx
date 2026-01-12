@@ -50,6 +50,9 @@ export function EnhancedInput({
   const [autocompleteType, setAutocompleteType] = useState<'command' | 'agent' | null>(null);
   const [triggerPosition, setTriggerPosition] = useState(0);
 
+  // Track locked agent badge separately for cleaner UX
+  const [lockedAgent, setLockedAgent] = useState<string | null>(null);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const autocompleteRef = useRef<HTMLDivElement>(null);
 
@@ -57,7 +60,6 @@ export function EnhancedInput({
   useEffect(() => {
     async function loadData() {
       try {
-        // Load library commands
         const libraryCommands = await listLibraryCommands();
         setCommands([...BUILTIN_COMMANDS, ...libraryCommands]);
       } catch {
@@ -65,7 +67,6 @@ export function EnhancedInput({
       }
 
       try {
-        // Load agents
         const agentsData = await getVisibleAgents();
         const agentNames = parseAgentNames(agentsData);
         setAgents(agentNames);
@@ -99,6 +100,33 @@ export function EnhancedInput({
     return Array.from(new Set(names));
   };
 
+  // Check if an agent name is valid
+  const isValidAgent = useCallback((name: string) => {
+    return agents.some(a => a.toLowerCase() === name.toLowerCase());
+  }, [agents]);
+
+  // Parse the current value for agent mention (when not using locked badge)
+  const parsedAgentFromValue = useMemo(() => {
+    if (lockedAgent) return null; // Badge is locked, don't parse from value
+    const match = value.match(/^@([\w-]+)(\s|$)/);
+    if (match) {
+      return {
+        name: match[1],
+        isValid: isValidAgent(match[1]),
+        hasSpace: match[2] === ' ',
+      };
+    }
+    return null;
+  }, [value, lockedAgent, isValidAgent]);
+
+  // The actual content to show in textarea (excludes locked agent prefix)
+  const displayValue = useMemo(() => {
+    if (lockedAgent) {
+      return value; // Value is already without the @agent prefix
+    }
+    return value;
+  }, [value, lockedAgent]);
+
   // Auto-resize textarea
   const adjustTextareaHeight = useCallback(() => {
     const textarea = textareaRef.current;
@@ -114,7 +142,7 @@ export function EnhancedInput({
 
   useEffect(() => {
     adjustTextareaHeight();
-  }, [value, adjustTextareaHeight]);
+  }, [displayValue, adjustTextareaHeight]);
 
   // Detect triggers (/ or @) and update autocomplete
   useEffect(() => {
@@ -122,7 +150,7 @@ export function EnhancedInput({
     if (!textarea) return;
 
     const cursorPos = textarea.selectionStart;
-    const textBeforeCursor = value.substring(0, cursorPos);
+    const textBeforeCursor = displayValue.substring(0, cursorPos);
 
     // Check for / command trigger at start of line or after whitespace
     const commandMatch = textBeforeCursor.match(/(?:^|\s)(\/[\w-]*)$/);
@@ -144,28 +172,30 @@ export function EnhancedInput({
       return;
     }
 
-    // Check for @ agent trigger at start of message
-    const agentMatch = textBeforeCursor.match(/^@([\w-]*)$/);
-    if (agentMatch) {
-      const searchTerm = agentMatch[1].toLowerCase();
-      const filtered = agents.filter(agent =>
-        agent.toLowerCase().includes(searchTerm)
-      );
-      setAutocompleteItems(filtered.map(agent => ({
-        type: 'agent',
-        name: agent,
-        description: getAgentDescription(agent),
-      })));
-      setAutocompleteType('agent');
-      setTriggerPosition(0);
-      setShowAutocomplete(filtered.length > 0);
-      setSelectedIndex(0);
-      return;
+    // Check for @ agent trigger - only at start and only if no locked agent
+    if (!lockedAgent) {
+      const agentMatch = textBeforeCursor.match(/^@([\w-]*)$/);
+      if (agentMatch) {
+        const searchTerm = agentMatch[1].toLowerCase();
+        const filtered = agents.filter(agent =>
+          agent.toLowerCase().includes(searchTerm)
+        );
+        setAutocompleteItems(filtered.map(agent => ({
+          type: 'agent',
+          name: agent,
+          description: getAgentDescription(agent),
+        })));
+        setAutocompleteType('agent');
+        setTriggerPosition(0);
+        setShowAutocomplete(filtered.length > 0);
+        setSelectedIndex(0);
+        return;
+      }
     }
 
     setShowAutocomplete(false);
     setAutocompleteType(null);
-  }, [value, commands, agents]);
+  }, [displayValue, commands, agents, lockedAgent]);
 
   const getAgentDescription = (name: string): string => {
     const descriptions: Record<string, string> = {
@@ -182,6 +212,14 @@ export function EnhancedInput({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Handle backspace on locked agent badge
+    if (e.key === 'Backspace' && lockedAgent && displayValue === '') {
+      e.preventDefault();
+      setLockedAgent(null);
+      onChange(`@${lockedAgent}`); // Put back the @agent text for editing
+      return;
+    }
+
     if (showAutocomplete) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -220,99 +258,129 @@ export function EnhancedInput({
 
   const selectItem = (item: AutocompleteItem) => {
     if (item.type === 'command') {
-      // Replace the /partial with /command
-      const before = value.substring(0, triggerPosition);
-      const after = value.substring(textareaRef.current?.selectionStart || value.length);
+      const before = displayValue.substring(0, triggerPosition);
+      const after = displayValue.substring(textareaRef.current?.selectionStart || displayValue.length);
       const newValue = `${before}/${item.name} ${after}`.trim();
       onChange(newValue);
     } else if (item.type === 'agent') {
-      // Replace @partial with @Agent badge, add space
-      const newValue = `@${item.name} `;
-      onChange(newValue);
+      // Lock the agent as a badge and clear the text
+      setLockedAgent(item.name);
+      onChange(''); // Clear the @partial text, agent is now in badge
     }
     setShowAutocomplete(false);
     textareaRef.current?.focus();
   };
 
   const handleSubmit = () => {
-    if (!value.trim() || disabled) return;
+    const trimmedValue = displayValue.trim();
+    if (!trimmedValue && !lockedAgent) return;
+    if (disabled) return;
 
-    // Parse @agent mention from the beginning of the message
-    const agentMatch = value.match(/^@([\w-]+)\s*/);
-    if (agentMatch) {
-      const agent = agentMatch[1];
-      const content = value.substring(agentMatch[0].length).trim();
-      // If there's actual content after the mention, send with agent
-      // If only the mention, send just the mention as content (edge case)
+    if (lockedAgent) {
+      // Locked agent badge mode
+      if (trimmedValue) {
+        onSubmit({ content: trimmedValue, agent: lockedAgent });
+      } else {
+        // Just @agent with no content - send as-is
+        onSubmit({ content: `@${lockedAgent}` });
+      }
+    } else if (parsedAgentFromValue) {
+      // Agent typed but not locked (user typed @agent and space)
+      const content = value.substring(parsedAgentFromValue.name.length + 1).trim();
       if (content) {
-        onSubmit({ content, agent });
+        onSubmit({ content, agent: parsedAgentFromValue.name });
       } else {
         onSubmit({ content: value });
       }
     } else {
       onSubmit({ content: value });
     }
+
+    // Clear state after submit
+    setLockedAgent(null);
+    onChange('');
   };
 
-  // Render the value with @Agent badges
-  const renderValue = useMemo(() => {
-    const agentMatch = value.match(/^(@[\w-]+)(\s.*)?$/s);
-    if (agentMatch) {
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newValue = e.target.value;
+
+    // If user types space after @agent pattern, lock it as badge
+    if (!lockedAgent) {
+      const match = newValue.match(/^@([\w-]+)\s$/);
+      if (match) {
+        const agentName = match[1];
+        setLockedAgent(agentName);
+        onChange(''); // Agent is now in badge, clear text
+        return;
+      }
+    }
+
+    onChange(newValue);
+  };
+
+  const removeBadge = () => {
+    if (lockedAgent) {
+      onChange(`@${lockedAgent}${displayValue}`);
+      setLockedAgent(null);
+      textareaRef.current?.focus();
+    }
+  };
+
+  // Determine badge state for display - only show when locked
+  const badgeState = useMemo(() => {
+    if (lockedAgent) {
       return {
-        hasBadge: true,
-        badge: agentMatch[1],
-        rest: agentMatch[2] || '',
+        show: true,
+        text: `@${lockedAgent}`,
+        isValid: isValidAgent(lockedAgent),
       };
     }
-    return { hasBadge: false, badge: '', rest: value };
-  }, [value]);
+    return { show: false, text: '', isValid: false };
+  }, [lockedAgent, isValidAgent]);
 
   return (
     <div className="relative flex-1">
-      {/* Overlay for badge rendering */}
-      {renderValue.hasBadge && (
-        <div
-          className="absolute left-4 top-3 pointer-events-none z-10 flex items-center gap-1"
-          aria-hidden="true"
-        >
-          <span className="inline-flex items-center rounded bg-pink-500/30 text-pink-300 px-1.5 py-0.5 text-sm font-medium border border-pink-500/30">
-            {renderValue.badge}
-          </span>
-        </div>
-      )}
-
-      <textarea
-        ref={textareaRef}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder}
-        disabled={disabled}
-        rows={1}
+      <div
         className={cn(
-          "w-full rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 text-sm text-white placeholder-white/30 focus:border-indigo-500/50 focus:outline-none transition-[border-color,height] duration-150 ease-out resize-none overflow-y-auto leading-5",
-          renderValue.hasBadge && "text-transparent caret-white",
+          "flex items-start gap-2 w-full rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 transition-[border-color] duration-150 ease-out focus-within:border-indigo-500/50",
           className
         )}
-        style={{
-          minHeight: "46px",
-          // Make text transparent where badge is, but keep caret visible
-          ...(renderValue.hasBadge ? {
-            background: 'linear-gradient(to right, transparent 0px, transparent ' + (renderValue.badge.length * 8 + 30) + 'px, transparent ' + (renderValue.badge.length * 8 + 30) + 'px)',
-          } : {}),
-        }}
-      />
+        style={{ minHeight: "46px" }}
+      >
+        {/* Badge (locked agent) */}
+        {badgeState.show && (
+          <button
+            type="button"
+            onClick={removeBadge}
+            className={cn(
+              "inline-flex items-center rounded px-1.5 py-0.5 text-sm font-medium border shrink-0 transition-colors cursor-pointer",
+              badgeState.isValid
+                ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/30"
+                : "bg-orange-500/20 text-orange-300 border-orange-500/30 hover:bg-orange-500/30"
+            )}
+            title="Click to remove"
+          >
+            {badgeState.text}
+            <span className="ml-1 opacity-60">×</span>
+          </button>
+        )}
 
-      {/* Text overlay for non-badge part when badge is present */}
-      {renderValue.hasBadge && (
-        <div
-          className="absolute left-4 top-3 pointer-events-none z-10 flex items-center text-sm text-white"
-          style={{ paddingLeft: `${renderValue.badge.length * 8 + 12}px` }}
-          aria-hidden="true"
-        >
-          {renderValue.rest}
-        </div>
-      )}
+        {/* Textarea - shows full value when no locked badge, or just the rest when locked */}
+        <textarea
+          ref={textareaRef}
+          value={lockedAgent ? displayValue : value}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          placeholder={lockedAgent ? "Type your message..." : placeholder}
+          disabled={disabled}
+          rows={1}
+          className="flex-1 bg-transparent text-sm text-white placeholder-white/30 focus:outline-none resize-none overflow-y-auto leading-5"
+          style={{
+            minHeight: "20px",
+            maxHeight: "200px",
+          }}
+        />
+      </div>
 
       {/* Autocomplete dropdown */}
       {showAutocomplete && autocompleteItems.length > 0 && (

@@ -1108,16 +1108,62 @@ fn filter_agents_by_config(
     agents: serde_json::Value,
     config: &OpenAgentConfig,
 ) -> serde_json::Value {
-    // OpenCode returns agents as an object with agent names as keys
+    /// Extract agent name from an array entry (can be string or object with name/id)
+    fn get_agent_name(entry: &serde_json::Value) -> Option<&str> {
+        if let Some(s) = entry.as_str() {
+            return Some(s);
+        }
+        if let Some(obj) = entry.as_object() {
+            if let Some(name) = obj.get("name").and_then(|v| v.as_str()) {
+                return Some(name);
+            }
+            if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
+                return Some(id);
+            }
+        }
+        None
+    }
+
+    /// Filter an array of agents
+    fn filter_array(arr: &[serde_json::Value], hidden: &[String]) -> Vec<serde_json::Value> {
+        arr.iter()
+            .filter(|entry| {
+                get_agent_name(entry)
+                    .map(|name| !hidden.contains(&name.to_string()))
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect()
+    }
+
+    // Handle different response formats from OpenCode:
+    // 1. Object with "agents" array: {agents: [{name: "..."}, ...]}
+    // 2. Direct array: [{name: "..."}, ...]
+    // 3. Object with agent names as keys: {"AgentName": {...}, ...}
+
     if let Some(agents_obj) = agents.as_object() {
+        // Check if it has an "agents" array property
+        if let Some(agents_arr) = agents_obj.get("agents").and_then(|v| v.as_array()) {
+            // Format: {agents: [...]}
+            let filtered = filter_array(agents_arr, &config.hidden_agents);
+            let mut result = agents_obj.clone();
+            result.insert("agents".to_string(), serde_json::Value::Array(filtered));
+            return serde_json::Value::Object(result);
+        }
+
+        // Format: object with agent names as keys
         let filtered: serde_json::Map<String, serde_json::Value> = agents_obj
             .iter()
             .filter(|(name, _)| !config.hidden_agents.contains(name))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         serde_json::Value::Object(filtered)
+    } else if let Some(agents_arr) = agents.as_array() {
+        // Format: direct array
+        let filtered = filter_array(agents_arr, &config.hidden_agents);
+        serde_json::Value::Array(filtered)
     } else {
-        // If it's an array or other format, return as-is
+        // Unknown format, return as-is
         agents
     }
 }

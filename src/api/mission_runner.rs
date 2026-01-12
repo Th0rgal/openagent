@@ -191,8 +191,8 @@ impl MissionRunner {
     }
 
     /// Queue a message for this mission.
-    pub fn queue_message(&mut self, id: Uuid, content: String) {
-        self.queue.push_back(QueuedMessage { id, content });
+    pub fn queue_message(&mut self, id: Uuid, content: String, agent: Option<String>) {
+        self.queue.push_back(QueuedMessage { id, content, agent });
     }
 
     /// Cancel the current execution.
