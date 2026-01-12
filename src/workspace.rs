@@ -566,6 +566,9 @@ fn opencode_entry_from_mcp(
             merged_env
                 .entry("OPEN_AGENT_WORKSPACE_TYPE".to_string())
                 .or_insert_with(|| workspace_type.as_str().to_string());
+            merged_env
+                .entry("WORKING_DIR".to_string())
+                .or_insert_with(|| workspace_dir.to_string_lossy().to_string());
             if workspace_type == WorkspaceType::Chroot {
                 if let Some(name) = workspace_root.file_name().and_then(|n| n.to_str()) {
                     if !name.trim().is_empty() {
@@ -599,6 +602,7 @@ fn opencode_entry_from_mcp(
                 let mut nspawn_env = merged_env.clone();
                 nspawn_env.insert("OPEN_AGENT_WORKSPACE".to_string(), rel_str.clone());
                 nspawn_env.insert("OPEN_AGENT_WORKSPACE_ROOT".to_string(), "/".to_string());
+                nspawn_env.insert("WORKING_DIR".to_string(), rel_str.clone());
 
                 let mut cmd = vec![
                     resolve_command_path("systemd-nspawn"),
