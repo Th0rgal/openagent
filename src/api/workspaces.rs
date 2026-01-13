@@ -32,6 +32,7 @@ pub fn routes() -> Router<Arc<super::routes::AppState>> {
         .route("/:id", delete(delete_workspace))
         .route("/:id/build", post(build_workspace))
         .route("/:id/sync", post(sync_workspace))
+        .route("/:id/exec", post(exec_workspace_command))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -738,6 +739,218 @@ async fn build_workspace(
     });
 
     Ok(Json(workspace.into()))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Command Execution
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct ExecCommandRequest {
+    /// The shell command to execute
+    pub command: String,
+    /// Optional working directory (relative to workspace or absolute within workspace)
+    pub cwd: Option<String>,
+    /// Timeout in seconds (default: 300, max: 600)
+    pub timeout_secs: Option<u64>,
+    /// Environment variables to set for the command
+    pub env: Option<HashMap<String, String>>,
+    /// Optional input to pass to stdin
+    pub stdin: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExecCommandResponse {
+    /// Exit code of the command
+    pub exit_code: i32,
+    /// Standard output
+    pub stdout: String,
+    /// Standard error
+    pub stderr: String,
+    /// Whether the command timed out
+    pub timed_out: bool,
+}
+
+/// POST /api/workspaces/:id/exec - Execute a command in a workspace.
+async fn exec_workspace_command(
+    State(state): State<Arc<super::routes::AppState>>,
+    AxumPath(id): AxumPath<Uuid>,
+    Json(req): Json<ExecCommandRequest>,
+) -> Result<Json<ExecCommandResponse>, (StatusCode, String)> {
+    use std::process::Stdio;
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
+    use tokio::process::Command;
+
+    let workspace = state
+        .workspaces
+        .get(id)
+        .await
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Workspace {} not found", id)))?;
+
+    // For container workspaces, ensure container is ready
+    if workspace.workspace_type == WorkspaceType::Chroot {
+        if workspace.status != WorkspaceStatus::Ready {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Container workspace is not ready (status: {:?}). Build it first.",
+                    workspace.status
+                ),
+            ));
+        }
+    }
+
+    let timeout = Duration::from_secs(req.timeout_secs.unwrap_or(300).min(600));
+
+    // Determine working directory
+    let cwd = match &req.cwd {
+        Some(path) => {
+            let path = Path::new(path);
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                workspace.path.join(path)
+            }
+        }
+        None => workspace.path.clone(),
+    };
+
+    let (program, args) = match workspace.workspace_type {
+        WorkspaceType::Host => {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+            (shell, vec!["-c".to_string(), req.command.clone()])
+        }
+        WorkspaceType::Chroot => {
+            // For container workspaces, use systemd-nspawn
+            let container_root = workspace.path.clone();
+            let rel_cwd = if cwd.starts_with(&container_root) {
+                let rel = cwd.strip_prefix(&container_root).unwrap_or(Path::new(""));
+                if rel.as_os_str().is_empty() {
+                    "/".to_string()
+                } else {
+                    format!("/{}", rel.to_string_lossy())
+                }
+            } else {
+                "/root/work".to_string()
+            };
+
+            let mut nspawn_args = vec![
+                "-D".to_string(),
+                container_root.to_string_lossy().to_string(),
+                "--quiet".to_string(),
+                "--timezone=off".to_string(),
+                "--chdir".to_string(),
+                rel_cwd,
+            ];
+
+            // Add workspace env vars
+            for (key, value) in &workspace.env_vars {
+                nspawn_args.push(format!("--setenv={}={}", key, value));
+            }
+
+            // Add request env vars
+            if let Some(env) = &req.env {
+                for (key, value) in env {
+                    nspawn_args.push(format!("--setenv={}={}", key, value));
+                }
+            }
+
+            nspawn_args.extend([
+                "/bin/bash".to_string(),
+                "-c".to_string(),
+                req.command.clone(),
+            ]);
+
+            ("systemd-nspawn".to_string(), nspawn_args)
+        }
+    };
+
+    let mut cmd = Command::new(&program);
+    cmd.args(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    // Set environment for host workspaces
+    if workspace.workspace_type == WorkspaceType::Host {
+        cmd.current_dir(&cwd);
+        for (key, value) in &workspace.env_vars {
+            cmd.env(key, value);
+        }
+        if let Some(env) = &req.env {
+            for (key, value) in env {
+                cmd.env(key, value);
+            }
+        }
+    }
+
+    let mut child = cmd.spawn().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to spawn command: {}", e),
+        )
+    })?;
+
+    // Write stdin if provided
+    if let Some(input) = &req.stdin {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(input.as_bytes()).await;
+        }
+    }
+
+    // Take stdout/stderr handles before waiting
+    let stdout_handle = child.stdout.take();
+    let stderr_handle = child.stderr.take();
+
+    // Wait with timeout
+    let wait_result = tokio::time::timeout(timeout, child.wait()).await;
+
+    match wait_result {
+        Ok(Ok(status)) => {
+            // Read output after process completes
+            let stdout = if let Some(mut handle) = stdout_handle {
+                use tokio::io::AsyncReadExt;
+                let mut buf = Vec::new();
+                let _ = handle.read_to_end(&mut buf).await;
+                String::from_utf8_lossy(&buf).to_string()
+            } else {
+                String::new()
+            };
+
+            let stderr = if let Some(mut handle) = stderr_handle {
+                use tokio::io::AsyncReadExt;
+                let mut buf = Vec::new();
+                let _ = handle.read_to_end(&mut buf).await;
+                String::from_utf8_lossy(&buf).to_string()
+            } else {
+                String::new()
+            };
+
+            let exit_code = status.code().unwrap_or(-1);
+
+            Ok(Json(ExecCommandResponse {
+                exit_code,
+                stdout,
+                stderr,
+                timed_out: false,
+            }))
+        }
+        Ok(Err(e)) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Command execution failed: {}", e),
+        )),
+        Err(_) => {
+            // Timeout - try to kill the process
+            let _ = child.kill().await;
+            Ok(Json(ExecCommandResponse {
+                exit_code: -1,
+                stdout: String::new(),
+                stderr: format!("Command timed out after {} seconds", timeout.as_secs()),
+                timed_out: true,
+            }))
+        }
+    }
 }
 
 #[cfg(test)]

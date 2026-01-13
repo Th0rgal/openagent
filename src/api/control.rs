@@ -29,6 +29,7 @@ use crate::mcp::McpRegistry;
 use crate::workspace;
 
 use super::auth::AuthUser;
+use super::desktop;
 use super::library::SharedLibrary;
 use super::mission_store::{
     self, create_mission_store, now_string, Mission, MissionHistoryEntry, MissionStore,
@@ -64,6 +65,53 @@ fn build_history_context(history: &[(String, String)], max_chars: usize) -> Stri
     }
 
     result
+}
+
+async fn close_mission_desktop_sessions(
+    mission_store: &Arc<dyn MissionStore>,
+    mission_id: Uuid,
+    working_dir: &std::path::Path,
+) {
+    let Ok(Some(mission)) = mission_store.get_mission(mission_id).await else {
+        return;
+    };
+
+    if mission.desktop_sessions.is_empty() {
+        return;
+    }
+
+    let mut sessions = mission.desktop_sessions.clone();
+    let now = now_string();
+    let mut updated = false;
+
+    for session in sessions
+        .iter_mut()
+        .filter(|session| session.stopped_at.is_none())
+    {
+        if let Err(err) = desktop::close_desktop_session(&session.display, working_dir).await {
+            tracing::warn!(
+                mission_id = %mission_id,
+                display = %session.display,
+                error = %err,
+                "Failed to close desktop session"
+            );
+        }
+        session.stopped_at = Some(now.clone());
+        updated = true;
+    }
+
+    if updated {
+        if let Err(err) = mission_store
+            .update_mission_desktop_sessions(mission_id, &sessions)
+            .await
+        {
+            tracing::warn!(
+                mission_id = %mission_id,
+                error = %err,
+                "Failed to persist desktop session shutdown"
+            );
+        }
+    }
 }
 
 /// Message posted by a user to the control session.
@@ -2213,6 +2261,24 @@ async fn control_actor_loop(
                                     .map(|e| (e.role.clone(), e.content.clone()))
                                     .collect();
                                 *current_mission.write().await = Some(id);
+
+                                // Write runtime workspace state so file uploads work immediately
+                                // (without needing to send a message first)
+                                let ws = workspace::resolve_workspace(
+                                    &workspaces,
+                                    &config,
+                                    Some(mission.workspace_id),
+                                ).await;
+                                if let Err(e) = workspace::write_runtime_workspace_state(
+                                    &config.working_dir,
+                                    &ws,
+                                    &ws.path,
+                                    Some(id),
+                                    &config.context.context_dir_name,
+                                ).await {
+                                    tracing::warn!("Failed to write runtime workspace state on load: {}", e);
+                                }
+
                                 let _ = respond.send(Ok(mission));
                             }
                             Err(e) => {
@@ -2241,6 +2307,23 @@ async fn control_actor_loop(
                             Ok(mission) => {
                                 history.clear();
                                 *current_mission.write().await = Some(mission.id);
+
+                                // Write runtime workspace state so file uploads work immediately
+                                let ws = workspace::resolve_workspace(
+                                    &workspaces,
+                                    &config,
+                                    Some(mission.workspace_id),
+                                ).await;
+                                if let Err(e) = workspace::write_runtime_workspace_state(
+                                    &config.working_dir,
+                                    &ws,
+                                    &ws.path,
+                                    Some(mission.id),
+                                    &config.context.context_dir_name,
+                                ).await {
+                                    tracing::warn!("Failed to write runtime workspace state on create: {}", e);
+                                }
+
                                 let _ = respond.send(Ok(mission));
                             }
                             Err(e) => {
@@ -2352,6 +2435,12 @@ async fn control_actor_loop(
                                 resumable: true, // Cancelled missions can be resumed
                             });
                             parallel_runners.remove(&mission_id);
+                            close_mission_desktop_sessions(
+                                &mission_store,
+                                mission_id,
+                                &config.working_dir,
+                            )
+                            .await;
                             let _ = respond.send(Ok(()));
                         } else {
                             // Check if this is the currently executing mission
@@ -2361,6 +2450,12 @@ async fn control_actor_loop(
                                 // Cancel the current execution
                                 if let Some(token) = &running_cancel {
                                     token.cancel();
+                                    close_mission_desktop_sessions(
+                                        &mission_store,
+                                        mission_id,
+                                        &config.working_dir,
+                                    )
+                                    .await;
                                     // Don't send Error event here - the task will complete and send
                                     // an AssistantMessage with resumable=true when it finishes.
                                     // Sending both causes duplicate UI messages.
@@ -2797,6 +2892,14 @@ async fn control_actor_loop(
                                 shared_files: None,
                                 resumable,
                             });
+                            if let Some(mission_id) = completed_mission_id {
+                                close_mission_desktop_sessions(
+                                    &mission_store,
+                                    mission_id,
+                                    &config.working_dir,
+                                )
+                                .await;
+                            }
                         }
                         Err(e) => {
                             let _ = events_tx.send(AgentEvent::Error {
@@ -2804,6 +2907,14 @@ async fn control_actor_loop(
                                 mission_id: completed_mission_id,
                                 resumable: completed_mission_id.is_some(), // Can resume if mission exists
                             });
+                            if let Some(mission_id) = completed_mission_id {
+                                close_mission_desktop_sessions(
+                                    &mission_store,
+                                    mission_id,
+                                    &config.working_dir,
+                                )
+                                .await;
+                            }
                         }
                     }
                 }

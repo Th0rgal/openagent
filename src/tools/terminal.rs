@@ -287,11 +287,19 @@ fn resolve_shell(shell: Option<&str>, container_root: Option<&Path>) -> String {
         if shell_exists(shell, container_root) {
             return shell.to_string();
         }
-        // Fall back to /bin/sh if requested shell isn't available.
+        // Fall back to /bin/bash then /bin/sh if requested shell isn't available.
+        if shell_exists("/bin/bash", container_root) {
+            return "/bin/bash".to_string();
+        }
         if shell_exists("/bin/sh", container_root) {
             return "/bin/sh".to_string();
         }
         return shell.to_string();
+    }
+
+    // Prefer bash for login shell support (profile.d scripts).
+    if shell_exists("/bin/bash", container_root) {
+        return "/bin/bash".to_string();
     }
 
     if shell_exists("/bin/sh", container_root) {
@@ -425,18 +433,19 @@ async fn run_container_command(
         .unwrap_or_else(|_| container_root.to_path_buf());
     let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
 
-    if !cwd.starts_with(&root) {
-        return Err(anyhow::anyhow!(
-            "Working directory is outside container root: {}",
-            cwd.display()
-        ));
-    }
-
-    let rel = cwd.strip_prefix(&root).unwrap_or_else(|_| Path::new(""));
-    let rel_str = if rel.as_os_str().is_empty() {
-        "/".to_string()
+    let rel_str = if cwd.starts_with(&root) {
+        let rel = cwd.strip_prefix(&root).unwrap_or_else(|_| Path::new(""));
+        if rel.as_os_str().is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{}", rel.to_string_lossy())
+        }
+    } else if cwd.is_absolute() {
+        // Allow absolute container paths even when the host path isn't under the container root.
+        // The container runtime will resolve (or reject) the path inside the container.
+        cwd.to_string_lossy().to_string()
     } else {
-        format!("/{}", rel.to_string_lossy())
+        "/".to_string()
     };
 
     // If a container is already running (e.g., MCP server), run commands via nsenter.
@@ -497,7 +506,13 @@ async fn run_container_command(
     }
 
     let shell = resolve_shell(options.shell.as_deref(), Some(&root));
-    args.push(shell);
+    args.push(shell.clone());
+
+    // Use login shell (-l) to source /etc/profile.d/ scripts.
+    // This ensures networking and Tailscale are set up, consistent with interactive terminals.
+    if shell.ends_with("bash") {
+        args.push("--login".to_string());
+    }
     args.push("-c".to_string());
     args.push(command.to_string());
 
@@ -690,10 +705,13 @@ impl Tool for RunCommand {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'command' argument"))?;
 
-        // Validate command against dangerous patterns
-        if let Err(msg) = validate_command(command) {
-            tracing::warn!("Blocked dangerous command: {}", command);
-            return Err(anyhow::anyhow!("{}", msg));
+        let container_root = container_root_from_env();
+        if container_root.is_none() {
+            // Validate command against dangerous patterns on host only.
+            if let Err(msg) = validate_command(command) {
+                tracing::warn!("Blocked dangerous command: {}", command);
+                return Err(anyhow::anyhow!("{}", msg));
+            }
         }
 
         let cwd = args["cwd"]
@@ -704,7 +722,7 @@ impl Tool for RunCommand {
 
         tracing::info!("Executing command in {:?}: {}", cwd, command);
 
-        let output = match container_root_from_env() {
+        let output = match container_root {
             Some(container_root) => {
                 run_container_command(&container_root, &cwd, command, &options).await?
             }

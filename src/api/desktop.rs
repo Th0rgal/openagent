@@ -157,7 +157,8 @@ async fn keep_alive_session(
         for session in &mission.desktop_sessions {
             if session.display == display_id {
                 // Calculate new keep-alive time
-                let new_keep_alive = Utc::now() + chrono::Duration::seconds(req.extension_secs as i64);
+                let new_keep_alive =
+                    Utc::now() + chrono::Duration::seconds(req.extension_secs as i64);
                 let new_keep_alive_str = new_keep_alive.to_rfc3339();
 
                 // Update the session
@@ -187,10 +188,7 @@ async fn keep_alive_session(
 
                 return Ok(Json(OperationResponse {
                     success: true,
-                    message: Some(format!(
-                        "Keep-alive extended to {}",
-                        new_keep_alive_str
-                    )),
+                    message: Some(format!("Keep-alive extended to {}", new_keep_alive_str)),
                 }));
             }
         }
@@ -203,9 +201,7 @@ async fn keep_alive_session(
 }
 
 /// Close all orphaned desktop sessions.
-async fn cleanup_orphaned_sessions(
-    State(state): State<Arc<AppState>>,
-) -> Json<OperationResponse> {
+async fn cleanup_orphaned_sessions(State(state): State<Arc<AppState>>) -> Json<OperationResponse> {
     let sessions = collect_desktop_sessions(&state).await;
     let mut closed_count = 0;
     let mut failed_count = 0;
@@ -259,7 +255,9 @@ async fn collect_desktop_sessions(state: &Arc<AppState>) -> Vec<DesktopSessionDe
     let mut sessions = Vec::new();
 
     // Get desktop config for grace period
-    let grace_period_secs = get_desktop_config(&state.library).await.auto_close_grace_period_secs;
+    let grace_period_secs = get_desktop_config(&state.library)
+        .await
+        .auto_close_grace_period_secs;
 
     // Get all missions from the store
     let mission_store = state.control.get_mission_store().await;
@@ -283,10 +281,8 @@ async fn collect_desktop_sessions(state: &Arc<AppState>) -> Vec<DesktopSessionDe
                 DesktopSessionStatus::Stopped
             } else {
                 // Check if mission is still active
-                let mission_active = matches!(
-                    mission.status,
-                    super::control::MissionStatus::Active
-                );
+                let mission_active =
+                    matches!(mission.status, super::control::MissionStatus::Active);
 
                 if mission_active {
                     DesktopSessionStatus::Active
@@ -296,7 +292,9 @@ async fn collect_desktop_sessions(state: &Arc<AppState>) -> Vec<DesktopSessionDe
             };
 
             // Calculate auto-close countdown for orphaned sessions
-            let auto_close_in_secs = if status == DesktopSessionStatus::Orphaned && grace_period_secs > 0 {
+            let auto_close_in_secs = if status == DesktopSessionStatus::Orphaned
+                && grace_period_secs > 0
+            {
                 // Check if keep-alive is active
                 if let Some(keep_alive_until) = &session.keep_alive_until {
                     if let Ok(keep_until) = DateTime::parse_from_rfc3339(keep_alive_until) {
@@ -398,10 +396,7 @@ async fn is_xvfb_running(display: &str) -> bool {
 
 /// Get list of running Xvfb displays.
 async fn get_running_xvfb_displays() -> Vec<String> {
-    let output = Command::new("pgrep")
-        .args(["-a", "Xvfb"])
-        .output()
-        .await;
+    let output = Command::new("pgrep").args(["-a", "Xvfb"]).output().await;
 
     let mut displays = Vec::new();
 
@@ -424,7 +419,7 @@ async fn get_running_xvfb_displays() -> Vec<String> {
 }
 
 /// Close a desktop session by killing its processes.
-async fn close_desktop_session(
+pub(crate) async fn close_desktop_session(
     display: &str,
     working_dir: &std::path::Path,
 ) -> anyhow::Result<()> {
@@ -470,9 +465,7 @@ async fn close_desktop_session(
 }
 
 /// Background task that periodically cleans up orphaned desktop sessions.
-pub async fn start_cleanup_task(
-    state: Arc<AppState>,
-) {
+pub async fn start_cleanup_task(state: Arc<AppState>) {
     tracing::info!("Starting desktop session cleanup background task");
 
     loop {
@@ -515,7 +508,8 @@ pub async fn start_cleanup_task(
                         mission_id = ?session.mission_id,
                         "Auto-closing orphaned desktop session"
                     );
-                    let _ = close_desktop_session(&session.display, &state.config.working_dir).await;
+                    let _ =
+                        close_desktop_session(&session.display, &state.config.working_dir).await;
                 } else if warning_secs > 0 && secs_remaining <= warning_secs as i64 {
                     // Send warning notification via SSE
                     // (This would be implemented through the control hub's SSE broadcast)

@@ -1,0 +1,2 @@
+Changes made
+- Created report.txt documenting API access attempts and blockers.

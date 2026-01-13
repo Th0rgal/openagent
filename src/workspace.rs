@@ -711,23 +711,31 @@ async fn write_opencode_config(
         }
     }
 
-    // Prevent OpenCode's builtin bash tool from running on the host. For isolated
-    // workspaces, allow MCP-hosted browser/desktop tools. For host workspaces,
-    // keep browser/desktop tools disabled by default.
+    // Disable OpenCode's builtin bash tools so agents must use the host MCP's bash.
+    // For container (nspawn) workspaces, the host MCP runs INSIDE the container via
+    // systemd-nspawn wrapping, so its bash tool has container networking (Tailscale, etc).
+    // For host workspaces, disable bash entirely (security: no host shell access).
     let mut tools = serde_json::Map::new();
     match workspace_type {
         WorkspaceType::Chroot => {
-            tools.insert("bash".to_string(), json!(true));
+            // Disable OpenCode built-in bash - agents must use host MCP's bash
+            // which runs inside the container with container networking
+            tools.insert("Bash".to_string(), json!(false)); // Claude Code built-in
+            tools.insert("bash".to_string(), json!(false)); // lowercase variant
+                                                            // Enable MCP-provided tools (host MCP runs inside container via nspawn)
+            tools.insert("host_*".to_string(), json!(true));
             tools.insert("desktop_*".to_string(), json!(true));
             tools.insert("playwright_*".to_string(), json!(true));
             tools.insert("browser_*".to_string(), json!(true));
-            tools.insert("host_*".to_string(), json!(true));
         }
         WorkspaceType::Host => {
+            // Disable all bash for host workspaces (security)
+            tools.insert("Bash".to_string(), json!(false));
             tools.insert("bash".to_string(), json!(false));
             tools.insert("desktop_*".to_string(), json!(false));
             tools.insert("playwright_*".to_string(), json!(false));
             tools.insert("browser_*".to_string(), json!(false));
+            // Only allow host MCP tools (files, etc)
             tools.insert("host_*".to_string(), json!(true));
         }
     }
@@ -907,12 +915,39 @@ pub async fn sync_workspace_skills(
 
 /// Sync skills from library to a specific directory's `.opencode/skill/` folder.
 /// Used for syncing skills to mission directories.
+/// This performs a full sync: adds new skills and removes skills no longer in the allowlist.
 pub async fn sync_skills_to_dir(
     target_dir: &Path,
     skill_names: &[String],
     context_name: &str,
     library: &LibraryStore,
 ) -> anyhow::Result<()> {
+    let skills_dir = target_dir.join(".opencode").join("skill");
+
+    // Clean up skills that are no longer in the allowlist
+    if skills_dir.exists() {
+        let allowed: std::collections::HashSet<&str> =
+            skill_names.iter().map(|s| s.as_str()).collect();
+
+        if let Ok(mut entries) = tokio::fs::read_dir(&skills_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if !allowed.contains(name) {
+                            tracing::info!(
+                                skill = %name,
+                                context = %context_name,
+                                "Removing skill no longer in allowlist"
+                            );
+                            let _ = tokio::fs::remove_dir_all(&path).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if skill_names.is_empty() {
         tracing::debug!(
             context = %context_name,
@@ -1102,12 +1137,39 @@ pub async fn sync_workspace_tools(
 
 /// Sync tools from library to a specific directory's `.opencode/tool/` folder.
 /// Used for syncing tools to mission directories.
+/// This performs a full sync: adds new tools and removes tools no longer in the allowlist.
 pub async fn sync_tools_to_dir(
     target_dir: &Path,
     tool_names: &[String],
     context_name: &str,
     library: &LibraryStore,
 ) -> anyhow::Result<()> {
+    let tools_dir = target_dir.join(".opencode").join("tool");
+
+    // Clean up tools that are no longer in the allowlist
+    if tools_dir.exists() {
+        let allowed: std::collections::HashSet<&str> =
+            tool_names.iter().map(|s| s.as_str()).collect();
+
+        if let Ok(mut entries) = tokio::fs::read_dir(&tools_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
+                        if !allowed.contains(name) {
+                            tracing::info!(
+                                tool = %name,
+                                context = %context_name,
+                                "Removing tool no longer in allowlist"
+                            );
+                            let _ = tokio::fs::remove_file(&path).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if tool_names.is_empty() {
         tracing::debug!(
             context = %context_name,
@@ -1340,7 +1402,21 @@ pub async fn prepare_task_workspace(
     Ok(dir)
 }
 
+/// Translate a host path to a container-relative path by stripping the workspace root.
+fn translate_to_container_path(host_path: &Path, workspace_root: &Path) -> PathBuf {
+    if let Ok(relative) = host_path.strip_prefix(workspace_root) {
+        // Return as absolute path from container root
+        PathBuf::from("/").join(relative)
+    } else {
+        // Fallback: return original path if it doesn't start with workspace root
+        host_path.to_path_buf()
+    }
+}
+
 /// Write the current workspace context to a runtime file for MCP tools.
+///
+/// For chroot workspaces, paths are translated to container-relative paths so that
+/// commands executed inside the container can use them directly.
 pub async fn write_runtime_workspace_state(
     working_dir_root: &Path,
     workspace: &Workspace,
@@ -1373,15 +1449,43 @@ pub async fn write_runtime_workspace_state(
             }
         }
     }
+
+    // For chroot workspaces, translate paths to container-relative paths.
+    // Inside the container:
+    // - working_dir becomes relative to container root (e.g., /workspaces/mission-xxx)
+    // - context is bind-mounted at /root/context
+    let (effective_working_dir, effective_context_root, effective_mission_context): (
+        PathBuf,
+        PathBuf,
+        Option<PathBuf>,
+    ) = if workspace.workspace_type == WorkspaceType::Chroot {
+        let container_working_dir = translate_to_container_path(working_dir, &workspace.path);
+        // Context is bind-mounted at /root/context inside the container
+        let container_context_root = PathBuf::from("/root").join(context_dir_name);
+        let container_mission_context =
+            mission_id.map(|id| container_context_root.join(id.to_string()));
+        (
+            container_working_dir,
+            container_context_root,
+            container_mission_context,
+        )
+    } else {
+        (
+            working_dir.to_path_buf(),
+            context_root.clone(),
+            mission_context.clone(),
+        )
+    };
+
     let payload = json!({
         "workspace_id": workspace.id,
         "workspace_name": workspace.name,
         "workspace_type": workspace.workspace_type.as_str(),
         "workspace_root": workspace.path,
-        "working_dir": working_dir,
+        "working_dir": effective_working_dir,
         "mission_id": mission_id,
-        "context_root": context_root,
-        "mission_context": mission_context,
+        "context_root": effective_context_root,
+        "mission_context": effective_mission_context,
         "context_dir_name": context_dir_name,
     });
     let path = runtime_dir.join("current_workspace.json");

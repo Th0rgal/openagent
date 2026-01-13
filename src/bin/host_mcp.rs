@@ -131,6 +131,43 @@ fn container_root_from_path(path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Check if we're running inside a container by detecting the presence of
+/// container-relative paths and absence of HOST container paths.
+fn is_inside_container() -> bool {
+    // If /workspaces exists but the typical HOST container path doesn't,
+    // we're likely inside a container
+    Path::new("/workspaces").exists() && !Path::new("/root/.openagent/containers").exists()
+}
+
+/// Translate a HOST path to a container-relative path.
+/// HOST path: /root/.openagent/containers/<name>/workspaces/mission-xxx
+/// Container path: /workspaces/mission-xxx
+fn translate_host_path_for_container(host_path: &str, workspace_root: Option<&str>) -> String {
+    // If we have the workspace_root (container root on host), strip it from the path
+    if let Some(root) = workspace_root {
+        if host_path.starts_with(root) {
+            let relative = &host_path[root.len()..];
+            // Ensure it starts with /
+            if relative.starts_with('/') {
+                return relative.to_string();
+            } else {
+                return format!("/{}", relative);
+            }
+        }
+    }
+
+    // Fallback: try to detect and strip container path patterns
+    // Pattern: /root/.openagent/containers/<name>/...
+    if let Some(idx) = host_path.find("/containers/") {
+        let after_containers = &host_path[idx + "/containers/".len()..];
+        if let Some(slash_idx) = after_containers.find('/') {
+            return after_containers[slash_idx..].to_string();
+        }
+    }
+
+    host_path.to_string()
+}
+
 fn hydrate_workspace_env(override_path: Option<PathBuf>) -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let workspace = override_path.unwrap_or_else(|| {
@@ -214,19 +251,39 @@ fn apply_runtime_workspace(working_dir: &Arc<RwLock<PathBuf>>) {
         debug_log("runtime_workspace", &json!({"status": "missing"}));
         return;
     };
+
+    // Check if we're running inside a container and need to translate paths
+    let inside_container = is_inside_container();
+    let workspace_root = state.workspace_root.as_deref();
+
     debug_log(
         "runtime_workspace",
         &json!({
             "working_dir": state.working_dir,
             "workspace_root": state.workspace_root,
             "workspace_type": state.workspace_type,
+            "inside_container": inside_container,
         }),
     );
 
     if let Some(dir) = state.working_dir.as_ref() {
-        std::env::set_var("OPEN_AGENT_WORKSPACE", dir);
+        // Translate path if running inside container
+        let effective_dir = if inside_container {
+            translate_host_path_for_container(dir, workspace_root)
+        } else {
+            dir.clone()
+        };
+        debug_log(
+            "path_translation",
+            &json!({
+                "original": dir,
+                "effective": &effective_dir,
+                "translated": inside_container,
+            }),
+        );
+        std::env::set_var("OPEN_AGENT_WORKSPACE", &effective_dir);
         if let Ok(mut guard) = working_dir.write() {
-            *guard = PathBuf::from(dir);
+            *guard = PathBuf::from(&effective_dir);
         }
     }
 
@@ -234,16 +291,29 @@ fn apply_runtime_workspace(working_dir: &Arc<RwLock<PathBuf>>) {
         std::env::set_var("OPEN_AGENT_WORKSPACE_NAME", name);
     }
 
-    if let Some(root) = state.workspace_root.as_ref() {
-        std::env::set_var("OPEN_AGENT_WORKSPACE_ROOT", root);
-    }
+    if inside_container {
+        // When running inside a container, clear these variables so RunCommand
+        // executes directly (we're already in the container, no need to nspawn again)
+        std::env::remove_var("OPEN_AGENT_WORKSPACE_ROOT");
+        std::env::set_var("OPEN_AGENT_WORKSPACE_TYPE", "host");
+    } else {
+        if let Some(root) = state.workspace_root.as_ref() {
+            std::env::set_var("OPEN_AGENT_WORKSPACE_ROOT", root);
+        }
 
-    if let Some(kind) = state.workspace_type.as_ref() {
-        std::env::set_var("OPEN_AGENT_WORKSPACE_TYPE", kind);
+        if let Some(kind) = state.workspace_type.as_ref() {
+            std::env::set_var("OPEN_AGENT_WORKSPACE_TYPE", kind);
+        }
     }
 
     if let Some(context_root) = state.context_root.as_ref() {
-        std::env::set_var("OPEN_AGENT_CONTEXT_ROOT", context_root);
+        // Also translate context_root for container environments
+        let effective_context = if inside_container {
+            translate_host_path_for_container(context_root, workspace_root)
+        } else {
+            context_root.clone()
+        };
+        std::env::set_var("OPEN_AGENT_CONTEXT_ROOT", &effective_context);
     }
 
     if let Some(mission_id) = state.mission_id.as_ref() {
@@ -251,7 +321,13 @@ fn apply_runtime_workspace(working_dir: &Arc<RwLock<PathBuf>>) {
     }
 
     if let Some(mission_context) = state.mission_context.as_ref() {
-        std::env::set_var("OPEN_AGENT_MISSION_CONTEXT", mission_context);
+        // Also translate mission_context for container environments
+        let effective_mission_context = if inside_container {
+            translate_host_path_for_container(mission_context, workspace_root)
+        } else {
+            mission_context.clone()
+        };
+        std::env::set_var("OPEN_AGENT_MISSION_CONTEXT", &effective_mission_context);
     }
 
     if let Some(context_dir_name) = state.context_dir_name.as_ref() {

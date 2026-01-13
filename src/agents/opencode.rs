@@ -515,6 +515,8 @@ impl Agent for OpenCodeAgent {
         // Process streaming events with cancellation support and stuck tool detection
         let mut saw_sse_event = false;
         let mut sse_text_buffer = String::new();
+        let mut message_handle = message_handle;
+        let mut response_result = None;
         let response = if let Some(cancel) = ctx.cancel_token.clone() {
             let mut last_event_time = Instant::now();
             let mut last_stuck_check = Instant::now();
@@ -528,6 +530,10 @@ impl Agent for OpenCodeAgent {
                         let _ = self.client.abort_session(&session.id, &directory).await;
                         message_handle.abort();
                         return AgentResult::failure("Task cancelled", 0).with_terminal_reason(TerminalReason::Cancelled);
+                    }
+                    res = &mut message_handle => {
+                        response_result = Some(res);
+                        break;
                     }
                     event = event_rx.recv() => {
                         match event {
@@ -682,8 +688,11 @@ impl Agent for OpenCodeAgent {
                 }
             }
 
-            // Wait for the final response
-            match message_handle.await {
+            let result = match response_result.take() {
+                Some(result) => result,
+                None => message_handle.await,
+            };
+            match result {
                 Ok(Ok(response)) => response,
                 Ok(Err(e)) => {
                     tree.status = "failed".to_string();
@@ -712,6 +721,10 @@ impl Agent for OpenCodeAgent {
 
             loop {
                 tokio::select! {
+                    res = &mut message_handle => {
+                        response_result = Some(res);
+                        break;
+                    }
                     event = event_rx.recv() => {
                         match event {
                             Some(oc_event) => {
@@ -834,7 +847,11 @@ impl Agent for OpenCodeAgent {
                 }
             }
 
-            match message_handle.await {
+            let result = match response_result.take() {
+                Some(result) => result,
+                None => message_handle.await,
+            };
+            match result {
                 Ok(Ok(response)) => response,
                 Ok(Err(e)) => {
                     tree.status = "failed".to_string();

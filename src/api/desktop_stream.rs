@@ -235,7 +235,22 @@ async fn capture_frame(display: &str, quality: u32) -> anyhow::Result<Vec<u8>> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!("import failed: {}", stderr));
+
+        // Detect common error patterns and return user-friendly messages
+        if stderr.contains("unable to open X server") {
+            return Err(anyhow::anyhow!(
+                "Display {} is no longer available. The desktop session may have been closed.",
+                display
+            ));
+        }
+        if stderr.contains("Can't open display") || stderr.contains("cannot open display") {
+            return Err(anyhow::anyhow!(
+                "Cannot connect to display {}. The session may have ended.",
+                display
+            ));
+        }
+
+        return Err(anyhow::anyhow!("Screenshot failed: {}", stderr.trim()));
     }
 
     Ok(output.stdout)

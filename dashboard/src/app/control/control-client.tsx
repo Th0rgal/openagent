@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, memo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { toast } from "@/components/toast";
 import { MarkdownContent } from "@/components/markdown-content";
@@ -17,6 +17,7 @@ import {
   streamControl,
   loadMission,
   getMission,
+  getMissionEvents,
   createMission,
   listMissions,
   setMissionStatus,
@@ -47,6 +48,7 @@ import {
   type Workspace,
   type DesktopSessionDetail,
   type DesktopSessionStatus,
+  type StoredEvent,
 } from "@/lib/api";
 import {
   Send,
@@ -1094,7 +1096,8 @@ function parseSubagentResult(result: unknown): {
 }
 
 // Subagent/Background Task tool item with enhanced UX
-function SubagentToolItem({
+// Memoized to prevent re-renders when parent state changes
+const SubagentToolItem = memo(function SubagentToolItem({
   item,
 }: {
   item: Extract<ChatItem, { kind: "tool" }>;
@@ -1103,8 +1106,17 @@ function SubagentToolItem({
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const isDone = item.result !== undefined;
 
-  const { agentName, description, prompt } = extractSubagentInfo(item.args);
-  const { success, summary } = isDone ? parseSubagentResult(item.result) : { success: false, summary: null };
+  // Memoize subagent info extraction
+  const { agentName, description, prompt } = useMemo(
+    () => extractSubagentInfo(item.args),
+    [item.args]
+  );
+
+  // Memoize result parsing
+  const { success, summary } = useMemo(
+    () => (isDone ? parseSubagentResult(item.result) : { success: false, summary: null }),
+    [isDone, item.result]
+  );
 
   // Update elapsed time while tool is running
   useEffect(() => {
@@ -1128,7 +1140,11 @@ function SubagentToolItem({
     ? formatDuration(Math.floor((item.endTime - item.startTime) / 1000))
     : formatDuration(elapsedSeconds);
 
-  const resultStr = item.result !== undefined ? formatToolArgs(item.result) : null;
+  // Memoize result string formatting
+  const resultStr = useMemo(
+    () => (item.result !== undefined ? formatToolArgs(item.result) : null),
+    [item.result]
+  );
 
   return (
     <div className="my-3">
@@ -1295,7 +1311,7 @@ function SubagentToolItem({
       </div>
     </div>
   );
-}
+});
 
 // Extract image file paths from tool result strings
 // Matches patterns like "/path/to/image.png" or "screenshots/file.jpg"
@@ -1412,7 +1428,8 @@ function ImagePreview({ path }: { path: string }) {
 }
 
 // Tool call item component with collapsible UI
-function ToolCallItem({
+// Memoized to prevent re-renders when parent state changes
+const ToolCallItem = memo(function ToolCallItem({
   item,
 }: {
   item: Extract<ChatItem, { kind: "tool" }>;
@@ -1443,11 +1460,17 @@ function ToolCallItem({
     ? formatDuration(Math.floor((item.endTime - item.startTime) / 1000))
     : formatDuration(elapsedSeconds);
 
-  const argsStr = formatToolArgs(item.args);
-  const resultStr = item.result !== undefined ? formatToolArgs(item.result) : null;
-  
-  // Determine result status - check for explicit error indicators, not just keyword presence
-  const isError = (() => {
+  // Memoize expensive string formatting - only recompute when item.args changes
+  const argsStr = useMemo(() => formatToolArgs(item.args), [item.args]);
+
+  // Memoize result string - only recompute when item.result changes
+  const resultStr = useMemo(
+    () => (item.result !== undefined ? formatToolArgs(item.result) : null),
+    [item.result]
+  );
+
+  // Memoize error detection - only recompute when result changes
+  const isError = useMemo(() => {
     if (resultStr === null) return false;
 
     // Check if the result is an object with explicit error fields
@@ -1464,14 +1487,17 @@ function ToolCallItem({
            trimmedLower.startsWith("error -") ||
            trimmedLower.startsWith("failed:") ||
            trimmedLower.startsWith("exception:");
-  })();
+  }, [item.result, resultStr]);
 
-  // Get a preview of the args for the collapsed state
-  const argsPreview = truncateText(
-    typeof item.args === "object" && item.args !== null
-      ? Object.keys(item.args as Record<string, unknown>).slice(0, 2).join(", ")
-      : argsStr,
-    50
+  // Memoize args preview - only recompute when item.args changes
+  const argsPreview = useMemo(
+    () => truncateText(
+      typeof item.args === "object" && item.args !== null
+        ? Object.keys(item.args as Record<string, unknown>).slice(0, 2).join(", ")
+        : argsStr,
+      50
+    ),
+    [item.args, argsStr]
   );
 
   return (
@@ -1618,7 +1644,7 @@ function ToolCallItem({
       </div>
     </div>
   );
-}
+});
 
 // Collapsed tool group component - shows last tool with expand option
 function CollapsedToolGroup({
@@ -1931,10 +1957,17 @@ export default function ControlClient() {
   const viewingMissionIsRunning = useMemo(() => {
     if (!viewingMissionId) return runState !== "idle";
     const mission = runningMissions.find((m) => m.mission_id === viewingMissionId);
-    if (!mission) return false;
-    // Check the actual state from the backend
-    return mission.state === "running" || mission.state === "waiting_for_tool";
-  }, [viewingMissionId, runningMissions, runState]);
+    if (mission) {
+      // Check the actual state from the backend
+      return mission.state === "running" || mission.state === "waiting_for_tool";
+    }
+    // Fallback: if viewing the current/main mission and it's not in runningMissions,
+    // check runState to handle cases where the backend is running but not reporting properly
+    if (viewingMissionId === currentMission?.id) {
+      return runState !== "idle";
+    }
+    return false;
+  }, [viewingMissionId, runningMissions, runState, currentMission?.id]);
 
   // Check if the mission we're viewing appears stalled (no activity for 60+ seconds)
   const viewingMissionStallSeconds = useMemo(() => {
@@ -2270,21 +2303,33 @@ export default function ControlClient() {
   // Derive working directory from mission's desktop sessions for file path resolution
   const missionWorkingDirectory = useMemo(() => {
     const mission = viewingMission ?? currentMission;
-    if (!mission?.desktop_sessions?.length) return undefined;
+    if (!mission) return undefined;
 
-    // Try to find screenshots_dir from any session (prefer active/latest)
-    for (let i = mission.desktop_sessions.length - 1; i >= 0; i--) {
-      const session = mission.desktop_sessions[i];
-      if (session?.screenshots_dir) {
-        // screenshots_dir is like /path/to/workspaces/mission-xxx/screenshots/
-        // We want the parent: /path/to/workspaces/mission-xxx/
-        const dir = session.screenshots_dir.replace(/\/?$/, ''); // remove trailing slash
-        const parent = dir.substring(0, dir.lastIndexOf('/'));
-        if (parent) return parent;
+    if (mission.desktop_sessions?.length) {
+      // Try to find screenshots_dir from any session (prefer active/latest)
+      for (let i = mission.desktop_sessions.length - 1; i >= 0; i--) {
+        const session = mission.desktop_sessions[i];
+        if (session?.screenshots_dir) {
+          // screenshots_dir is like /path/to/workspaces/mission-xxx/screenshots/
+          // We want the parent: /path/to/workspaces/mission-xxx/
+          const dir = session.screenshots_dir.replace(/\/?$/, ""); // remove trailing slash
+          const parent = dir.substring(0, dir.lastIndexOf("/"));
+          if (parent) return parent;
+        }
       }
     }
-    return undefined;
-  }, [viewingMission, currentMission]);
+
+    const shortId = mission.id?.slice(0, 8);
+    if (!shortId) return undefined;
+
+    const workspace =
+      workspaces.find((ws) => ws.id === mission.workspace_id) ??
+      workspaces.find((ws) => ws.workspace_type === "host");
+
+    if (!workspace?.path) return undefined;
+    const cleanRoot = workspace.path.replace(/\/+$/, "");
+    return `${cleanRoot}/workspaces/mission-${shortId}`;
+  }, [viewingMission, currentMission, workspaces]);
 
   const missionHistoryToItems = useCallback((mission: Mission): ChatItem[] => {
     // Estimate timestamps based on mission creation time
@@ -2311,6 +2356,160 @@ export default function ControlClient() {
         };
       }
     });
+  }, []);
+
+  // Convert stored events (from SQLite) to ChatItems for display
+  // This enables full history replay including tool calls on page refresh
+  const eventsToItems = useCallback((events: StoredEvent[]): ChatItem[] => {
+    const items: ChatItem[] = [];
+    const toolCallMap = new Map<string, number>(); // tool_call_id -> index in items
+    // Track current in-progress thinking item index for consolidation
+    // Multiple thinking events (deltas) are streamed and stored; we consolidate them here
+    let currentThinkingIdx: number | null = null;
+
+    // Helper to finalize pending thinking item
+    const finalizePendingThinking = (endTime: number) => {
+      if (currentThinkingIdx !== null) {
+        const pending = items[currentThinkingIdx] as Extract<ChatItem, { kind: "thinking" }>;
+        if (!pending.done) {
+          items[currentThinkingIdx] = {
+            ...pending,
+            done: true,
+            endTime,
+          };
+        }
+        currentThinkingIdx = null;
+      }
+    };
+
+    for (const event of events) {
+      const timestamp = new Date(event.timestamp).getTime();
+
+      switch (event.event_type) {
+        case "user_message":
+          // Finalize any pending thinking before user message
+          finalizePendingThinking(timestamp);
+          items.push({
+            kind: "user" as const,
+            id: `event-${event.id}`,
+            content: event.content,
+            timestamp,
+          });
+          break;
+
+        case "assistant_message": {
+          // Finalize any pending thinking before assistant message
+          finalizePendingThinking(timestamp);
+          const meta = event.metadata || {};
+          items.push({
+            kind: "assistant" as const,
+            id: `event-${event.id}`,
+            content: event.content,
+            success: meta.success !== false,
+            costCents: typeof meta.cost_cents === "number" ? meta.cost_cents : 0,
+            model: typeof meta.model === "string" ? meta.model : null,
+            timestamp,
+          });
+          break;
+        }
+
+        case "thinking": {
+          // Consolidate thinking events: backend streams multiple deltas that we merge
+          const meta = event.metadata || {};
+          const isDone = meta.done === true;
+          const content = event.content || "";
+
+          if (currentThinkingIdx !== null) {
+            // Update existing thinking item with latest/longer content
+            const existing = items[currentThinkingIdx] as Extract<ChatItem, { kind: "thinking" }>;
+            // Keep the longer content (backend may send cumulative or final)
+            const newContent = content.length > existing.content.length ? content : existing.content;
+            items[currentThinkingIdx] = {
+              ...existing,
+              content: newContent,
+              done: isDone,
+              endTime: isDone ? timestamp : existing.endTime,
+            };
+            if (isDone) {
+              currentThinkingIdx = null; // Reset for next thinking session
+            }
+          } else {
+            // Create new thinking item
+            const newIdx = items.length;
+            items.push({
+              kind: "thinking" as const,
+              id: `event-${event.id}`,
+              content,
+              done: isDone,
+              startTime: timestamp,
+              endTime: isDone ? timestamp : undefined,
+            });
+            if (!isDone) {
+              currentThinkingIdx = newIdx; // Track for consolidation
+            }
+          }
+          break;
+        }
+
+        case "tool_call": {
+          // Finalize any pending thinking before tool call
+          finalizePendingThinking(timestamp);
+          const toolCallId = event.tool_call_id || `unknown-${event.id}`;
+          const name = event.tool_name || "unknown";
+          const isUiTool = name.startsWith("ui_") || name === "question";
+          // Parse args from content (stored as JSON string)
+          let args: unknown = undefined;
+          try {
+            args = event.content ? JSON.parse(event.content) : undefined;
+          } catch {
+            args = event.content;
+          }
+          const toolItem: ChatItem = {
+            kind: "tool" as const,
+            id: `tool-${toolCallId}`,
+            toolCallId,
+            name,
+            args,
+            isUiTool,
+            startTime: timestamp,
+            result: undefined,
+            endTime: undefined,
+          };
+          toolCallMap.set(toolCallId, items.length);
+          items.push(toolItem);
+          break;
+        }
+
+        case "tool_result": {
+          const toolCallId = event.tool_call_id || "";
+          const idx = toolCallMap.get(toolCallId);
+          if (idx !== undefined) {
+            // Update existing tool item with result
+            const toolItem = items[idx] as Extract<ChatItem, { kind: "tool" }>;
+            // Parse result from content
+            let result: unknown = event.content;
+            try {
+              result = event.content ? JSON.parse(event.content) : event.content;
+            } catch {
+              // Keep as string if not valid JSON
+            }
+            items[idx] = {
+              ...toolItem,
+              result,
+              endTime: timestamp,
+            };
+          }
+          break;
+        }
+
+        // Skip other event types (error, mission_status_changed, etc.)
+      }
+    }
+
+    // Finalize any pending thinking item (e.g., if done event wasn't stored)
+    finalizePendingThinking(Date.now());
+
+    return items;
   }, []);
 
   // Load mission from URL param on mount (and retry on auth success)
@@ -2348,11 +2547,16 @@ export default function ControlClient() {
       setViewingMissionId(id); // Set viewing ID immediately to prevent "Agent is working..." flash
       fetchingMissionIdRef.current = id; // Track which mission we're loading
       try {
-        const mission = await loadMission(id);
+        // Load mission and events in parallel for faster load
+        const [mission, events] = await Promise.all([
+          loadMission(id),
+          getMissionEvents(id).catch(() => null), // Don't fail if events unavailable
+        ]);
         if (cancelled || fetchingMissionIdRef.current !== id) return;
         setCurrentMission(mission);
         setViewingMission(mission);
-        setItems(missionHistoryToItems(mission));
+        // Use events if available, otherwise fall back to basic history
+        setItems(events ? eventsToItems(events) : missionHistoryToItems(mission));
         applyDesktopSessionState(mission);
       } catch (err) {
         if (cancelled || fetchingMissionIdRef.current !== id) return;
@@ -2388,9 +2592,17 @@ export default function ControlClient() {
         if (mission) {
           setCurrentMission(mission);
           setViewingMission(mission);
+          // Show basic history immediately, then load full events
           setItems(missionHistoryToItems(mission));
           applyDesktopSessionState(mission);
           router.replace(`/control?mission=${mission.id}`, { scroll: false });
+          // Load full events in background (including tool calls)
+          getMissionEvents(mission.id)
+            .then((events) => {
+              if (cancelled) return;
+              setItems(eventsToItems(events));
+            })
+            .catch(() => {}); // Keep basic history on failure
           return;
         }
 
@@ -2688,14 +2900,19 @@ export default function ControlClient() {
       // Always load fresh history from API when switching missions
       // This ensures we don't show stale cached events
       try {
-        const mission = await getMission(missionId);
+        // Load mission and events in parallel for faster load
+        const [mission, events] = await Promise.all([
+          getMission(missionId),
+          getMissionEvents(missionId).catch(() => null), // Don't fail if events unavailable
+        ]);
 
         // Race condition guard: only update if this is still the mission we want
         if (fetchingMissionIdRef.current !== missionId) {
           return; // Another mission was requested, discard this response
         }
 
-        const historyItems = missionHistoryToItems(mission);
+        // Use events if available, otherwise fall back to basic history
+        const historyItems = events ? eventsToItems(events) : missionHistoryToItems(mission);
         setItems(historyItems);
         // Check if mission has an active desktop session (stored metadata or fallback to history)
         applyDesktopSessionState(mission);
@@ -2735,7 +2952,7 @@ export default function ControlClient() {
         }
       }
     },
-    [missionItems, missionHistoryToItems, applyDesktopSessionState, router]
+    [missionItems, missionHistoryToItems, eventsToItems, applyDesktopSessionState, router]
   );
 
   // Sync viewingMissionId with currentMission only when there's no explicit viewing mission set
@@ -2815,15 +3032,24 @@ export default function ControlClient() {
       setCurrentMission(resumed);
       setViewingMission(resumed);
       setViewingMissionId(resumed.id);
-      const historyItems = missionHistoryToItems(resumed);
-      setItems(historyItems);
-      setMissionItems((prev) => ({ ...prev, [resumed.id]: historyItems }));
+      // Show basic history immediately
+      const basicItems = missionHistoryToItems(resumed);
+      setItems(basicItems);
+      setMissionItems((prev) => ({ ...prev, [resumed.id]: basicItems }));
       refreshRecentMissions();
       toast.success(
-        cleanWorkspace 
-          ? "Mission resumed with clean workspace" 
+        cleanWorkspace
+          ? "Mission resumed with clean workspace"
           : (mission.status === "blocked" ? "Continuing mission" : "Mission resumed")
       );
+      // Load full events in background (including tool calls)
+      getMissionEvents(resumed.id)
+        .then((events) => {
+          const fullItems = eventsToItems(events);
+          setItems(fullItems);
+          setMissionItems((prev) => ({ ...prev, [resumed.id]: fullItems }));
+        })
+        .catch(() => {}); // Keep basic history on failure
     } catch (err) {
       console.error("Failed to resume mission:", err);
       toast.error("Failed to resume mission");
@@ -2916,14 +3142,24 @@ export default function ControlClient() {
 
         // If we just reconnected, refresh the viewed mission's history to catch missed events
         if (wasReconnecting && viewingId) {
-          getMission(viewingId)
-            .then((mission) => {
+          Promise.all([getMission(viewingId), getMissionEvents(viewingId)])
+            .then(([mission, events]) => {
               if (!mounted) return;
-              const historyItems = missionHistoryToItems(mission);
+              const historyItems = eventsToItems(events);
               setItems(historyItems);
               setMissionItems((prev) => ({ ...prev, [viewingId]: historyItems }));
             })
-            .catch(() => {}); // Ignore errors - we'll get updates via stream
+            .catch(() => {
+              // Fall back to basic history if events fail
+              getMission(viewingId)
+                .then((mission) => {
+                  if (!mounted) return;
+                  const historyItems = missionHistoryToItems(mission);
+                  setItems(historyItems);
+                  setMissionItems((prev) => ({ ...prev, [viewingId]: historyItems }));
+                })
+                .catch(() => {}); // Ignore errors - we'll get updates via stream
+            });
         }
 
         const st = data["state"];
@@ -3359,20 +3595,33 @@ export default function ControlClient() {
   }, [streamDiagnostics, diagTick]);
 
   const handleCopyDiagnostics = useCallback(async () => {
+    const mission = viewingMission ?? currentMission;
     const payload = {
       captured_at: new Date().toISOString(),
+      mission: mission ? {
+        id: mission.id,
+        status: mission.status,
+        title: mission.title,
+        workspace_id: mission.workspace_id,
+        workspace_name: mission.workspace_name,
+      } : null,
+      stream: {
+        phase: streamDiagnostics.phase,
+        status: streamDiagnostics.status,
+        bytes: streamDiagnostics.bytes,
+        last_event: streamDiagnostics.lastEventAt,
+        last_error: streamDiagnostics.lastError,
+      },
       connection_state: connectionState,
       reconnect_attempt: reconnectAttempt,
-      stream: streamDiagnostics,
-      user_agent: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
     };
     try {
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-      toast.success("Copied stream diagnostics");
+      toast.success("Copied debug info");
     } catch {
-      toast.error("Failed to copy diagnostics");
+      toast.error("Failed to copy");
     }
-  }, [connectionState, reconnectAttempt, streamDiagnostics]);
+  }, [connectionState, reconnectAttempt, streamDiagnostics, viewingMission, currentMission]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -3380,23 +3629,27 @@ export default function ControlClient() {
     if (!content) return;
 
     const targetMissionId = viewingMissionIdRef.current;
-    const currentMissionId = currentMissionRef.current?.id ?? null;
 
-    if (targetMissionId && targetMissionId !== currentMissionId) {
+    // Always sync with backend before sending to prevent mission routing bugs.
+    // The backend's current_mission can get out of sync (e.g., from another tab or auto-creation).
+    if (targetMissionId) {
       try {
-        console.debug("[control] switching current mission before send", {
-          from: currentMissionId,
-          to: targetMissionId,
-        });
+        console.debug("[control] syncing mission before send", { targetMissionId });
         const mission = await loadMission(targetMissionId);
         setCurrentMission(mission);
         setViewingMission(mission);
         setViewingMissionId(mission.id);
-        setItems(missionHistoryToItems(mission));
+        // Only update items if history changed (avoid flicker for in-progress conversations)
+        const currentIds = items.filter(i => i.kind === "user" || i.kind === "assistant").map(i => i.id).join(",");
+        const newItems = missionHistoryToItems(mission);
+        const newIds = newItems.filter(i => i.kind === "user" || i.kind === "assistant").map(i => i.id).join(",");
+        if (currentIds !== newIds) {
+          setItems(newItems);
+        }
         applyDesktopSessionState(mission);
       } catch (err) {
-        console.error("Failed to switch mission before sending:", err);
-        toast.error("Failed to switch mission before sending");
+        console.error("Failed to sync mission before sending:", err);
+        toast.error("Failed to sync mission before sending");
         return;
       }
     }
@@ -3453,23 +3706,27 @@ export default function ControlClient() {
     if (!content.trim()) return;
 
     const targetMissionId = viewingMissionIdRef.current;
-    const currentMissionId = currentMissionRef.current?.id ?? null;
 
-    if (targetMissionId && targetMissionId !== currentMissionId) {
+    // Always sync with backend before sending to prevent mission routing bugs.
+    // The backend's current_mission can get out of sync (e.g., from another tab or auto-creation).
+    if (targetMissionId) {
       try {
-        console.debug("[control] switching current mission before send", {
-          from: currentMissionId,
-          to: targetMissionId,
-        });
+        console.debug("[control] syncing mission before send", { targetMissionId });
         const mission = await loadMission(targetMissionId);
         setCurrentMission(mission);
         setViewingMission(mission);
         setViewingMissionId(mission.id);
-        setItems(missionHistoryToItems(mission));
+        // Only update items if history changed (avoid flicker for in-progress conversations)
+        const currentIds = items.filter(i => i.kind === "user" || i.kind === "assistant").map(i => i.id).join(",");
+        const newItems = missionHistoryToItems(mission);
+        const newIds = newItems.filter(i => i.kind === "user" || i.kind === "assistant").map(i => i.id).join(",");
+        if (currentIds !== newIds) {
+          setItems(newItems);
+        }
         applyDesktopSessionState(mission);
       } catch (err) {
-        console.error("Failed to switch mission before sending:", err);
-        toast.error("Failed to switch mission before sending");
+        console.error("Failed to sync mission before sending:", err);
+        toast.error("Failed to sync mission before sending");
         return;
       }
     }
@@ -3834,139 +4091,92 @@ export default function ControlClient() {
               </>
             )}
 
-            {/* Stream diagnostics toggle */}
+            {/* Run state indicator with debug dropdown */}
             <div className="relative">
               <button
                 onClick={() => setShowStreamDiagnostics((prev) => !prev)}
-                className="flex items-center gap-2 rounded-md border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5 text-xs text-white/70 transition-colors hover:bg-white/[0.04]"
-                title="Stream diagnostics"
+                className={cn(
+                  "flex items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-white/[0.04]",
+                  status.className
+                )}
+                title="Click for debug info"
               >
-                <span
+                <StatusIcon
                   className={cn(
-                    "h-2 w-2 rounded-full",
-                    (streamDiagnostics.phase === "streaming" || streamDiagnostics.phase === "open") &&
-                      "bg-emerald-400",
-                    streamDiagnostics.phase === "connecting" && "bg-amber-400 animate-pulse",
-                    streamDiagnostics.phase === "error" && "bg-red-400",
-                    streamDiagnostics.phase === "closed" && "bg-white/30",
-                    streamDiagnostics.phase === "idle" && "bg-white/20"
+                    "h-3.5 w-3.5",
+                    runState !== "idle" && "animate-spin"
                   )}
                 />
-                Stream
-                <ChevronDown className="h-3 w-3 text-white/50" />
+                <span className="text-sm font-medium">{status.label}</span>
               </button>
 
               {showStreamDiagnostics && (
-                <div className="absolute right-0 top-full z-50 mt-2 w-[360px] rounded-lg border border-white/[0.08] bg-[#121214] p-3 shadow-xl">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium text-white/80">Stream diagnostics</span>
-                    <button
-                      onClick={handleCopyDiagnostics}
-                      className="text-[11px] text-white/50 hover:text-white/80 transition-colors"
-                    >
-                      Copy
-                    </button>
-                  </div>
+                <div className="absolute right-0 top-full z-50 mt-2 w-[280px] rounded-lg border border-white/[0.08] bg-[#121214] p-2.5 shadow-xl">
+                  {/* Mission Info */}
+                  {(viewingMission ?? currentMission) && (
+                    <div className="space-y-0.5 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-white/40">Mission</span>
+                        <span className="font-mono text-[11px] text-white/60 select-all">
+                          {(viewingMission ?? currentMission)?.id.slice(0, 8)}
+                        </span>
+                      </div>
+                      {(viewingMission ?? currentMission)?.workspace_name && (
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-white/40">Workspace</span>
+                          <span className="font-mono text-white/80">{(viewingMission ?? currentMission)?.workspace_name}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
-                  <div className="mt-2 space-y-1 text-xs text-white/70">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-white/40">Phase</span>
-                      <span className="font-mono text-white/80">{streamDiagnostics.phase}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-white/40">URL</span>
-                      <span className="max-w-[230px] truncate font-mono text-white/80">
-                        {streamDiagnostics.url ?? "—"}
+                  {/* Stream Status */}
+                  <div className={cn("space-y-0.5 text-xs", (viewingMission ?? currentMission) && "mt-2 pt-2 border-t border-white/[0.06]")}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-white/40">Stream</span>
+                      <span className="flex items-center gap-1.5 font-mono text-white/80">
+                        <span
+                          className={cn(
+                            "h-1.5 w-1.5 rounded-full",
+                            (streamDiagnostics.phase === "streaming" || streamDiagnostics.phase === "open") && "bg-emerald-400",
+                            streamDiagnostics.phase === "connecting" && "bg-amber-400",
+                            streamDiagnostics.phase === "error" && "bg-red-400",
+                            (streamDiagnostics.phase === "closed" || streamDiagnostics.phase === "idle") && "bg-white/30"
+                          )}
+                        />
+                        {streamDiagnostics.phase}
                       </span>
                     </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-white/40">Status</span>
-                      <span className="font-mono text-white/80">
-                        {typeof streamDiagnostics.status === "number"
-                          ? streamDiagnostics.status
-                          : "—"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-white/40">Content-Type</span>
-                      <span className="max-w-[230px] truncate font-mono text-white/80">
-                        {streamDiagnostics.contentType ?? "—"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-white/40">Content-Encoding</span>
-                      <span className="max-w-[230px] truncate font-mono text-white/80">
-                        {streamDiagnostics.contentEncoding ?? "—"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-white/40">Cache-Control</span>
-                      <span className="max-w-[230px] truncate font-mono text-white/80">
-                        {streamDiagnostics.cacheControl ?? "—"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-white/40">Transfer-Encoding</span>
-                      <span className="max-w-[230px] truncate font-mono text-white/80">
-                        {streamDiagnostics.transferEncoding ?? "—"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-white/40">Server/Via</span>
-                      <span className="max-w-[230px] truncate font-mono text-white/80">
-                        {[streamDiagnostics.server, streamDiagnostics.via]
-                          .filter(Boolean)
-                          .join(" • ") || "—"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-white/40">Last event</span>
-                      <span className="font-mono text-white/80">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-white/40">Activity</span>
+                      <span className="font-mono text-white/60 text-[11px]">
                         {formatDiagAge(streamDiagnostics.lastEventAt)}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-white/40">Last chunk</span>
-                      <span className="font-mono text-white/80">
-                        {formatDiagAge(streamDiagnostics.lastChunkAt)}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-white/40">Bytes</span>
-                      <span className="font-mono text-white/80">
-                        {streamDiagnostics.bytes.toLocaleString()}
                       </span>
                     </div>
                   </div>
 
                   {streamDiagnostics.lastError && (
-                    <div className="mt-2 rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs text-red-300">
+                    <div className="mt-2 rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] text-red-300">
                       {streamDiagnostics.lastError}
                     </div>
                   )}
 
                   {streamHints.length > 0 && (
-                    <div className="mt-2 space-y-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
+                    <div className="mt-2 space-y-0.5 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
                       {streamHints.map((hint) => (
                         <div key={hint}>{hint}</div>
                       ))}
                     </div>
                   )}
+
+                  <button
+                    onClick={handleCopyDiagnostics}
+                    className="mt-2 w-full text-center text-[11px] text-white/40 hover:text-white/70 transition-colors"
+                  >
+                    Copy debug info
+                  </button>
                 </div>
               )}
-            </div>
-
-            <div className="h-4 w-px bg-white/[0.08]" />
-
-            {/* Run state indicator */}
-            <div className={cn("flex items-center gap-2", status.className)}>
-              <StatusIcon
-                className={cn(
-                  "h-3.5 w-3.5",
-                  runState !== "idle" && "animate-spin"
-                )}
-              />
-              <span className="text-sm font-medium">{status.label}</span>
             </div>
 
             {/* Queue count */}

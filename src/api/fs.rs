@@ -23,6 +23,8 @@ struct RuntimeWorkspace {
     mission_context: Option<String>,
     context_root: Option<String>,
     context_dir_name: Option<String>,
+    workspace_root: Option<String>,
+    workspace_type: Option<String>,
 }
 
 fn runtime_workspace_path() -> PathBuf {
@@ -42,6 +44,121 @@ fn load_runtime_workspace() -> Option<RuntimeWorkspace> {
     let path = runtime_workspace_path();
     let contents = std::fs::read_to_string(path).ok()?;
     serde_json::from_str::<RuntimeWorkspace>(&contents).ok()
+}
+
+fn is_container_workspace(state: &RuntimeWorkspace) -> bool {
+    matches!(state.workspace_type.as_deref(), Some("chroot"))
+}
+
+fn workspace_root_path(state: &RuntimeWorkspace) -> Option<PathBuf> {
+    state
+        .workspace_root
+        .as_ref()
+        .map(|root| root.trim())
+        .filter(|root| !root.is_empty())
+        .map(PathBuf::from)
+}
+
+fn map_container_path_to_host(path: &Path, state: &RuntimeWorkspace) -> Option<PathBuf> {
+    let root = workspace_root_path(state)?;
+    let rel = path.strip_prefix("/").unwrap_or(path);
+    Some(root.join(rel))
+}
+
+fn resolve_download_path(
+    path: &str,
+    fallback_root: Option<&Path>,
+) -> Result<PathBuf, (StatusCode, String)> {
+    let input = Path::new(path);
+
+    if input.is_absolute() {
+        // Remap /root/context to mission-specific context if available
+        if path.starts_with("/root/context") {
+            if let Some(state) = load_runtime_workspace() {
+                if let Some(ctx) = state.mission_context {
+                    let suffix = path.trim_start_matches("/root/context");
+                    return Ok(PathBuf::from(ctx).join(suffix.trim_start_matches('/')));
+                }
+                if let Some(root) = state.context_root {
+                    let suffix = path.trim_start_matches("/root/context");
+                    return Ok(PathBuf::from(root).join(suffix.trim_start_matches('/')));
+                }
+            }
+            if let Ok(context_root) = std::env::var("OPEN_AGENT_CONTEXT_ROOT") {
+                let context_root = context_root.trim();
+                if !context_root.is_empty() {
+                    let suffix = path.trim_start_matches("/root/context");
+                    return Ok(PathBuf::from(context_root).join(suffix.trim_start_matches('/')));
+                }
+            }
+        }
+
+        if let Some(state) = load_runtime_workspace() {
+            if is_container_workspace(&state) && !input.exists() {
+                if let Some(mapped) = map_container_path_to_host(input, &state) {
+                    if mapped.exists() {
+                        return Ok(mapped);
+                    }
+                }
+            }
+        }
+
+        return Ok(input.to_path_buf());
+    }
+
+    if let Some(state) = load_runtime_workspace() {
+        if let Some(wd) = state
+            .working_dir
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            let base = PathBuf::from(wd);
+            if is_container_workspace(&state) {
+                if let Some(mapped_base) = map_container_path_to_host(&base, &state) {
+                    return Ok(mapped_base.join(path));
+                }
+            }
+            return Ok(base.join(path));
+        }
+
+        if is_container_workspace(&state) {
+            if let Some(root) = workspace_root_path(&state) {
+                return Ok(root.join(path));
+            }
+        }
+    }
+
+    if let Some(root) = fallback_root {
+        return Ok(root.join(path));
+    }
+
+    Err((
+        StatusCode::BAD_REQUEST,
+        "Relative download path requires an active workspace".to_string(),
+    ))
+}
+
+fn content_type_for_path(path: &Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+
+    match ext.as_deref() {
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        Some("svg") => "image/svg+xml",
+        Some("pdf") => "application/pdf",
+        Some("txt") => "text/plain; charset=utf-8",
+        Some("md") => "text/markdown; charset=utf-8",
+        Some("json") => "application/json",
+        Some("csv") => "text/csv; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
 fn resolve_upload_base(path: &str) -> Result<PathBuf, (StatusCode, String)> {
@@ -283,10 +400,16 @@ pub async fn rm(
 }
 
 pub async fn download(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Query(q): Query<PathQuery>,
 ) -> Result<Response, (StatusCode, String)> {
-    let filename = q.path.split('/').last().unwrap_or("download");
+    let resolved_path = resolve_download_path(&q.path, Some(&state.config.working_dir))?;
+    let filename = q
+        .path
+        .split('/')
+        .last()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("download");
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_DISPOSITION,
@@ -296,10 +419,10 @@ pub async fn download(
     );
     headers.insert(
         header::CONTENT_TYPE,
-        "application/octet-stream".parse().unwrap(),
+        content_type_for_path(&resolved_path).parse().unwrap(),
     );
 
-    let file = tokio::fs::File::open(&q.path)
+    let file = tokio::fs::File::open(&resolved_path)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, format!("File not found: {}", e)))?;
     let stream = ReaderStream::new(file);

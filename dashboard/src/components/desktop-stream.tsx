@@ -6,6 +6,7 @@ import { getValidJwt } from "@/lib/auth";
 import { getRuntimeApiBase } from "@/lib/settings";
 import {
   Monitor,
+  MonitorOff,
   Play,
   Pause,
   RefreshCw,
@@ -418,14 +419,25 @@ export function DesktopStream({
             <span className="text-sm">Connecting to desktop...</span>
           </div>
         ) : (
-          <div className="flex flex-col items-center gap-3 text-white/60">
-            <Monitor className="w-12 h-12 text-red-400/60" />
-            <p className="max-w-[85%] text-sm text-red-400 text-center break-words whitespace-pre-wrap">
-              {errorMessage || "Connection lost"}
-            </p>
+          <div className="flex flex-col items-center gap-4 text-white/60 px-6 py-8">
+            <MonitorOff className="w-14 h-14 text-red-400/50" />
+            <div className="flex flex-col items-center gap-1.5 text-center">
+              <h3 className="text-base font-medium text-white/80">
+                {errorMessage?.includes("no longer available") ||
+                errorMessage?.includes("session may have")
+                  ? "Desktop Unavailable"
+                  : "Connection Lost"}
+              </h3>
+              <p className="max-w-[280px] text-sm text-white/50 leading-relaxed">
+                {errorMessage?.includes("no longer available") ||
+                errorMessage?.includes("session may have")
+                  ? `Display ${displayId} has been closed. Select another session from the dropdown above.`
+                  : errorMessage || "Unable to connect to the desktop stream."}
+              </p>
+            </div>
             <button
               onClick={connect}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500 text-white text-sm hover:bg-indigo-600 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-500 text-white text-sm font-medium hover:bg-indigo-600 transition-colors"
             >
               <RefreshCw className="w-4 h-4" />
               Reconnect

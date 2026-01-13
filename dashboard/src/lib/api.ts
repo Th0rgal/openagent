@@ -368,6 +368,36 @@ export async function getMission(id: string): Promise<Mission> {
   return res.json();
 }
 
+// Stored event from SQLite (for event replay)
+export interface StoredEvent {
+  id: number;
+  mission_id: string;
+  sequence: number;
+  event_type: string;
+  timestamp: string;
+  event_id?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  content: string;
+  metadata: Record<string, unknown>;
+}
+
+// Get mission events (for history replay including tool calls)
+export async function getMissionEvents(
+  id: string,
+  options?: { types?: string[]; limit?: number; offset?: number }
+): Promise<StoredEvent[]> {
+  const params = new URLSearchParams();
+  if (options?.types?.length) params.set("types", options.types.join(","));
+  if (options?.limit) params.set("limit", String(options.limit));
+  if (options?.offset) params.set("offset", String(options.offset));
+  const query = params.toString();
+  const url = `/api/control/missions/${id}/events${query ? `?${query}` : ""}`;
+  const res = await apiFetch(url);
+  if (!res.ok) throw new Error("Failed to fetch mission events");
+  return res.json();
+}
+
 // Get current mission
 export async function getCurrentMission(): Promise<Mission | null> {
   const res = await apiFetch("/api/control/missions/current");

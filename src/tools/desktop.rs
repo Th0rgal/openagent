@@ -118,6 +118,19 @@ impl Tool for StartSession {
         let _ = std::fs::remove_file(&lock_file);
         let _ = std::fs::remove_file(&socket_file);
 
+        let x11_socket_dir = std::path::Path::new("/tmp/.X11-unix");
+        if !x11_socket_dir.exists() {
+            std::fs::create_dir_all(x11_socket_dir)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(
+                    x11_socket_dir,
+                    std::fs::Permissions::from_mode(0o1777),
+                );
+            }
+        }
+
         // Start Xvfb
         let xvfb_args = format!("{} -screen 0 {}x24", display_id, resolution);
         let mut xvfb = Command::new("Xvfb")

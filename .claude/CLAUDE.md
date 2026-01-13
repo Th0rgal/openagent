@@ -20,8 +20,7 @@ Open Agent is a managed control plane for OpenCode-based agents. The backend **d
 - **Per-Workspace**: Skills, tools, plugins/hooks, installed software (container only), file isolation
 - **Per-Mission**: Agent selection, workspace selection, conversation history
 
-MCPs are global because they run as child processes on the host, not inside containers.
-Skills and tools are synced to workspace `.opencode/skill/` and `.opencode/tool/` directories.
+MCPs can be global because and run as child processes on the host or workspace (run inside the container). It depends on the kind of MCP.
 
 ## Design Guardrails
 
@@ -39,10 +38,12 @@ Skills and tools are synced to workspace `.opencode/skill/` and `.opencode/tool/
 
 ## Local Dev
 
+The backend must be deployed on a remote linux server and ran in debug mode (release is too slow).
+
 ```bash
-# Backend
+# Backend (url is https://agent-backend.thomas.md but remote is 95.216.112.253)
 export OPENCODE_BASE_URL="http://127.0.0.1:4096"
-cargo run --release
+cargo run --debug
 
 # Dashboard
 cd dashboard

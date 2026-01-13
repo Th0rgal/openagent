@@ -236,10 +236,11 @@ If you develop locally, a fast deploy loop is to `rsync` source to the server an
 ```bash
 rsync -az --delete \
   --exclude target --exclude .git --exclude dashboard/node_modules \
-  -e "ssh -i ~/.ssh/cursor" \
   /path/to/vaduz-v1/ \
   root@<server-ip>:/opt/open_agent/vaduz-v1/
 ```
+
+If you need to specify a custom SSH key, add `-e "ssh -i ~/.ssh/your_key"`.
 
 ### 4.3 Build and install binaries
 
