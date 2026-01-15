@@ -11,6 +11,7 @@
 		03176DF3878C25A0B557462C /* ToolUIOptionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4D419C8490A0C5FC4DCDF20 /* ToolUIOptionListView.swift */; };
 		0620B298DEF91DFCAE050DAC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 66A48A20D2178760301256C9 /* Assets.xcassets */; };
 		0B5E1A6153270BFF21A54C23 /* TerminalState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52DDF35DB8CD7D70F3CFC4A6 /* TerminalState.swift */; };
+		WORKSPACE1234567890ABCDEF /* WorkspaceState.swift in Sources */ = {isa = PBXBuildFile; fileRef = WORKSPACEREF1234567890AB /* WorkspaceState.swift */; };
 		1BBE749F3758FD704D1BFA0B /* ToolUIDataTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45213C3E550D451EDC566CDE /* ToolUIDataTableView.swift */; };
 		29372E691F6A5C5D2CCD9331 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A09A33A3A1A99446C8A88DC /* HistoryView.swift */; };
 		2E26F9659B38872F562C3B2B /* WorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91BF18B4AEAEB407887401AC /* WorkspacesView.swift */; };
@@ -39,6 +40,7 @@
 		EFABDC95B65F6ED3420186FC /* NewMissionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A8191F935AB50463216395 /* NewMissionSheet.swift */; };
 		FA7E68F22D16E1AC0B5F5E22 /* StatusBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD6FB2E54DC07BE7A1EB08F8 /* StatusBadge.swift */; };
 		FF9C447978711CBA9185B8B0 /* OpenAgentDashboardApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 139C740B7D55C13F3B167EF3 /* OpenAgentDashboardApp.swift */; };
+		SETTINGSVIEWBUILD1234567 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SETTINGSVIEWREF123456789 /* SettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -65,6 +67,7 @@
 		504A1222CE8971417834D229 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		5267DE67017A858357F68424 /* GlassButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassButton.swift; sourceTree = "<group>"; };
 		52DDF35DB8CD7D70F3CFC4A6 /* TerminalState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalState.swift; sourceTree = "<group>"; };
+		WORKSPACEREF1234567890AB /* WorkspaceState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceState.swift; sourceTree = "<group>"; };
 		5908645A518F48B501390AB8 /* FilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesView.swift; sourceTree = "<group>"; };
 		5A09A33A3A1A99446C8A88DC /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		66A48A20D2178760301256C9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -88,9 +91,18 @@
 		EB5A4720378F06807FDE73E1 /* GlassCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassCard.swift; sourceTree = "<group>"; };
 		F51395D8FB559D3C79AAA0A4 /* OpenAgentDashboard.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = OpenAgentDashboard.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FCA36F5FA00B575DDD336598 /* DesktopStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopStreamView.swift; sourceTree = "<group>"; };
+		SETTINGSVIEWREF123456789 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		SETTINGSGROUP123456789A /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				SETTINGSVIEWREF123456789 /* SettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
 		0C1185300420EEF31B892A3A /* Files */ = {
 			isa = PBXGroup;
 			children = (
@@ -171,6 +183,7 @@
 				A688A831235D3E218A0A6783 /* Desktop */,
 				0C1185300420EEF31B892A3A /* Files */,
 				5A40B212F0D2055C1C499FCC /* History */,
+				SETTINGSGROUP123456789A /* Settings */,
 				0D9369EE2F3374EAA1EF332E /* Terminal */,
 				2E7A509F8D87B5FCDE5387AF /* Workspaces */,
 			);
@@ -249,6 +262,7 @@
 				A07EFDD6964AA3B251967041 /* DesktopStreamService.swift */,
 				3729F39FBF53046124D05BC1 /* NavigationState.swift */,
 				52DDF35DB8CD7D70F3CFC4A6 /* TerminalState.swift */,
+				WORKSPACEREF1234567890AB /* WorkspaceState.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -373,6 +387,7 @@
 				EFABDC95B65F6ED3420186FC /* NewMissionSheet.swift in Sources */,
 				FF9C447978711CBA9185B8B0 /* OpenAgentDashboardApp.swift in Sources */,
 				51436A7671B1E3C8478F81A2 /* RunningMissionsBar.swift in Sources */,
+				SETTINGSVIEWBUILD1234567 /* SettingsView.swift in Sources */,
 				FA7E68F22D16E1AC0B5F5E22 /* StatusBadge.swift in Sources */,
 				0B5E1A6153270BFF21A54C23 /* TerminalState.swift in Sources */,
 				4D0CF2666262F45370D000DF /* TerminalView.swift in Sources */,
@@ -383,6 +398,7 @@
 				3361B14E949CB2A6E75B6962 /* ToolUIView.swift in Sources */,
 				6DCB8CE8092980A29DA5EE9A /* Workspace.swift in Sources */,
 				2E26F9659B38872F562C3B2B /* WorkspacesView.swift in Sources */,
+				WORKSPACE1234567890ABCDEF /* WorkspaceState.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

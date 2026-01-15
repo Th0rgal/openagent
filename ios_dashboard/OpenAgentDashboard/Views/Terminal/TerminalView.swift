@@ -9,10 +9,11 @@ import SwiftUI
 
 struct TerminalView: View {
     private var state = TerminalState.shared
+    private var workspaceState = WorkspaceState.shared
     @State private var inputText = ""
-    
+
     @FocusState private var isInputFocused: Bool
-    
+
     private let api = APIService.shared
     
     // Convenience accessors
@@ -40,6 +41,35 @@ struct TerminalView: View {
         .navigationTitle("Terminal")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                // Workspace selector
+                Menu {
+                    ForEach(workspaceState.workspaces) { workspace in
+                        Button {
+                            workspaceState.selectWorkspace(id: workspace.id)
+                            // Reconnect to the new workspace
+                            disconnect()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                connect()
+                            }
+                            HapticService.selectionChanged()
+                        } label: {
+                            HStack {
+                                Label(workspace.displayLabel, systemImage: workspace.workspaceType.icon)
+                                if workspaceState.selectedWorkspace?.id == workspace.id {
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "square.stack.3d.up")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+            }
+
             ToolbarItem(placement: .topBarTrailing) {
                 // Unified status pill
                 HStack(spacing: 0) {
@@ -55,12 +85,12 @@ struct TerminalView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(connectionStatus == .connected ? Theme.success.opacity(0.15) : Color.clear)
-                    
+
                     // Divider
                     Rectangle()
                         .fill(Theme.border)
                         .frame(width: 1)
-                    
+
                     // Action side
                     Button {
                         if connectionStatus == .connected {
@@ -76,15 +106,18 @@ struct TerminalView: View {
                             .padding(.vertical, 6)
                     }
                 }
-                .background(Theme.backgroundSecondary)
                 .clipShape(Capsule())
                 .overlay(
                     Capsule()
-                        .stroke(Theme.border, lineWidth: 1)
+                        .stroke(Theme.border, lineWidth: 0.5)
                 )
             }
         }
-        .onAppear {
+        .task {
+            // Load workspaces if not already loaded
+            if workspaceState.workspaces.isEmpty {
+                await workspaceState.loadWorkspaces()
+            }
             connect()
         }
         .onDisappear {
@@ -222,10 +255,12 @@ struct TerminalView: View {
     
     private func connect() {
         guard state.connectionStatus != .connected && !state.isConnecting else { return }
-        
+
         state.isConnecting = true
         state.connectionStatus = .connecting
-        state.appendLine(TerminalLine(text: "Connecting to \(api.baseURL)...", type: .system))
+
+        let workspaceName = workspaceState.currentWorkspaceLabel
+        state.appendLine(TerminalLine(text: "Connecting to \(workspaceName)...", type: .system))
         
         guard let wsURL = buildWebSocketURL() else {
             state.appendLine(TerminalLine(text: "Invalid WebSocket URL", type: .error))
@@ -268,7 +303,14 @@ struct TerminalView: View {
     private func buildWebSocketURL() -> URL? {
         guard var components = URLComponents(string: api.baseURL) else { return nil }
         components.scheme = components.scheme == "https" ? "wss" : "ws"
-        components.path = "/api/console/ws"
+
+        // Use workspace-specific shell if a non-default workspace is selected
+        if let workspace = workspaceState.selectedWorkspace, !workspace.isDefault {
+            components.path = "/api/workspaces/\(workspace.id)/shell"
+        } else {
+            components.path = "/api/console/ws"
+        }
+
         return components.url
     }
     

@@ -117,7 +117,8 @@ final class DesktopStreamService: NSObject {
     // MARK: - Private
 
     private func buildWebSocketURL(displayId: String) -> URL? {
-        let baseURL = UserDefaults.standard.string(forKey: "api_base_url") ?? "https://agent-backend.thomas.md"
+        let baseURL = APIService.shared.baseURL
+        guard !baseURL.isEmpty else { return nil }
 
         // Convert https to wss, http to ws
         var wsURL = baseURL

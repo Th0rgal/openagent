@@ -41,10 +41,10 @@ struct ControlView: View {
     @State private var desktopDisplayId = ":101"
     private let availableDisplays = [":99", ":100", ":101", ":102"]
 
-    // Workspace selection state
-    @State private var workspaces: [Workspace] = []
+    // Workspace selection state (global)
+    private var workspaceState = WorkspaceState.shared
     @State private var showNewMissionSheet = false
-    @State private var selectedWorkspaceId: String? = nil
+    @State private var showSettings = false
 
     @FocusState private var isInputFocused: Bool
     
@@ -120,25 +120,48 @@ struct ControlView: View {
             }
             
             ToolbarItem(placement: .topBarLeading) {
-                // Running missions toggle
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showRunningMissions.toggle()
-                    }
-                    HapticService.selectionChanged()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "square.stack.3d.up")
-                            .font(.system(size: 14))
-                        if !runningMissions.isEmpty {
-                            Text("\(runningMissions.count)")
-                                .font(.caption2.weight(.semibold))
+                // Workspace selector menu
+                Menu {
+                    // Workspace selection section
+                    Section("Workspace") {
+                        ForEach(workspaceState.workspaces) { workspace in
+                            Button {
+                                workspaceState.selectWorkspace(id: workspace.id)
+                                HapticService.selectionChanged()
+                            } label: {
+                                HStack {
+                                    Label(workspace.displayLabel, systemImage: workspace.workspaceType.icon)
+                                    if workspaceState.selectedWorkspace?.id == workspace.id {
+                                        Spacer()
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
                         }
                     }
-                    .foregroundStyle(showRunningMissions ? Theme.accent : Theme.textSecondary)
+
+                    // Running missions section
+                    if !runningMissions.isEmpty {
+                        Section("Running Missions (\(runningMissions.count))") {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showRunningMissions.toggle()
+                                }
+                            } label: {
+                                Label(
+                                    showRunningMissions ? "Hide Running Missions" : "Show Running Missions",
+                                    systemImage: "square.stack.3d.up"
+                                )
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "square.stack.3d.up")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.textSecondary)
                 }
             }
-            
+
             ToolbarItem(placement: .topBarTrailing) {
                 // Desktop stream button
                 Button {
@@ -155,7 +178,7 @@ struct ControlView: View {
                 Menu {
                     Button {
                         Task {
-                            await loadWorkspaces()
+                            await workspaceState.loadWorkspaces()
                             showNewMissionSheet = true
                         }
                     } label: {
@@ -179,6 +202,14 @@ struct ControlView: View {
                         }
                     } label: {
                         Label("View Desktop (\(desktopDisplayId))", systemImage: "display")
+                    }
+
+                    Divider()
+
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
                     }
 
                     if let mission = viewingMission {
@@ -220,6 +251,9 @@ struct ControlView: View {
             }
         }
         .task {
+            // Load workspaces for the workspace picker
+            await workspaceState.loadWorkspaces()
+
             // Check if we're being opened with a specific mission from History
             if let pendingId = nav.consumePendingMission() {
                 await loadMission(id: pendingId)
@@ -228,15 +262,15 @@ struct ControlView: View {
             } else {
                 await loadCurrentMission(updateViewing: true)
             }
-            
+
             // Fetch initial running missions
             await refreshRunningMissions()
-            
+
             // Auto-show bar if there are multiple running missions
             if runningMissions.count > 1 {
                 showRunningMissions = true
             }
-            
+
             startStreaming()
             startPollingRunningMissions()
         }
@@ -269,8 +303,11 @@ struct ControlView: View {
         }
         .sheet(isPresented: $showNewMissionSheet) {
             NewMissionSheet(
-                workspaces: workspaces,
-                selectedWorkspaceId: $selectedWorkspaceId,
+                workspaces: workspaceState.workspaces,
+                selectedWorkspaceId: Binding(
+                    get: { workspaceState.selectedWorkspace?.id },
+                    set: { if let id = $0 { workspaceState.selectWorkspace(id: id) } }
+                ),
                 onCreate: { workspaceId in
                     showNewMissionSheet = false
                     Task { await createNewMission(workspaceId: workspaceId) }
@@ -282,8 +319,11 @@ struct ControlView: View {
             .presentationDetents([.medium])
             .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+        }
     }
-    
+
     // MARK: - Running Missions Bar
     
     private var runningMissionsBar: some View {
@@ -521,41 +561,6 @@ struct ControlView: View {
                     .lineSpacing(4)
             }
             
-            // Quick action templates
-            VStack(spacing: 12) {
-                Text("Quick actions:")
-                    .font(.caption)
-                    .foregroundStyle(Theme.textMuted)
-
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                    quickActionButton(
-                        icon: "doc.text.fill",
-                        title: "Analyze files",
-                        prompt: "Read the files in /root/context and summarize what they contain",
-                        color: Theme.accent
-                    )
-                    quickActionButton(
-                        icon: "globe",
-                        title: "Search web",
-                        prompt: "Search the web for the latest news about ",
-                        color: Theme.success
-                    )
-                    quickActionButton(
-                        icon: "chevron.left.forwardslash.chevron.right",
-                        title: "Write code",
-                        prompt: "Write a Python script that ",
-                        color: Theme.warning
-                    )
-                    quickActionButton(
-                        icon: "terminal.fill",
-                        title: "Run command",
-                        prompt: "Run the command: ",
-                        color: Theme.info
-                    )
-                }
-            }
-            .padding(.top, 8)
-            
             Spacer()
             Spacer()
         }
@@ -581,34 +586,6 @@ struct ControlView: View {
         }
     }
 
-    private func quickActionButton(icon: String, title: String, prompt: String, color: Color) -> some View {
-        Button {
-            inputText = prompt
-            isInputFocused = true
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 14))
-                    .foregroundStyle(color)
-                    .frame(width: 20)
-
-                Text(title)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(Theme.textSecondary)
-
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(Theme.backgroundSecondary)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Theme.border, lineWidth: 1)
-            )
-        }
-    }
-    
     // MARK: - Input
 
     private var inputView: some View {
@@ -781,23 +758,6 @@ struct ControlView: View {
         }
     }
 
-    private func loadWorkspaces() async {
-        do {
-            workspaces = try await api.listWorkspaces()
-            // Validate selected workspace still exists, reset to default if not
-            if let selected = selectedWorkspaceId, !workspaces.contains(where: { $0.id == selected }) {
-                selectedWorkspaceId = nil
-            }
-            // Default to host workspace if none selected
-            if selectedWorkspaceId == nil, let defaultWorkspace = workspaces.first(where: { $0.isDefault }) {
-                selectedWorkspaceId = defaultWorkspace.id
-            }
-        } catch {
-            print("Failed to load workspaces: \(error)")
-            workspaces = []
-            selectedWorkspaceId = nil
-        }
-    }
     
     private func setMissionStatus(_ status: MissionStatus) async {
         guard let mission = viewingMission else { return }

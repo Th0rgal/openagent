@@ -83,52 +83,21 @@ struct HistoryView: View {
                             .stroke(Theme.border, lineWidth: 1)
                     )
                     
-                    // Filter pills and cleanup button
-                    HStack(spacing: 12) {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(StatusFilter.allCases, id: \.rawValue) { filter in
-                                    FilterPill(
-                                        title: filter.rawValue,
-                                        isSelected: selectedFilter == filter
-                                    ) {
-                                        withAnimation(.easeInOut(duration: 0.2)) {
-                                            selectedFilter = filter
-                                        }
-                                        HapticService.selectionChanged()
+                    // Filter pills
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(StatusFilter.allCases, id: \.rawValue) { filter in
+                                FilterPill(
+                                    title: filter.rawValue,
+                                    isSelected: selectedFilter == filter
+                                ) {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        selectedFilter = filter
                                     }
+                                    HapticService.selectionChanged()
                                 }
                             }
                         }
-
-                        // Cleanup button
-                        Button {
-                            Task { await cleanupEmptyMissions() }
-                        } label: {
-                            HStack(spacing: 6) {
-                                if isCleaningUp {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                        .tint(Theme.textSecondary)
-                                } else {
-                                    Image(systemName: "sparkles")
-                                        .font(.caption)
-                                }
-                                Text("Cleanup")
-                                    .font(.caption.weight(.medium))
-                            }
-                            .foregroundStyle(Theme.textSecondary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Capsule())
-                            .overlay(
-                                Capsule()
-                                    .stroke(Theme.border, lineWidth: 0.5)
-                            )
-                        }
-                        .disabled(isCleaningUp)
-                        .opacity(isCleaningUp ? 0.6 : 1)
                     }
                 }
                 .padding()
@@ -157,25 +126,52 @@ struct HistoryView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
                 
-                // Content
-                if isLoading {
-                    LoadingView(message: "Loading history...")
-                } else if let error = errorMessage {
-                    EmptyStateView(
-                        icon: "exclamationmark.triangle",
-                        title: "Failed to Load",
-                        message: error,
-                        action: { Task { await loadData() } },
-                        actionLabel: "Retry"
-                    )
-                } else if filteredMissions.isEmpty && tasks.isEmpty {
-                    EmptyStateView(
-                        icon: "clock.arrow.circlepath",
-                        title: "No History",
-                        message: "Your missions will appear here"
-                    )
-                } else {
-                    missionsList
+                // Content with floating cleanup button
+                ZStack(alignment: .bottomTrailing) {
+                    if isLoading {
+                        LoadingView(message: "Loading history...")
+                    } else if let error = errorMessage {
+                        EmptyStateView(
+                            icon: "exclamationmark.triangle",
+                            title: "Failed to Load",
+                            message: error,
+                            action: { Task { await loadData() } },
+                            actionLabel: "Retry"
+                        )
+                    } else if filteredMissions.isEmpty && tasks.isEmpty {
+                        EmptyStateView(
+                            icon: "clock.arrow.circlepath",
+                            title: "No History",
+                            message: "Your missions will appear here"
+                        )
+                    } else {
+                        missionsList
+                    }
+
+                    // Floating cleanup button
+                    Button {
+                        Task { await cleanupEmptyMissions() }
+                    } label: {
+                        Group {
+                            if isCleaningUp {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                    .tint(.white)
+                            } else {
+                                Image(systemName: "sparkles")
+                                    .font(.body.weight(.medium))
+                            }
+                        }
+                        .foregroundStyle(.white)
+                        .frame(width: 48, height: 48)
+                        .background(Theme.accent)
+                        .clipShape(Circle())
+                        .shadow(color: Theme.accent.opacity(0.4), radius: 8, x: 0, y: 4)
+                    }
+                    .disabled(isCleaningUp)
+                    .opacity(isCleaningUp ? 0.7 : 1)
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 20)
                 }
             }
         }
@@ -388,16 +384,11 @@ private struct MissionRow: View {
                 
                 HStack(spacing: 8) {
                     StatusBadge(status: mission.status.statusType, compact: true)
-                    
-                    if mission.canResume {
-                        Text("Resumable")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(Theme.warning)
-                    }
-                    
-                    Text("\(mission.history.count) messages")
+
+                    Text("\(mission.history.count) msg")
                         .font(.caption)
                         .foregroundStyle(Theme.textTertiary)
+                        .fixedSize()
                 }
             }
             

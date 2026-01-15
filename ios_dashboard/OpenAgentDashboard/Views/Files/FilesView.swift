@@ -9,6 +9,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct FilesView: View {
+    private var workspaceState = WorkspaceState.shared
     @State private var currentPath = "/root/context"
     @State private var entries: [FileEntry] = []
     @State private var isLoading = false
@@ -21,10 +22,13 @@ struct FilesView: View {
     @State private var showingNewFolderAlert = false
     @State private var newFolderName = ""
     @State private var isImporting = false
-    
+
     // Track pending path fetch to prevent race conditions
     @State private var fetchingPath: String?
-    
+
+    // Track workspace changes
+    @State private var lastWorkspaceId: String?
+
     private let api = APIService.shared
     
     private var sortedEntries: [FileEntry] {
@@ -88,44 +92,71 @@ struct FilesView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                // Quick nav menu
+                // Workspace selector
                 Menu {
-                    Button {
-                        navigateTo("/root/context")
-                    } label: {
-                        Label("Context", systemImage: "tray.and.arrow.down")
+                    // Workspace selection section
+                    Section("Workspace") {
+                        ForEach(workspaceState.workspaces) { workspace in
+                            Button {
+                                workspaceState.selectWorkspace(id: workspace.id)
+                                // Navigate to the workspace's base path
+                                navigateTo(workspaceState.filesBasePath)
+                                HapticService.selectionChanged()
+                            } label: {
+                                HStack {
+                                    Label(workspace.displayLabel, systemImage: workspace.workspaceType.icon)
+                                    if workspaceState.selectedWorkspace?.id == workspace.id {
+                                        Spacer()
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
                     }
-                    
-                    Button {
-                        navigateTo("/root/work")
-                    } label: {
-                        Label("Work", systemImage: "hammer")
-                    }
-                    
-                    Button {
-                        navigateTo("/root/tools")
-                    } label: {
-                        Label("Tools", systemImage: "wrench.and.screwdriver")
-                    }
-                    
+
                     Divider()
-                    
-                    Button {
-                        navigateTo("/root")
-                    } label: {
-                        Label("Home", systemImage: "house")
-                    }
-                    
-                    Button {
-                        navigateTo("/")
-                    } label: {
-                        Label("Root", systemImage: "externaldrive")
+
+                    // Quick nav section
+                    Section("Quick Nav") {
+                        Button {
+                            navigateTo("/root/context")
+                        } label: {
+                            Label("Context", systemImage: "tray.and.arrow.down")
+                        }
+
+                        Button {
+                            navigateTo("/root/work")
+                        } label: {
+                            Label("Work", systemImage: "hammer")
+                        }
+
+                        Button {
+                            navigateTo("/root/tools")
+                        } label: {
+                            Label("Tools", systemImage: "wrench.and.screwdriver")
+                        }
+
+                        Divider()
+
+                        Button {
+                            navigateTo("/root")
+                        } label: {
+                            Label("Home", systemImage: "house")
+                        }
+
+                        Button {
+                            navigateTo("/")
+                        } label: {
+                            Label("Root", systemImage: "externaldrive")
+                        }
                     }
                 } label: {
-                    Image(systemName: "folder.badge.gearshape")
+                    Image(systemName: "square.stack.3d.up")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.textSecondary)
                 }
             }
-            
+
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button {
@@ -175,7 +206,23 @@ struct FilesView: View {
             Task { await handleFileImport(result) }
         }
         .task {
+            // Load workspaces if not already loaded
+            if workspaceState.workspaces.isEmpty {
+                await workspaceState.loadWorkspaces()
+            }
+
+            // Set initial path based on workspace
+            currentPath = workspaceState.filesBasePath
+            lastWorkspaceId = workspaceState.selectedWorkspace?.id
+
             await loadDirectory()
+        }
+        .onChange(of: workspaceState.selectedWorkspace?.id) { _, newId in
+            // Handle workspace change from other tabs
+            if newId != lastWorkspaceId {
+                lastWorkspaceId = newId
+                navigateTo(workspaceState.filesBasePath)
+            }
         }
     }
     
