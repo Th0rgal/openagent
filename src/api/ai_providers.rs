@@ -10,7 +10,6 @@
 //! - Set default provider
 
 use std::collections::{BTreeSet, HashMap};
-use std::env;
 use std::path::{Path, PathBuf};
 
 use axum::{
@@ -38,19 +37,22 @@ const OPENAI_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const OPENAI_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const OPENAI_SCOPE: &str = "openid profile email offline_access";
 
-/// Google/Gemini OAuth constants (from opencode-gemini-auth plugin)
+/// Google/Gemini OAuth constants (from opencode-gemini-auth plugin / Gemini CLI)
+const GOOGLE_CLIENT_ID: &str =
+    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+const GOOGLE_CLIENT_SECRET: &str = "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";
 const GOOGLE_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_REDIRECT_URI: &str = "http://localhost:8085/oauth2callback";
 const GOOGLE_SCOPES: &str =
     "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
 
-fn google_client_id() -> String {
-    env::var("GOOGLE_CLIENT_ID").unwrap_or_else(|_| "missing-google-client-id".to_string())
+fn google_client_id() -> &'static str {
+    GOOGLE_CLIENT_ID
 }
 
-fn google_client_secret() -> String {
-    env::var("GOOGLE_CLIENT_SECRET").unwrap_or_else(|_| "missing-google-client-secret".to_string())
+fn google_client_secret() -> &'static str {
+    GOOGLE_CLIENT_SECRET
 }
 
 fn anthropic_client_id() -> String {
