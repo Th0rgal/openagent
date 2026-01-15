@@ -4,13 +4,14 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   getLibraryOpenCodeSettings,
   saveLibraryOpenCodeSettings,
+  getOpenCodeSettings,
   restartOpenCodeService,
   getOpenAgentConfig,
   saveOpenAgentConfig,
   listOpenCodeAgents,
   OpenAgentConfig,
 } from '@/lib/api';
-import { Save, Loader, AlertCircle, Check, RefreshCw, RotateCcw, Eye, EyeOff } from 'lucide-react';
+import { Save, Loader, AlertCircle, Check, RefreshCw, RotateCcw, Eye, EyeOff, AlertTriangle, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ConfigCodeEditor } from '@/components/config-code-editor';
 
@@ -29,6 +30,7 @@ export default function SettingsPage() {
   // OpenCode settings state
   const [settings, setSettings] = useState<string>('');
   const [originalSettings, setOriginalSettings] = useState<string>('');
+  const [systemSettings, setSystemSettings] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [restarting, setRestarting] = useState(false);
@@ -37,6 +39,7 @@ export default function SettingsPage() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [restartSuccess, setRestartSuccess] = useState(false);
   const [needsRestart, setNeedsRestart] = useState(false);
+  const [showRestartModal, setShowRestartModal] = useState(false);
 
   // OpenAgent config state
   const [openAgentConfig, setOpenAgentConfig] = useState<OpenAgentConfig>({
@@ -55,6 +58,13 @@ export default function SettingsPage() {
   const isOpenAgentDirty =
     JSON.stringify(openAgentConfig) !== JSON.stringify(originalOpenAgentConfig);
 
+  // Check if Library and System settings are in sync (ignoring whitespace differences)
+  const normalizeJson = (s: string) => {
+    try { return JSON.stringify(JSON.parse(s)); } catch { return s; }
+  };
+  const isOutOfSync = systemSettings && originalSettings &&
+    normalizeJson(systemSettings) !== normalizeJson(originalSettings);
+
   const loadSettings = useCallback(async () => {
     try {
       setLoading(true);
@@ -65,6 +75,15 @@ export default function SettingsPage() {
       const formatted = JSON.stringify(data, null, 2);
       setSettings(formatted);
       setOriginalSettings(formatted);
+
+      // Load system settings (for sync status comparison)
+      try {
+        const sysData = await getOpenCodeSettings();
+        setSystemSettings(JSON.stringify(sysData, null, 2));
+      } catch {
+        // System settings might not exist yet
+        setSystemSettings('');
+      }
 
       // Load OpenAgent config
       const openAgentData = await getOpenAgentConfig();
@@ -122,14 +141,25 @@ export default function SettingsPage() {
       const parsed = JSON.parse(settings);
       await saveLibraryOpenCodeSettings(parsed);
       setOriginalSettings(settings);
+      setSystemSettings(settings); // Sync happened, update local system state
       setSaveSuccess(true);
-      setNeedsRestart(true);
+      setShowRestartModal(true); // Show modal asking to restart
       setTimeout(() => setSaveSuccess(false), 2000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save settings');
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleRestartFromModal = async () => {
+    setShowRestartModal(false);
+    await handleRestart();
+  };
+
+  const handleSkipRestart = () => {
+    setShowRestartModal(false);
+    setNeedsRestart(true);
   };
 
   const handleSaveOpenAgent = async () => {
@@ -236,6 +266,72 @@ export default function SettingsPage() {
           <div>
             <p className="text-sm font-medium text-red-400">Error</p>
             <p className="text-sm text-red-400/80">{error}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Out of Sync Warning */}
+      {isOutOfSync && (
+        <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-amber-400 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-amber-400">Settings out of sync</p>
+            <p className="text-sm text-amber-400/80 mt-1">
+              The Library settings differ from what OpenCode is currently using.
+              This can happen if settings were changed outside the Library.
+              Save your current settings to sync them to OpenCode.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Restart Modal */}
+      {showRestartModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-md mx-4 p-6 rounded-xl bg-[#1a1a1f] border border-white/10 shadow-2xl">
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-emerald-500/10">
+                  <Check className="h-5 w-5 text-emerald-400" />
+                </div>
+                <h3 className="text-lg font-semibold text-white">Settings Saved</h3>
+              </div>
+              <button
+                onClick={handleSkipRestart}
+                className="p-1 text-white/40 hover:text-white transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <p className="text-sm text-white/60 mb-6">
+              Your settings have been saved to the Library and synced to the system.
+              OpenCode needs to be restarted for the changes to take effect.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={handleSkipRestart}
+                className="flex-1 px-4 py-2 text-sm font-medium text-white/70 bg-white/[0.04] hover:bg-white/[0.08] rounded-lg transition-colors"
+              >
+                Restart Later
+              </button>
+              <button
+                onClick={handleRestartFromModal}
+                disabled={restarting}
+                className="flex-1 px-4 py-2 text-sm font-medium text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {restarting ? (
+                  <>
+                    <Loader className="h-4 w-4 animate-spin" />
+                    Restarting...
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw className="h-4 w-4" />
+                    Restart Now
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

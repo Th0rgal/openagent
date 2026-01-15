@@ -2435,6 +2435,14 @@ export default function ControlClient() {
   const missionHistoryToItems = useCallback((mission: Mission): ChatItem[] => {
     // Estimate timestamps based on mission creation time
     const baseTime = new Date(mission.created_at).getTime();
+    // Find index of last assistant message to apply mission status
+    const lastAssistantIdx = mission.history.reduce(
+      (lastIdx, entry, i) => (entry.role === "assistant" ? i : lastIdx),
+      -1
+    );
+    // Mission is considered failed if status is "failed"
+    const missionFailed = mission.status === "failed";
+
     return mission.history.map((entry, i) => {
       // Spread timestamps across history (rough estimate)
       const timestamp = baseTime + i * 60000; // 1 minute apart
@@ -2446,14 +2454,19 @@ export default function ControlClient() {
           timestamp,
         };
       } else {
+        // Last assistant message inherits mission status
+        // Earlier assistant messages are assumed successful
+        const isLastAssistant = i === lastAssistantIdx;
+        const success = isLastAssistant ? !missionFailed : true;
         return {
           kind: "assistant" as const,
           id: `history-${mission.id}-${i}`,
           content: entry.content,
-          success: true,
+          success,
           costCents: 0,
           model: null,
           timestamp,
+          resumable: isLastAssistant && missionFailed ? mission.resumable : undefined,
         };
       }
     });
