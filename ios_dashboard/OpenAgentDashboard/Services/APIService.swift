@@ -282,22 +282,6 @@ final class APIService {
         return uploadResponse.path
     }
     
-    // MARK: - Agents (Deprecated - agents are now managed via library)
-
-    /// List agents - returns empty as agents are now library-managed.
-    /// This is a stub for backward compatibility with unused UI code.
-    func listAgents(completion: @escaping (Result<[AgentConfig], Error>) -> Void) {
-        // Agents endpoint no longer exists - return empty list
-        completion(.success([]))
-    }
-
-    /// Create agent - no-op as agents are now library-managed.
-    /// This is a stub for backward compatibility with unused UI code.
-    func createAgent(name: String, modelId: String, completion: @escaping (Result<AgentConfig, Error>) -> Void) {
-        // Agents endpoint no longer exists
-        completion(.failure(APIError.httpError(404, "Agents are now managed through the library configuration")))
-    }
-
     // MARK: - Workspaces
 
     func listWorkspaces() async throws -> [Workspace] {
