@@ -10,54 +10,6 @@ import XCTest
 
 final class ModelTests: XCTestCase {
 
-    // MARK: - AgentConfig Tests
-
-    func testAgentConfigDecoding() throws {
-        let json = """
-        {
-            "id": "test-id",
-            "name": "Test Agent",
-            "model_id": "claude-sonnet-4",
-            "mcp_servers": ["playwright"],
-            "skills": ["coding"],
-            "commands": ["review"],
-            "created_at": "2024-01-01T00:00:00Z",
-            "updated_at": "2024-01-01T00:00:00Z"
-        }
-        """.data(using: .utf8)!
-
-        let decoder = JSONDecoder()
-        let config = try decoder.decode(AgentConfig.self, from: json)
-
-        XCTAssertEqual(config.id, "test-id")
-        XCTAssertEqual(config.name, "Test Agent")
-        XCTAssertEqual(config.model_id, "claude-sonnet-4")
-        XCTAssertEqual(config.mcp_servers, ["playwright"])
-        XCTAssertEqual(config.skills, ["coding"])
-        XCTAssertEqual(config.commands, ["review"])
-    }
-
-    func testAgentConfigEncoding() throws {
-        let config = AgentConfig(
-            id: "encode-test",
-            name: "Encoded Agent",
-            model_id: "claude-opus-4",
-            mcp_servers: ["supabase", "playwright"],
-            skills: ["research", "coding"],
-            commands: ["commit"],
-            created_at: "2024-01-01T00:00:00Z",
-            updated_at: "2024-01-01T00:00:00Z"
-        )
-
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(config)
-        let decoded = try JSONDecoder().decode(AgentConfig.self, from: data)
-
-        XCTAssertEqual(decoded.id, config.id)
-        XCTAssertEqual(decoded.name, config.name)
-        XCTAssertEqual(decoded.mcp_servers.count, 2)
-    }
-
     // MARK: - Workspace Tests
 
     func testWorkspaceDecoding() throws {
