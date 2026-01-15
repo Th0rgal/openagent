@@ -455,7 +455,9 @@ impl Tool for UpdateSkillTool {
 
         // Validate skill name (prevent path traversal)
         if skill_name.contains("..") || skill_name.contains('/') || skill_name.contains('\\') {
-            return Err(anyhow::anyhow!("Invalid skill name: contains path separators or '..'"));
+            return Err(anyhow::anyhow!(
+                "Invalid skill name: contains path separators or '..'"
+            ));
         }
 
         // Get backend API URL (defaults to localhost in dev)
@@ -475,7 +477,10 @@ impl Tool for UpdateSkillTool {
             if ref_path.contains("..") {
                 return Err(anyhow::anyhow!("Invalid file_path: contains '..'"));
             }
-            format!("{}/api/library/skill/{}/files/{}", api_base, skill_name, ref_path)
+            format!(
+                "{}/api/library/skill/{}/files/{}",
+                api_base, skill_name, ref_path
+            )
         } else {
             format!("{}/api/library/skill/{}", api_base, skill_name)
         };

@@ -736,7 +736,9 @@ impl OpenCodeClient {
             if let Some(updated_at) = &session.updated_at {
                 if let Ok(updated) = chrono::DateTime::parse_from_rfc3339(updated_at) {
                     let age = now.signed_duration_since(updated.with_timezone(&chrono::Utc));
-                    if age > chrono::Duration::from_std(max_age).unwrap_or(chrono::Duration::hours(1)) {
+                    if age
+                        > chrono::Duration::from_std(max_age).unwrap_or(chrono::Duration::hours(1))
+                    {
                         if let Err(e) = self.delete_session(&session.id).await {
                             tracing::warn!(
                                 session_id = %session.id,

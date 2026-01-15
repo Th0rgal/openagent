@@ -938,10 +938,7 @@ async fn opencode_session_cleanup_task(base_url: &str) {
         match client.cleanup_old_sessions(MAX_SESSION_AGE).await {
             Ok(deleted) => {
                 if deleted > 0 {
-                    tracing::info!(
-                        deleted = deleted,
-                        "OpenCode session cleanup completed"
-                    );
+                    tracing::info!(deleted = deleted, "OpenCode session cleanup completed");
                 } else {
                     tracing::debug!("OpenCode session cleanup: no old sessions to delete");
                 }

@@ -44,6 +44,7 @@ pub mod opencode;
 pub mod opencode_config;
 pub mod secrets;
 pub mod task;
+pub mod template_crypto;
 pub mod tools;
 pub mod workspace;
 
