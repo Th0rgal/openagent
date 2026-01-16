@@ -1693,7 +1693,7 @@ private struct PhaseBubble: View {
                                 .font(.caption2.monospaced())
                                 .foregroundStyle(Theme.textMuted)
                                 .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
+                                .truncationMode(.tail)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
                                 .background(Theme.backgroundTertiary)
