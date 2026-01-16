@@ -5246,8 +5246,9 @@ export default function ControlClient() {
                 {isBusy ? (
                   <>
                     <button
-                      type="submit"
+                      type="button"
                       disabled={!input.trim()}
+                      onClick={handleEnhancedSubmit}
                       className="flex items-center gap-2 rounded-xl bg-indigo-500/80 hover:bg-indigo-600 px-5 py-3 text-sm font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                     >
                       <ListPlus className="h-4 w-4" />
@@ -5264,8 +5265,9 @@ export default function ControlClient() {
                   </>
                 ) : (
                   <button
-                    type="submit"
+                    type="button"
                     disabled={!input.trim()}
+                    onClick={handleEnhancedSubmit}
                     className="flex items-center gap-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 px-5 py-3 text-sm font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                   >
                     <Send className="h-4 w-4" />

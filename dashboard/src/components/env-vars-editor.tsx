@@ -25,10 +25,9 @@ export const isSensitiveKey = (key: string): boolean => {
 export const toEnvRows = (env: Record<string, string>, encryptedKeys?: string[]): EnvRow[] =>
   Object.entries(env).map(([key, value]) => {
     const secret = isSensitiveKey(key);
-    // If encryptedKeys is provided and non-empty, use it as the source of truth.
-    // Otherwise fall back to auto-detection based on key name patterns (secret).
-    // This ensures sensitive keys show as "will be encrypted" by default.
-    const encrypted = (encryptedKeys && encryptedKeys.length > 0)
+    // If encryptedKeys is explicitly provided (even if empty), use it as the source of truth.
+    // Only fall back to auto-detection when encryptedKeys is undefined (legacy/new templates).
+    const encrypted = encryptedKeys !== undefined
       ? encryptedKeys.includes(key)
       : secret;
     return {
