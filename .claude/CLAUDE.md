@@ -28,6 +28,21 @@ MCPs can be global because and run as child processes on the host or workspace (
 - Keep the backend a thin orchestrator: **Start Mission → Stream Events → Store Logs**.
 - Avoid embedding provider-specific logic in the backend. Provider auth is managed via OpenCode config + dashboard flows.
 
+## Timeout Philosophy
+
+Open Agent is a **pure pass-through frontend** to OpenCode. We intentionally do NOT impose any timeouts on the SSE event stream from OpenCode. All timeout handling is delegated to OpenCode, which manages tool execution timeouts internally.
+
+**Why no timeouts in Open Agent?**
+- Long-running tools (vision analysis, large file operations, web scraping) should complete naturally
+- Users can abort missions manually via the dashboard if needed
+- Avoids artificial timeout mismatches between Open Agent and OpenCode
+- OpenCode remains the single source of truth for execution limits
+
+**What this means:**
+- The SSE stream in `src/opencode/mod.rs` runs indefinitely until OpenCode sends a `MessageComplete` event or closes the connection
+- The only timeout applied is for initial HTTP connection establishment (`DEFAULT_REQUEST_TIMEOUT`)
+- If a mission appears stuck, check OpenCode logs first—any timeout errors originate from OpenCode or downstream clients (like Conductor), not Open Agent
+
 ## Common Entry Points
 
 - `src/api/routes.rs` – API routing and server startup.
