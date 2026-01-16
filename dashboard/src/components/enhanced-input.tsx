@@ -20,12 +20,14 @@ export interface SubmitPayload {
 
 export interface EnhancedInputHandle {
   submit: () => void;
+  canSubmit: () => boolean;
 }
 
 interface EnhancedInputProps {
   value: string;
   onChange: (value: string) => void;
   onSubmit: (payload: SubmitPayload) => void;
+  onCanSubmitChange?: (canSubmit: boolean) => void;
   placeholder?: string;
   disabled?: boolean;
   className?: string;
@@ -42,6 +44,7 @@ export const EnhancedInput = forwardRef<EnhancedInputHandle, EnhancedInputProps>
   value,
   onChange,
   onSubmit,
+  onCanSubmitChange,
   placeholder = "Message the root agent...",
   disabled = false,
   className,
@@ -307,10 +310,23 @@ export const EnhancedInput = forwardRef<EnhancedInputHandle, EnhancedInputProps>
     onChange('');
   }, [displayValue, lockedAgent, disabled, onSubmit, parsedAgentFromValue, value, onChange]);
 
+  // Check if submission is valid (has content or locked agent)
+  const canSubmit = useCallback(() => {
+    if (disabled) return false;
+    const trimmedValue = displayValue.trim();
+    return !!(trimmedValue || lockedAgent);
+  }, [disabled, displayValue, lockedAgent]);
+
+  // Notify parent when submission validity changes
+  useEffect(() => {
+    onCanSubmitChange?.(canSubmit());
+  }, [canSubmit, onCanSubmitChange]);
+
   // Expose submit method via ref so parent can trigger submit (e.g., from Send button)
   useImperativeHandle(ref, () => ({
     submit: handleSubmit,
-  }), [handleSubmit]);
+    canSubmit,
+  }), [handleSubmit, canSubmit]);
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value;

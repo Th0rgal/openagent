@@ -1785,6 +1785,7 @@ export default function ControlClient() {
   const itemsRef = useRef<ChatItem[]>([]);
   const [draftInput, setDraftInput] = useLocalStorage("control-draft", "");
   const [input, setInput] = useState(draftInput);
+  const [canSubmitInput, setCanSubmitInput] = useState(false);
   const [lastMissionId, setLastMissionId] = useLocalStorage<string | null>(
     "control-last-mission-id",
     null
@@ -5260,6 +5261,7 @@ export default function ControlClient() {
                   value={input}
                   onChange={setInput}
                   onSubmit={handleEnhancedSubmit}
+                  onCanSubmitChange={setCanSubmitInput}
                   placeholder="Message the root agent… (paste files to upload)"
                 />
 
@@ -5268,7 +5270,8 @@ export default function ControlClient() {
                     <button
                       type="button"
                       onClick={() => enhancedInputRef.current?.submit()}
-                      className="flex items-center gap-2 rounded-xl bg-indigo-500/80 hover:bg-indigo-600 px-5 py-3 text-sm font-medium text-white transition-colors shrink-0"
+                      disabled={!canSubmitInput}
+                      className="flex items-center gap-2 rounded-xl bg-indigo-500/80 hover:bg-indigo-600 px-5 py-3 text-sm font-medium text-white transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-indigo-500/80"
                     >
                       <ListPlus className="h-4 w-4" />
                       Queue
@@ -5286,7 +5289,8 @@ export default function ControlClient() {
                   <button
                     type="button"
                     onClick={() => enhancedInputRef.current?.submit()}
-                    className="flex items-center gap-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 px-5 py-3 text-sm font-medium text-white transition-colors shrink-0"
+                    disabled={!canSubmitInput}
+                    className="flex items-center gap-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 px-5 py-3 text-sm font-medium text-white transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-indigo-500"
                   >
                     <Send className="h-4 w-4" />
                     Send
