@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback, memo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { toast } from "@/components/toast";
 import { MarkdownContent } from "@/components/markdown-content";
-import { EnhancedInput, type SubmitPayload } from "@/components/enhanced-input";
+import { EnhancedInput, type SubmitPayload, type EnhancedInputHandle } from "@/components/enhanced-input";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { cn } from "@/lib/utils";
@@ -2101,6 +2101,7 @@ export default function ControlClient() {
 
   const streamCleanupRef = useRef<null | (() => void)>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const enhancedInputRef = useRef<EnhancedInputHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const viewingMissionIdRef = useRef<string | null>(null);
   const runStateMissionIdRef = useRef<string | null>(null);
@@ -5237,6 +5238,7 @@ export default function ControlClient() {
                 </div>
 
                 <EnhancedInput
+                  ref={enhancedInputRef}
                   value={input}
                   onChange={setInput}
                   onSubmit={handleEnhancedSubmit}
@@ -5246,8 +5248,9 @@ export default function ControlClient() {
                 {isBusy ? (
                   <>
                     <button
-                      type="submit"
+                      type="button"
                       disabled={!input.trim()}
+                      onClick={() => enhancedInputRef.current?.submit()}
                       className="flex items-center gap-2 rounded-xl bg-indigo-500/80 hover:bg-indigo-600 px-5 py-3 text-sm font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                     >
                       <ListPlus className="h-4 w-4" />
@@ -5264,8 +5267,9 @@ export default function ControlClient() {
                   </>
                 ) : (
                   <button
-                    type="submit"
+                    type="button"
                     disabled={!input.trim()}
+                    onClick={() => enhancedInputRef.current?.submit()}
                     className="flex items-center gap-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 px-5 py-3 text-sm font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                   >
                     <Send className="h-4 w-4" />
