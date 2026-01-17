@@ -621,6 +621,32 @@ pre code {
    PAGINATION - Premium styling
    ============================================ */
 
+/* Remove the separator line above pagination */
+nav:has(.nextra-nav-link),
+.nextra-content + nav,
+article + nav,
+main > nav:last-child {
+  border: none !important;
+  margin-top: 2rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+/* When there's only one nav link (first or last page), align appropriately */
+nav:has(.nextra-nav-link:only-child) {
+  justify-content: flex-end;
+}
+
+/* Hide any hr/separator that appears before pagination */
+hr:has(+ nav:has(.nextra-nav-link)),
+.nextra-content > hr:last-of-type,
+article > hr:last-of-type,
+[class*="separator"]:has(+ nav),
+[class*="divider"]:has(+ nav) {
+  display: none;
+}
+
 .nextra-nav-link {
   background-color: rgba(0, 0, 0, 0.02);
   border: 1px solid rgba(0, 0, 0, 0.06);
