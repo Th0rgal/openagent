@@ -535,9 +535,8 @@ async fn update_workspace(
         workspace.init_script = normalize_init_script(Some(init_script));
     }
 
-    if let Some(shared_network) = req.shared_network {
-        workspace.shared_network = Some(shared_network);
-    }
+    // Always update shared_network to allow resetting to None (default)
+    workspace.shared_network = req.shared_network;
 
     // Save the updated workspace
     state.workspaces.update(workspace.clone()).await;
