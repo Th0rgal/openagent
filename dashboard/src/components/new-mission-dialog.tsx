@@ -65,7 +65,7 @@ export function NewMissionDialog({
   });
 
   // SWR: fetch agents for selected backend
-  const { data: backendAgents } = useSWR<BackendAgent[]>(
+  const { data: backendAgents, isLoading: backendAgentsLoading } = useSWR<BackendAgent[]>(
     newMissionBackend ? `backend-${newMissionBackend}-agents` : null,
     () => listBackendAgents(newMissionBackend),
     { revalidateOnFocus: false, dedupingInterval: 30000 }
@@ -81,8 +81,11 @@ export function NewMissionDialog({
     dedupingInterval: 30000,
   });
 
-  // Parse agents from either backend API or fallback
-  const agents = backendAgents?.map(a => a.name) || parseAgentNames(agentsPayload);
+  // Parse agents from backend API (only use fallback for opencode backend)
+  // For non-opencode backends, wait for backendAgents to load to avoid race condition
+  const agents = newMissionBackend === 'opencode'
+    ? (backendAgents?.map(a => a.name) || parseAgentNames(agentsPayload))
+    : (backendAgents?.map(a => a.name) || []);
 
   const formatWorkspaceType = (type: Workspace['workspace_type']) =>
     type === 'host' ? 'host' : 'isolated';
@@ -104,9 +107,13 @@ export function NewMissionDialog({
   // Set default agent when dialog opens (only once per open)
   // Wait for both agents AND config to load before setting defaults
   useEffect(() => {
-    if (!open || defaultSet || agents.length === 0) return;
+    if (!open || defaultSet) return;
     // Wait for config to finish loading (undefined = still loading, null/object = loaded)
     if (config === undefined) return;
+    // Wait for backend agents to finish loading (avoid race condition when switching backends)
+    if (backendAgentsLoading) return;
+    // If no agents available yet, wait
+    if (agents.length === 0) return;
 
     if (config?.default_agent && agents.includes(config.default_agent)) {
       setNewMissionAgent(config.default_agent);
@@ -114,7 +121,7 @@ export function NewMissionDialog({
       setNewMissionAgent('Sisyphus');
     }
     setDefaultSet(true);
-  }, [open, defaultSet, agents, config]);
+  }, [open, defaultSet, agents, config, backendAgentsLoading]);
 
   const resetForm = () => {
     setNewMissionWorkspace('');

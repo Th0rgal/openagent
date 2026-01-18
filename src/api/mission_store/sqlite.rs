@@ -106,6 +106,9 @@ impl SqliteMissionStore {
             conn.execute_batch(SCHEMA)
                 .map_err(|e| format!("Failed to run schema: {}", e))?;
 
+            // Run migrations for existing databases
+            Self::run_migrations(&conn)?;
+
             Ok::<_, String>(conn)
         })
         .await
@@ -154,6 +157,29 @@ impl SqliteMissionStore {
         } else {
             String::new()
         }
+    }
+
+    /// Run database migrations for existing databases.
+    /// CREATE TABLE IF NOT EXISTS doesn't add columns to existing tables,
+    /// so we need to handle schema changes manually.
+    fn run_migrations(conn: &Connection) -> Result<(), String> {
+        // Check if 'backend' column exists in missions table
+        let has_backend_column: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('missions') WHERE name = 'backend'")
+            .map_err(|e| format!("Failed to check for backend column: {}", e))?
+            .exists([])
+            .map_err(|e| format!("Failed to query table info: {}", e))?;
+
+        if !has_backend_column {
+            tracing::info!("Running migration: adding 'backend' column to missions table");
+            conn.execute(
+                "ALTER TABLE missions ADD COLUMN backend TEXT NOT NULL DEFAULT 'opencode'",
+                [],
+            )
+            .map_err(|e| format!("Failed to add backend column: {}", e))?;
+        }
+
+        Ok(())
     }
 }
 
