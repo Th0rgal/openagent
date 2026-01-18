@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { Plus } from 'lucide-react';
 import useSWR from 'swr';
-import { getVisibleAgents, getOpenAgentConfig, listBackends, listBackendAgents, type Backend, type BackendAgent } from '@/lib/api';
+import { getVisibleAgents, getOpenAgentConfig, listBackends, listBackendAgents, getBackendConfig, type Backend, type BackendAgent } from '@/lib/api';
 import type { Provider, Workspace } from '@/lib/api';
 
 interface NewMissionDialogProps {
@@ -16,6 +16,14 @@ interface NewMissionDialogProps {
     modelOverride?: string;
     backend?: string;
   }) => Promise<void> | void;
+}
+
+// Combined agent with backend info
+interface CombinedAgent {
+  backend: string;
+  backendName: string;
+  agent: string;
+  value: string; // "backend:agent" format
 }
 
 // Parse agent names from API response
@@ -50,9 +58,9 @@ export function NewMissionDialog({
 }: NewMissionDialogProps) {
   const [open, setOpen] = useState(false);
   const [newMissionWorkspace, setNewMissionWorkspace] = useState('');
-  const [newMissionAgent, setNewMissionAgent] = useState('');
+  // Combined value: "backend:agent" or empty for default
+  const [selectedAgentValue, setSelectedAgentValue] = useState('');
   const [newMissionModelOverride, setNewMissionModelOverride] = useState('');
-  const [newMissionBackend, setNewMissionBackend] = useState('opencode');
   const [submitting, setSubmitting] = useState(false);
   const [defaultSet, setDefaultSet] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -64,14 +72,38 @@ export function NewMissionDialog({
     fallbackData: [{ id: 'opencode', name: 'OpenCode' }, { id: 'claudecode', name: 'Claude Code' }],
   });
 
-  // SWR: fetch agents for selected backend
-  const { data: backendAgents, isLoading: backendAgentsLoading } = useSWR<BackendAgent[]>(
-    newMissionBackend ? `backend-${newMissionBackend}-agents` : null,
-    () => listBackendAgents(newMissionBackend),
+  // SWR: fetch backend configs to check enabled status
+  const { data: opencodeConfig } = useSWR('backend-opencode-config', () => getBackendConfig('opencode'), {
+    revalidateOnFocus: false,
+    dedupingInterval: 30000,
+  });
+  const { data: claudecodeConfig } = useSWR('backend-claudecode-config', () => getBackendConfig('claudecode'), {
+    revalidateOnFocus: false,
+    dedupingInterval: 30000,
+  });
+
+  // Filter to only enabled backends
+  const enabledBackends = useMemo(() => {
+    return backends?.filter((b) => {
+      if (b.id === 'opencode') return opencodeConfig?.enabled !== false;
+      if (b.id === 'claudecode') return claudecodeConfig?.enabled !== false;
+      return true;
+    }) || [];
+  }, [backends, opencodeConfig, claudecodeConfig]);
+
+  // SWR: fetch agents for each enabled backend
+  const { data: opencodeAgents } = useSWR<BackendAgent[]>(
+    enabledBackends.some(b => b.id === 'opencode') ? 'backend-opencode-agents' : null,
+    () => listBackendAgents('opencode'),
+    { revalidateOnFocus: false, dedupingInterval: 30000 }
+  );
+  const { data: claudecodeAgents } = useSWR<BackendAgent[]>(
+    enabledBackends.some(b => b.id === 'claudecode') ? 'backend-claudecode-agents' : null,
+    () => listBackendAgents('claudecode'),
     { revalidateOnFocus: false, dedupingInterval: 30000 }
   );
 
-  // SWR: fetch once, cache globally, revalidate in background (fallback for agent list)
+  // SWR: fallback for opencode agents
   const { data: agentsPayload } = useSWR('opencode-agents', getVisibleAgents, {
     revalidateOnFocus: false,
     dedupingInterval: 30000,
@@ -81,11 +113,51 @@ export function NewMissionDialog({
     dedupingInterval: 30000,
   });
 
-  // Parse agents from backend API (only use fallback for opencode backend)
-  // For non-opencode backends, wait for backendAgents to load to avoid race condition
-  const agents = newMissionBackend === 'opencode'
-    ? (backendAgents?.map(a => a.name) || parseAgentNames(agentsPayload))
-    : (backendAgents?.map(a => a.name) || []);
+  // Combine all agents from enabled backends
+  const allAgents = useMemo((): CombinedAgent[] => {
+    const result: CombinedAgent[] = [];
+
+    for (const backend of enabledBackends) {
+      let agentNames: string[] = [];
+
+      if (backend.id === 'opencode') {
+        agentNames = opencodeAgents?.map(a => a.name) || parseAgentNames(agentsPayload);
+      } else if (backend.id === 'claudecode') {
+        agentNames = claudecodeAgents?.map(a => a.name) || [];
+      }
+
+      for (const agent of agentNames) {
+        result.push({
+          backend: backend.id,
+          backendName: backend.name,
+          agent,
+          value: `${backend.id}:${agent}`,
+        });
+      }
+    }
+
+    return result;
+  }, [enabledBackends, opencodeAgents, claudecodeAgents, agentsPayload]);
+
+  // Group agents by backend for display
+  const agentsByBackend = useMemo(() => {
+    const groups: Record<string, CombinedAgent[]> = {};
+    for (const agent of allAgents) {
+      if (!groups[agent.backend]) {
+        groups[agent.backend] = [];
+      }
+      groups[agent.backend].push(agent);
+    }
+    return groups;
+  }, [allAgents]);
+
+  // Parse selected value to get backend and agent
+  const parseSelectedValue = (value: string): { backend: string; agent: string } | null => {
+    if (!value) return null;
+    const [backend, ...agentParts] = value.split(':');
+    const agent = agentParts.join(':'); // Handle agent names with colons
+    return backend && agent ? { backend, agent } : null;
+  };
 
   const formatWorkspaceType = (type: Workspace['workspace_type']) =>
     type === 'host' ? 'host' : 'isolated';
@@ -105,29 +177,42 @@ export function NewMissionDialog({
   }, [open]);
 
   // Set default agent when dialog opens (only once per open)
-  // Wait for both agents AND config to load before setting defaults
   useEffect(() => {
     if (!open || defaultSet) return;
-    // Wait for config to finish loading (undefined = still loading, null/object = loaded)
+    // Wait for config to finish loading
     if (config === undefined) return;
-    // Wait for backend agents to finish loading (avoid race condition when switching backends)
-    if (backendAgentsLoading) return;
-    // If no agents available yet, wait
-    if (agents.length === 0) return;
+    // Wait for agents to load
+    if (allAgents.length === 0) return;
 
-    if (config?.default_agent && agents.includes(config.default_agent)) {
-      setNewMissionAgent(config.default_agent);
-    } else if (agents.includes('Sisyphus')) {
-      setNewMissionAgent('Sisyphus');
+    // Try to find the default agent from config
+    if (config?.default_agent) {
+      const defaultAgent = allAgents.find(a => a.agent === config.default_agent);
+      if (defaultAgent) {
+        setSelectedAgentValue(defaultAgent.value);
+        setDefaultSet(true);
+        return;
+      }
+    }
+
+    // Fallback: try Sisyphus in OpenCode
+    const sisyphus = allAgents.find(a => a.backend === 'opencode' && a.agent === 'Sisyphus');
+    if (sisyphus) {
+      setSelectedAgentValue(sisyphus.value);
+      setDefaultSet(true);
+      return;
+    }
+
+    // Fallback: use first available agent
+    if (allAgents.length > 0) {
+      setSelectedAgentValue(allAgents[0].value);
     }
     setDefaultSet(true);
-  }, [open, defaultSet, agents, config, backendAgentsLoading]);
+  }, [open, defaultSet, allAgents, config]);
 
   const resetForm = () => {
     setNewMissionWorkspace('');
-    setNewMissionAgent('');
+    setSelectedAgentValue('');
     setNewMissionModelOverride('');
-    setNewMissionBackend('opencode');
     setDefaultSet(false);
   };
 
@@ -140,11 +225,12 @@ export function NewMissionDialog({
     if (disabled || submitting) return;
     setSubmitting(true);
     try {
+      const parsed = parseSelectedValue(selectedAgentValue);
       await onCreate({
         workspaceId: newMissionWorkspace || undefined,
-        agent: newMissionAgent || undefined,
+        agent: parsed?.agent || undefined,
         modelOverride: newMissionModelOverride || undefined,
-        backend: newMissionBackend || undefined,
+        backend: parsed?.backend || 'opencode',
       });
       setOpen(false);
       resetForm();
@@ -154,7 +240,9 @@ export function NewMissionDialog({
   };
 
   const isBusy = disabled || submitting;
-  const defaultAgentLabel = 'Default (OpenCode default)';
+
+  // Determine default label based on enabled backends
+  const defaultBackendName = enabledBackends[0]?.name || 'OpenCode';
 
   return (
     <div className="relative" ref={dialogRef}>
@@ -209,17 +297,12 @@ export function NewMissionDialog({
               <p className="text-xs text-white/30 mt-1.5">Where the mission will run</p>
             </div>
 
-            {/* Backend selection */}
+            {/* Agent selection (includes backend) */}
             <div>
-              <label className="block text-xs text-white/50 mb-1.5">Backend</label>
+              <label className="block text-xs text-white/50 mb-1.5">Agent</label>
               <select
-                value={newMissionBackend}
-                onChange={(e) => {
-                  setNewMissionBackend(e.target.value);
-                  // Reset agent selection when backend changes
-                  setNewMissionAgent('');
-                  setDefaultSet(false);
-                }}
+                value={selectedAgentValue}
+                onChange={(e) => setSelectedAgentValue(e.target.value)}
                 className="w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2.5 text-sm text-white focus:border-indigo-500/50 focus:outline-none appearance-none cursor-pointer"
                 style={{
                   backgroundImage:
@@ -230,53 +313,23 @@ export function NewMissionDialog({
                   paddingRight: '2.5rem',
                 }}
               >
-                {backends?.map((backend) => (
-                  <option key={backend.id} value={backend.id} className="bg-[#1a1a1a]">
-                    {backend.name}{backend.id === 'opencode' ? ' (Recommended)' : ''}
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-white/30 mt-1.5">AI coding backend to power this mission</p>
-            </div>
+                {enabledBackends.map((backend) => {
+                  const backendAgentsList = agentsByBackend[backend.id] || [];
+                  if (backendAgentsList.length === 0) return null;
 
-            {/* Agent selection */}
-            <div>
-              <label className="block text-xs text-white/50 mb-1.5">Agent Configuration</label>
-              <select
-                value={newMissionAgent}
-                onChange={(e) => {
-                  setNewMissionAgent(e.target.value);
-                }}
-                className="w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2.5 text-sm text-white focus:border-indigo-500/50 focus:outline-none appearance-none cursor-pointer"
-                style={{
-                  backgroundImage:
-                    "url(\"data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e\")",
-                  backgroundPosition: 'right 0.5rem center',
-                  backgroundRepeat: 'no-repeat',
-                  backgroundSize: '1.5em 1.5em',
-                  paddingRight: '2.5rem',
-                }}
-              >
-                <option value="" className="bg-[#1a1a1a]">
-                  {defaultAgentLabel}
-                </option>
-                {agents.includes("Sisyphus") && (
-                  <option value="Sisyphus" className="bg-[#1a1a1a]">
-                    Sisyphus (recommended)
-                  </option>
-                )}
-                {agents.length > 0 && (
-                  <optgroup label={`${backends?.find(b => b.id === newMissionBackend)?.name || 'Backend'} Agents`} className="bg-[#1a1a1a]">
-                    {agents.map((agent: string) => (
-                      <option key={agent} value={agent} className="bg-[#1a1a1a]">
-                        {agent}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
+                  return (
+                    <optgroup key={backend.id} label={backend.name} className="bg-[#1a1a1a]">
+                      {backendAgentsList.map((agent) => (
+                        <option key={agent.value} value={agent.value} className="bg-[#1a1a1a]">
+                          {agent.agent}{agent.backend === 'opencode' && agent.agent === 'Sisyphus' ? ' (recommended)' : ''}
+                        </option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
               </select>
               <p className="text-xs text-white/30 mt-1.5">
-                Agents are provided by plugins; defaults are recommended
+                Select an agent and backend to power this mission
               </p>
             </div>
 
