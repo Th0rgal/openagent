@@ -552,6 +552,120 @@ fn sync_to_opencode_auth(
     Ok(())
 }
 
+/// Check if the Anthropic OAuth token is expired or about to expire.
+/// Returns true if the token is expired or will expire in the next 5 minutes.
+fn is_anthropic_oauth_token_expired() -> bool {
+    let auth = match read_opencode_auth() {
+        Ok(auth) => auth,
+        Err(_) => return false, // Can't check, assume not expired
+    };
+
+    let anthropic_auth = match auth.get("anthropic") {
+        Some(auth) => auth,
+        None => return false, // No auth entry, not using OAuth
+    };
+
+    // Check if this is OAuth (has expires field)
+    let expires_at = match anthropic_auth.get("expires").and_then(|v| v.as_i64()) {
+        Some(exp) => exp,
+        None => return false, // Not OAuth or no expiry
+    };
+
+    // Check if token expires in the next 5 minutes (300 seconds = 300000 ms)
+    let now = chrono::Utc::now().timestamp_millis();
+    let buffer = 5 * 60 * 1000; // 5 minutes in milliseconds
+
+    expires_at < (now + buffer)
+}
+
+/// Refresh the Anthropic OAuth token using the refresh token.
+/// Updates auth.json with the new access token and expiry.
+pub async fn refresh_anthropic_oauth_token() -> Result<(), String> {
+    let auth = read_opencode_auth().map_err(|e| format!("Failed to read auth: {}", e))?;
+
+    let anthropic_auth = auth
+        .get("anthropic")
+        .ok_or_else(|| "No Anthropic auth entry".to_string())?;
+
+    // Get refresh token
+    let refresh_token = anthropic_auth
+        .get("refresh")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "No refresh token found".to_string())?;
+
+    tracing::info!("Refreshing Anthropic OAuth token");
+
+    // Exchange refresh token for new access token
+    let client = reqwest::Client::new();
+    let token_response = client
+        .post("https://console.anthropic.com/v1/oauth/token")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", ANTHROPIC_CLIENT_ID),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Failed to refresh token: {}", e))?;
+
+    if !token_response.status().is_success() {
+        let status = token_response.status();
+        let error_text = token_response.text().await.unwrap_or_default();
+        tracing::error!(
+            "Token refresh failed with status {}: {}",
+            status,
+            error_text
+        );
+        return Err(format!(
+            "Token refresh failed ({}): {}. You may need to re-authenticate.",
+            status, error_text
+        ));
+    }
+
+    let token_data: serde_json::Value = token_response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse token response: {}", e))?;
+
+    let new_access_token = token_data["access_token"]
+        .as_str()
+        .ok_or_else(|| "No access token in refresh response".to_string())?;
+
+    let new_refresh_token = token_data["refresh_token"]
+        .as_str()
+        .unwrap_or(refresh_token); // Use old refresh token if not provided
+
+    let expires_in = token_data["expires_in"].as_i64().unwrap_or(3600);
+    let expires_at = chrono::Utc::now().timestamp_millis() + (expires_in * 1000);
+
+    // Update auth.json with new tokens
+    sync_to_opencode_auth(
+        ProviderType::Anthropic,
+        new_refresh_token,
+        new_access_token,
+        expires_at,
+    )?;
+
+    tracing::info!(
+        "Successfully refreshed Anthropic OAuth token, expires in {} seconds",
+        expires_in
+    );
+
+    Ok(())
+}
+
+/// Ensure the Anthropic OAuth token is valid, refreshing if needed.
+/// This should be called before starting a mission that uses Claude Code.
+pub async fn ensure_anthropic_oauth_token_valid() -> Result<(), String> {
+    if !is_anthropic_oauth_token_expired() {
+        return Ok(());
+    }
+
+    tracing::info!("Anthropic OAuth token is expired or expiring soon, refreshing...");
+    refresh_anthropic_oauth_token().await
+}
+
 /// Sync an API key to OpenCode's auth.json file.
 fn sync_api_key_to_opencode_auth(provider_type: ProviderType, api_key: &str) -> Result<(), String> {
     let auth_path = get_opencode_auth_path();
