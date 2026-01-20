@@ -311,6 +311,13 @@ pub async fn execute_in_container(
         }
     }
 
+    let tailscale_active = tailscale_enabled(&config.env);
+    let should_bind_dns = matches!(config.network_mode, NetworkMode::Host)
+        || (matches!(config.network_mode, NetworkMode::Private) && !tailscale_active);
+    if should_bind_dns && Path::new("/etc/resolv.conf").exists() {
+        cmd.arg("--bind-ro=/etc/resolv.conf");
+    }
+
     if config.ephemeral {
         cmd.arg("--ephemeral");
     }

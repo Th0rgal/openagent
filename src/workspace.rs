@@ -793,6 +793,24 @@ async fn write_opencode_config(
     );
     config_json.insert("mcp".to_string(), serde_json::Value::Object(mcp_map));
 
+    let mut permission = serde_json::Map::new();
+    permission.insert("read".to_string(), json!("allow"));
+    permission.insert("edit".to_string(), json!("allow"));
+    permission.insert("glob".to_string(), json!("allow"));
+    permission.insert("grep".to_string(), json!("allow"));
+    permission.insert("list".to_string(), json!("allow"));
+    permission.insert("bash".to_string(), json!("allow"));
+    permission.insert("task".to_string(), json!("allow"));
+    permission.insert("external_directory".to_string(), json!("allow"));
+    permission.insert("todowrite".to_string(), json!("allow"));
+    permission.insert("todoread".to_string(), json!("allow"));
+    permission.insert("question".to_string(), json!("allow"));
+    permission.insert("webfetch".to_string(), json!("allow"));
+    permission.insert("websearch".to_string(), json!("allow"));
+    permission.insert("codesearch".to_string(), json!("allow"));
+    permission.insert("lsp".to_string(), json!("allow"));
+    permission.insert("doom_loop".to_string(), json!("allow"));
+
     if let Some(skills) = skill_allowlist {
         if !skills.is_empty() {
             let mut skill_permissions = serde_json::Map::new();
@@ -800,17 +818,16 @@ async fn write_opencode_config(
             for skill in skills {
                 skill_permissions.insert(skill.clone(), json!("allow"));
             }
-            let mut permission = serde_json::Map::new();
             permission.insert(
                 "skill".to_string(),
                 serde_json::Value::Object(skill_permissions),
             );
-            config_json.insert(
-                "permission".to_string(),
-                serde_json::Value::Object(permission),
-            );
         }
     }
+    config_json.insert(
+        "permission".to_string(),
+        serde_json::Value::Object(permission),
+    );
 
     // Tool policy:
     // - We want shell/file effects scoped to the workspace by running the agent process
@@ -2161,6 +2178,13 @@ pub async fn build_chroot_workspace(
                 tracing::error!("Init script failed: {}", e);
                 return Err(e);
             }
+            if let Err(e) = bootstrap_workspace_harnesses(workspace).await {
+                tracing::warn!(
+                    workspace = %workspace.name,
+                    error = %e,
+                    "Harness bootstrap failed; workspace will still be marked ready"
+                );
+            }
             workspace.status = WorkspaceStatus::Ready;
             workspace.error_message = None;
             tracing::info!("Container workspace built successfully");
@@ -2228,6 +2252,130 @@ async fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
             }
             tokio::fs::copy(&entry_path, &dest_path).await?;
         }
+    }
+
+    Ok(())
+}
+
+fn env_var_bool(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(value) => matches!(
+            value.trim().to_lowercase().as_str(),
+            "1" | "true" | "yes" | "y" | "on"
+        ),
+        Err(_) => default,
+    }
+}
+
+async fn bootstrap_workspace_harnesses(workspace: &Workspace) -> anyhow::Result<()> {
+    if workspace.workspace_type != WorkspaceType::Chroot {
+        return Ok(());
+    }
+
+    let install_claudecode = env_var_bool("OPEN_AGENT_BOOTSTRAP_CLAUDECODE", true);
+    let install_opencode = env_var_bool("OPEN_AGENT_BOOTSTRAP_OPENCODE", true);
+
+    if !install_claudecode && !install_opencode {
+        return Ok(());
+    }
+
+    let script = format!(
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+
+LOG=/var/log/openagent-init.log
+exec >>"$LOG" 2>&1
+
+echo "[openagent] Harness bootstrap start"
+
+if command -v npm >/dev/null 2>&1; then
+  if [ "{install_claudecode}" = "true" ] && ! command -v claude >/dev/null 2>&1; then
+    echo "[openagent] Installing Claude Code..."
+    if ! npm install -g @anthropic-ai/claude-code@latest; then
+      echo "[openagent] Claude Code install failed"
+    fi
+  fi
+  if [ "{install_opencode}" = "true" ] && ! command -v opencode >/dev/null 2>&1; then
+    if command -v curl >/dev/null 2>&1; then
+      echo "[openagent] Installing opencode..."
+      if curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path; then
+        if [ -x \"$HOME/.opencode/bin/opencode\" ]; then
+          if command -v install >/dev/null 2>&1; then
+            install -m 0755 \"$HOME/.opencode/bin/opencode\" /usr/local/bin/opencode || true
+          else
+            cp \"$HOME/.opencode/bin/opencode\" /usr/local/bin/opencode && chmod 755 /usr/local/bin/opencode || true
+          fi
+        fi
+      else
+        echo "[openagent] OpenCode CLI install failed"
+      fi
+    else
+      echo "[openagent] curl not found; skipping opencode install"
+    fi
+  fi
+  if [ "{install_opencode}" = "true" ] && ! command -v oh-my-opencode >/dev/null 2>&1; then
+    echo "[openagent] Installing oh-my-opencode..."
+    if ! npm install -g oh-my-opencode@latest; then
+      echo "[openagent] OpenCode plugin install failed"
+    fi
+  fi
+else
+  echo "[openagent] npm not found; skipping harness install"
+fi
+
+if [ -x /root/.bun/bin/bun ] && ! command -v bun >/dev/null 2>&1; then
+  ln -sf /root/.bun/bin/bun /usr/local/bin/bun || true
+  if [ -x /root/.bun/bin/bunx ]; then
+    ln -sf /root/.bun/bin/bunx /usr/local/bin/bunx || true
+  fi
+  echo "[openagent] Linked bun into /usr/local/bin"
+fi
+
+echo "[openagent] Harness bootstrap done"
+"#
+    );
+
+    let script_path = workspace.path.join("openagent-bootstrap.sh");
+    tokio::fs::write(&script_path, script).await?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o755);
+        tokio::fs::set_permissions(&script_path, perms).await?;
+    }
+
+    let shell = if workspace.path.join("bin/bash").exists() {
+        "/bin/bash"
+    } else {
+        "/bin/sh"
+    };
+
+    let mut config = nspawn::NspawnConfig::default();
+    config.env = workspace.env_vars.clone();
+
+    let command = vec![shell.to_string(), "/openagent-bootstrap.sh".to_string()];
+    let output = nspawn::execute_in_container(&workspace.path, &command, &config).await?;
+
+    let _ = tokio::fs::remove_file(&script_path).await;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut message = String::new();
+        if !stderr.trim().is_empty() {
+            message.push_str(stderr.trim());
+        }
+        if !stdout.trim().is_empty() {
+            if !message.is_empty() {
+                message.push_str(" | ");
+            }
+            message.push_str(stdout.trim());
+        }
+        if message.is_empty() {
+            message = "Harness bootstrap failed with no output".to_string();
+        }
+        return Err(anyhow::anyhow!(message));
     }
 
     Ok(())

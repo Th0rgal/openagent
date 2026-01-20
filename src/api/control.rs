@@ -3745,8 +3745,20 @@ async fn run_single_control_turn(
                 .with_terminal_reason(TerminalReason::LlmError)
         }
         _ => {
-            // Default to opencode
-            root_agent.execute(&mut task, &ctx).await
+            // Default to opencode using per-workspace CLI execution
+            let mid = mission_id.unwrap_or_else(Uuid::nil);
+            super::mission_runner::run_opencode_turn(
+                exec_workspace,
+                &ctx.working_dir,
+                &user_message,
+                config.default_model.as_deref(),
+                config.opencode_agent.as_deref(),
+                mid,
+                events_tx.clone(),
+                cancel,
+                &config.working_dir,
+            )
+            .await
         }
     };
     result

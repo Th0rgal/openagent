@@ -94,6 +94,31 @@ Claude Code is executed **per workspace** using the CLI:
 - `CLAUDE.md` provides per-workspace context (generated from Library skills).
 - Built-in `Bash` is enabled in the permissions allowlist.
 
+### Harness bootstrap (auto-install)
+
+For **chroot workspaces**, Open Agent can automatically install the required
+CLIs during container build (best-effort):
+
+- `OPEN_AGENT_BOOTSTRAP_CLAUDECODE=true` (default)
+- `OPEN_AGENT_BOOTSTRAP_OPENCODE=true` (default)
+
+At runtime, Claude Code can also self-install on first use if missing:
+
+- `OPEN_AGENT_AUTO_INSTALL_CLAUDECODE=true` (default)
+
+OpenCode can also self-install on first use if missing:
+
+- `OPEN_AGENT_AUTO_INSTALL_OPENCODE=true` (default)
+
+OpenCode installation uses the official installer (`https://opencode.ai/install`)
+and copies the binary to `/usr/local/bin/opencode`. This requires `curl` inside
+the workspace. If `curl` is unavailable, the mission fails with a clear error
+message instructing you to add it to the workspace template.
+
+Claude Code/oh-my-opencode installation uses `npm` in the workspace. If `npm`
+is unavailable, the mission fails with a clear error message instructing you to
+add Node/npm to the workspace template.
+
 ### CLI protocol (NDJSON)
 
 Claude Code communicates via NDJSON streaming:

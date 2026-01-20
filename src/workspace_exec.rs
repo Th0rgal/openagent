@@ -59,6 +59,9 @@ impl WorkspaceExec {
             WorkspaceType::Host => {
                 let mut cmd = Command::new(program);
                 cmd.current_dir(cwd);
+                if !args.is_empty() {
+                    cmd.args(args);
+                }
                 if !env.is_empty() {
                     cmd.envs(env);
                 }

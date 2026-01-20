@@ -24,7 +24,7 @@ use crate::config::Config;
 use crate::mcp::McpRegistry;
 use crate::secrets::SecretsStore;
 use crate::task::{extract_deliverables, DeliverableSet};
-use crate::workspace::{self, Workspace};
+use crate::workspace::{self, Workspace, WorkspaceType};
 use crate::workspace_exec::WorkspaceExec;
 
 use super::control::{
@@ -552,17 +552,33 @@ async fn run_mission_turn(
     result
 }
 
+fn read_backend_configs() -> Option<Vec<serde_json::Value>> {
+    let home = std::env::var("HOME").ok()?;
+    let candidates = [
+        std::path::PathBuf::from(&home)
+            .join(".openagent")
+            .join("backend_config.json"),
+        std::path::PathBuf::from(&home)
+            .join(".openagent")
+            .join("data")
+            .join("backend_configs.json"),
+    ];
+
+    for path in candidates {
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(_) => continue,
+        };
+        if let Ok(configs) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
+            return Some(configs);
+        }
+    }
+    None
+}
+
 /// Read CLI path from backend config file if available.
 fn get_claudecode_cli_path_from_config(_app_working_dir: &std::path::Path) -> Option<String> {
-    // Backend configs are stored in ~/.openagent/data/backend_configs.json
-    let home = std::env::var("HOME").ok()?;
-    let config_path = std::path::PathBuf::from(&home)
-        .join(".openagent")
-        .join("data")
-        .join("backend_configs.json");
-
-    let contents = std::fs::read_to_string(&config_path).ok()?;
-    let configs: Vec<serde_json::Value> = serde_json::from_str(&contents).ok()?;
+    let configs = read_backend_configs()?;
 
     for config in configs {
         if config.get("id")?.as_str()? == "claudecode" {
@@ -632,6 +648,14 @@ pub async fn run_claudecode_turn(
 
     let session_id = Uuid::new_v4().to_string();
 
+    let workspace_exec = WorkspaceExec::new(workspace.clone());
+    if let Err(err_msg) =
+        ensure_claudecode_cli_available(&workspace_exec, work_dir, &cli_path).await
+    {
+        tracing::error!("{}", err_msg);
+        return AgentResult::failure(err_msg, 0).with_terminal_reason(TerminalReason::LlmError);
+    }
+
     tracing::info!(
         mission_id = %mission_id,
         session_id = %session_id,
@@ -677,7 +701,6 @@ pub async fn run_claudecode_turn(
     }
 
     // Use WorkspaceExec to spawn the CLI in the correct workspace context
-    let workspace_exec = WorkspaceExec::new(workspace.clone());
     let mut child = match workspace_exec
         .spawn_streaming(work_dir, &cli_path, &args, env)
         .await
@@ -929,6 +952,12 @@ pub async fn run_claudecode_turn(
     // Convert cost from USD to cents
     let cost_cents = (total_cost_usd * 100.0) as u64;
 
+    if final_result.trim().is_empty() && !had_error {
+        had_error = true;
+        final_result =
+            "Claude Code produced no output. Check CLI installation or authentication.".to_string();
+    }
+
     if had_error {
         AgentResult::failure(final_result, cost_cents)
             .with_terminal_reason(TerminalReason::LlmError)
@@ -939,15 +968,7 @@ pub async fn run_claudecode_turn(
 
 /// Read CLI path for opencode from backend config file if available.
 fn get_opencode_cli_path_from_config(_app_working_dir: &std::path::Path) -> Option<String> {
-    // Backend configs are stored in ~/.openagent/data/backend_configs.json
-    let home = std::env::var("HOME").ok()?;
-    let config_path = std::path::PathBuf::from(&home)
-        .join(".openagent")
-        .join("data")
-        .join("backend_configs.json");
-
-    let contents = std::fs::read_to_string(&config_path).ok()?;
-    let configs: Vec<serde_json::Value> = serde_json::from_str(&contents).ok()?;
+    let configs = read_backend_configs()?;
 
     for config in configs {
         if config.get("id")?.as_str()? == "opencode" {
@@ -957,6 +978,25 @@ fn get_opencode_cli_path_from_config(_app_working_dir: &std::path::Path) -> Opti
                         tracing::info!("Using OpenCode CLI path from backend config: {}", cli_path);
                         return Some(cli_path.to_string());
                     }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn get_opencode_permissive_from_config(_app_working_dir: &std::path::Path) -> Option<bool> {
+    let configs = read_backend_configs()?;
+
+    for config in configs {
+        if config.get("id")?.as_str()? == "opencode" {
+            if let Some(settings) = config.get("settings") {
+                if let Some(permissive) = settings.get("permissive").and_then(|v| v.as_bool()) {
+                    tracing::info!(
+                        "Using OpenCode permissive setting from backend config: {}",
+                        permissive
+                    );
+                    return Some(permissive);
                 }
             }
         }
@@ -997,25 +1037,456 @@ fn strip_ansi_codes(input: &str) -> String {
     out
 }
 
+fn parse_opencode_session_token(value: &str) -> Option<String> {
+    let mut token = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            token.push(ch);
+        } else {
+            break;
+        }
+    }
+    if token.starts_with("ses_") {
+        return Some(token);
+    }
+    if token.len() < 8 {
+        None
+    } else {
+        Some(token)
+    }
+}
+
+fn extract_opencode_session_id(output: &str) -> Option<String> {
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_lowercase();
+        for key in ["session id:", "session:", "session_id:", "session="] {
+            if let Some(idx) = lower.find(key) {
+                let rest = trimmed[idx + key.len()..].trim();
+                if let Some(token) = parse_opencode_session_token(rest) {
+                    return Some(token);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn opencode_output_needs_fallback(output: &str) -> bool {
+    let cleaned = strip_ansi_codes(output);
+    let mut lines: Vec<String> = cleaned
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect();
+
+    if lines.is_empty() {
+        return true;
+    }
+
+    for line in lines.drain(..) {
+        let lower = line.to_lowercase();
+        let is_banner = lower.contains("starting opencode server")
+            || lower.contains("opencode server started")
+            || lower.contains("sending prompt")
+            || lower.contains("waiting for completion")
+            || lower.contains("all tasks completed")
+            || lower.contains("completed")
+            || lower.contains("session id:")
+            || lower.contains("session:");
+        if !is_banner {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn resolve_opencode_storage_root(workspace: &Workspace) -> std::path::PathBuf {
+    match workspace.workspace_type {
+        WorkspaceType::Chroot => workspace
+            .path
+            .join("root")
+            .join(".local")
+            .join("share")
+            .join("opencode")
+            .join("storage"),
+        _ => {
+            let data_home = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+                format!("{}/.local/share", home)
+            });
+            std::path::PathBuf::from(data_home)
+                .join("opencode")
+                .join("storage")
+        }
+    }
+}
+
+fn load_latest_opencode_assistant_text(
+    workspace: &Workspace,
+    session_id: &str,
+) -> Option<String> {
+    let storage_root = resolve_opencode_storage_root(workspace);
+    let message_dir = storage_root.join("message").join(session_id);
+    if !message_dir.exists() {
+        return None;
+    }
+
+    let mut latest_time = 0i64;
+    let mut latest_message_id: Option<String> = None;
+
+    let entries = std::fs::read_dir(&message_dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path).ok()?;
+        let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+        let role = value.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        if role != "assistant" {
+            continue;
+        }
+        let created = value
+            .get("time")
+            .and_then(|t| t.get("created"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        if created >= latest_time {
+            latest_time = created;
+            latest_message_id = value
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+        }
+    }
+
+    let message_id = latest_message_id?;
+    let parts_dir = storage_root.join("part").join(&message_id);
+    if !parts_dir.exists() {
+        return None;
+    }
+
+    let mut parts: Vec<(i64, String, String)> = Vec::new();
+    let part_entries = std::fs::read_dir(&parts_dir).ok()?;
+    for entry in part_entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path).ok()?;
+        let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+        let part_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if part_type != "text" {
+            continue;
+        }
+        let text = value.get("text").and_then(|v| v.as_str()).unwrap_or("");
+        if text.is_empty() {
+            continue;
+        }
+        let start = value
+            .get("time")
+            .and_then(|t| t.get("start"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let filename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        parts.push((start, filename, text.to_string()));
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    parts.sort_by(|a, b| {
+        let time_cmp = a.0.cmp(&b.0);
+        if time_cmp == std::cmp::Ordering::Equal {
+            a.1.cmp(&b.1)
+        } else {
+            time_cmp
+        }
+    });
+
+    let mut combined = String::new();
+    for (_, _, text) in parts {
+        combined.push_str(&text);
+    }
+    if combined.trim().is_empty() {
+        None
+    } else {
+        Some(combined)
+    }
+}
+
+fn env_var_bool(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(value) => matches!(
+            value.trim().to_lowercase().as_str(),
+            "1" | "true" | "yes" | "y" | "on"
+        ),
+        Err(_) => default,
+    }
+}
+
 async fn command_available(
     workspace_exec: &WorkspaceExec,
     cwd: &std::path::Path,
     program: &str,
 ) -> bool {
-    if program.contains('/') {
+    if workspace_exec.workspace.workspace_type == WorkspaceType::Host {
+        if program.contains('/') {
+            return std::path::Path::new(program).is_file();
+        }
+        if let Ok(path_var) = std::env::var("PATH") {
+            for dir in path_var.split(':') {
+                if dir.is_empty() {
+                    continue;
+                }
+                let candidate = std::path::Path::new(dir).join(program);
+                if candidate.is_file() {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    async fn check_dir(
+        workspace_exec: &WorkspaceExec,
+        cwd: &std::path::Path,
+        program: &str,
+    ) -> Option<bool> {
+        let mut args = Vec::new();
+        args.push("-lc".to_string());
+        if program.contains('/') {
+            args.push(format!("test -x {}", program));
+        } else {
+            args.push(format!("command -v {} 2>/dev/null", program));
+        }
         let output = workspace_exec
-            .output(cwd, program, &["--version".to_string()], HashMap::new())
-            .await;
-        return matches!(output, Ok(out) if out.status.success());
+            .output(cwd, "/bin/sh", &args, HashMap::new())
+            .await
+            .ok()?;
+        if !output.status.success() {
+            return Some(false);
+        }
+        if program.contains('/') {
+            return Some(true);
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Some(!stdout.trim().is_empty())
+    }
+
+    if let Some(found) = check_dir(workspace_exec, cwd, program).await {
+        if found {
+            return true;
+        }
+    }
+
+    let fallback_dir = &workspace_exec.workspace.path;
+    if cwd != fallback_dir {
+        if let Some(found) = check_dir(workspace_exec, fallback_dir, program).await {
+            return found;
+        }
+    }
+
+    false
+}
+
+async fn ensure_claudecode_cli_available(
+    workspace_exec: &WorkspaceExec,
+    cwd: &std::path::Path,
+    cli_path: &str,
+) -> Result<(), String> {
+    if command_available(workspace_exec, cwd, cli_path).await {
+        return Ok(());
+    }
+
+    let auto_install = env_var_bool("OPEN_AGENT_AUTO_INSTALL_CLAUDECODE", true);
+    if !auto_install {
+        return Err(format!(
+            "Claude Code CLI '{}' not found in workspace. Install it or set CLAUDE_CLI_PATH.",
+            cli_path
+        ));
+    }
+
+    if !command_available(workspace_exec, cwd, "npm").await {
+        return Err(format!(
+            "Claude Code CLI '{}' not found and npm is missing in the workspace. Install Node.js/npm in the workspace template or set CLAUDE_CLI_PATH.",
+            cli_path
+        ));
     }
 
     let mut args = Vec::new();
     args.push("-lc".to_string());
-    args.push(format!("command -v {}", program));
+    args.push("npm install -g @anthropic-ai/claude-code@latest".to_string());
     let output = workspace_exec
         .output(cwd, "/bin/sh", &args, HashMap::new())
-        .await;
-    matches!(output, Ok(out) if out.status.success())
+        .await
+        .map_err(|e| format!("Failed to run npm install for Claude Code: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut message = String::new();
+        if !stderr.trim().is_empty() {
+            message.push_str(stderr.trim());
+        }
+        if !stdout.trim().is_empty() {
+            if !message.is_empty() {
+                message.push_str(" | ");
+            }
+            message.push_str(stdout.trim());
+        }
+        if message.is_empty() {
+            message = "npm install for Claude Code failed with no output".to_string();
+        }
+        return Err(format!("Claude Code install failed: {}", message));
+    }
+
+    if !command_available(workspace_exec, cwd, cli_path).await {
+        return Err(format!(
+            "Claude Code install completed but '{}' is still not available in workspace PATH.",
+            cli_path
+        ));
+    }
+
+    Ok(())
+}
+
+fn runner_is_oh_my_opencode(path: &str) -> bool {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name == "oh-my-opencode")
+        .unwrap_or(false)
+}
+
+async fn resolve_opencode_installer_fetcher(
+    workspace_exec: &WorkspaceExec,
+    cwd: &std::path::Path,
+) -> Option<String> {
+    let curl_candidates = ["curl", "/usr/bin/curl", "/bin/curl"];
+    for candidate in curl_candidates {
+        if command_available(workspace_exec, cwd, candidate).await {
+            return Some(format!(
+                "{} -fsSL https://opencode.ai/install",
+                candidate
+            ));
+        }
+    }
+
+    let wget_candidates = ["wget", "/usr/bin/wget", "/bin/wget"];
+    for candidate in wget_candidates {
+        if command_available(workspace_exec, cwd, candidate).await {
+            return Some(format!(
+                "{} -qO- https://opencode.ai/install",
+                candidate
+            ));
+        }
+    }
+
+    None
+}
+
+async fn opencode_binary_available(
+    workspace_exec: &WorkspaceExec,
+    cwd: &std::path::Path,
+) -> bool {
+    if command_available(workspace_exec, cwd, "opencode").await {
+        return true;
+    }
+    if command_available(workspace_exec, cwd, "/usr/local/bin/opencode").await {
+        return true;
+    }
+    if command_available(workspace_exec, cwd, "$HOME/.opencode/bin/opencode").await {
+        return true;
+    }
+    false
+}
+
+async fn cleanup_opencode_listeners(
+    workspace_exec: &WorkspaceExec,
+    cwd: &std::path::Path,
+) {
+    let mut args = Vec::new();
+    args.push("-lc".to_string());
+    args.push(
+        "if command -v lsof >/dev/null 2>&1; then \
+           pids=$(lsof -t -iTCP:4096 -sTCP:LISTEN 2>/dev/null || true); \
+           if [ -n \"$pids\" ]; then kill -9 $pids || true; fi; \
+         fi"
+        .to_string(),
+    );
+    let _ = workspace_exec.output(cwd, "/bin/sh", &args, HashMap::new()).await;
+}
+
+async fn ensure_opencode_cli_available(
+    workspace_exec: &WorkspaceExec,
+    cwd: &std::path::Path,
+) -> Result<(), String> {
+    if opencode_binary_available(workspace_exec, cwd).await {
+        return Ok(());
+    }
+
+    let auto_install = env_var_bool("OPEN_AGENT_AUTO_INSTALL_OPENCODE", true);
+    if !auto_install {
+        return Err(
+            "OpenCode CLI 'opencode' not found in workspace. Install it or disable OpenCode."
+                .to_string(),
+        );
+    }
+
+    let fetcher = resolve_opencode_installer_fetcher(workspace_exec, cwd).await.ok_or_else(|| {
+        "OpenCode CLI 'opencode' not found and neither curl nor wget is available in the workspace. Install curl/wget in the workspace template or disable OpenCode."
+            .to_string()
+    })?;
+
+    let mut args = Vec::new();
+    args.push("-lc".to_string());
+    args.push(
+        format!(
+            "{} | bash -s -- --no-modify-path \
+        && if [ -x \"$HOME/.opencode/bin/opencode\" ]; then install -m 0755 \"$HOME/.opencode/bin/opencode\" /usr/local/bin/opencode; fi"
+            , fetcher
+        ),
+    );
+    let output = workspace_exec
+        .output(cwd, "/bin/sh", &args, HashMap::new())
+        .await
+        .map_err(|e| format!("Failed to run OpenCode installer: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut message = String::new();
+        if !stderr.trim().is_empty() {
+            message.push_str(stderr.trim());
+        }
+        if !stdout.trim().is_empty() {
+            if !message.is_empty() {
+                message.push_str(" | ");
+            }
+            message.push_str(stdout.trim());
+        }
+        if message.is_empty() {
+            message = "OpenCode install failed with no output".to_string();
+        }
+        return Err(format!("OpenCode install failed: {}", message));
+    }
+
+    if !opencode_binary_available(workspace_exec, cwd).await {
+        return Err("OpenCode install completed but 'opencode' is still not available in workspace PATH.".to_string());
+    }
+
+    Ok(())
 }
 
 /// Execute a turn using OpenCode CLI backend.
@@ -1037,16 +1508,24 @@ pub async fn run_opencode_turn(
     _app_working_dir: &std::path::Path,
 ) -> AgentResult {
     use std::collections::HashMap;
-    use tokio::io::{AsyncBufReadExt, BufReader};
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
     // Determine CLI runner: prefer backend config, then env var, then try bunx/npx
     // We use 'bunx oh-my-opencode run' or 'npx oh-my-opencode run' for per-workspace execution.
     let workspace_exec = WorkspaceExec::new(workspace.clone());
+    if let Err(err) = ensure_opencode_cli_available(&workspace_exec, work_dir).await {
+        tracing::error!("{}", err);
+        return AgentResult::failure(err, 0).with_terminal_reason(TerminalReason::LlmError);
+    }
+
     let configured_runner = get_opencode_cli_path_from_config(_app_working_dir)
         .or_else(|| std::env::var("OPENCODE_CLI_PATH").ok());
 
+    let mut runner_is_direct = false;
     let cli_runner = if let Some(path) = configured_runner {
         if command_available(&workspace_exec, work_dir, &path).await {
+            runner_is_direct = runner_is_oh_my_opencode(&path);
             path
         } else {
             let err_msg = format!(
@@ -1056,15 +1535,40 @@ pub async fn run_opencode_turn(
             tracing::error!("{}", err_msg);
             return AgentResult::failure(err_msg, 0).with_terminal_reason(TerminalReason::LlmError);
         }
-    } else if command_available(&workspace_exec, work_dir, "bunx").await {
-        "bunx".to_string()
-    } else if command_available(&workspace_exec, work_dir, "npx").await {
-        "npx".to_string()
     } else {
-        let err_msg =
-            "No OpenCode CLI runner found in workspace (expected bunx or npx).".to_string();
-        tracing::error!("{}", err_msg);
-        return AgentResult::failure(err_msg, 0).with_terminal_reason(TerminalReason::LlmError);
+        if command_available(&workspace_exec, work_dir, "oh-my-opencode").await {
+            runner_is_direct = true;
+            "oh-my-opencode".to_string()
+        } else {
+            let auto_install = env_var_bool("OPEN_AGENT_AUTO_INSTALL_OPENCODE", true);
+            if auto_install && command_available(&workspace_exec, work_dir, "npm").await {
+                let mut install_args = Vec::new();
+                install_args.push("-lc".to_string());
+                install_args.push("npm install -g oh-my-opencode@latest".to_string());
+                if let Err(e) = workspace_exec
+                    .output(work_dir, "/bin/sh", &install_args, HashMap::new())
+                    .await
+                {
+                    tracing::warn!("Failed to auto-install oh-my-opencode: {}", e);
+                }
+            }
+
+            if command_available(&workspace_exec, work_dir, "oh-my-opencode").await {
+                runner_is_direct = true;
+                "oh-my-opencode".to_string()
+            } else if command_available(&workspace_exec, work_dir, "bunx").await {
+                "bunx".to_string()
+            } else if command_available(&workspace_exec, work_dir, "npx").await {
+                "npx".to_string()
+            } else {
+                let err_msg =
+                    "No OpenCode CLI runner found in workspace (expected oh-my-opencode, bunx, or npx)."
+                        .to_string();
+                tracing::error!("{}", err_msg);
+                return AgentResult::failure(err_msg, 0)
+                    .with_terminal_reason(TerminalReason::LlmError);
+            }
+        }
     };
 
     tracing::info!(
@@ -1083,7 +1587,11 @@ pub async fn run_opencode_turn(
     // Build CLI arguments for oh-my-opencode run
     // The 'run' command takes a prompt and executes it with completion detection
     // Arguments: bunx oh-my-opencode run [--agent <agent>] [--directory <path>] [--timeout <ms>] <message>
-    let mut args = vec!["oh-my-opencode".to_string(), "run".to_string()];
+    let mut args = if runner_is_direct {
+        vec!["run".to_string()]
+    } else {
+        vec!["oh-my-opencode".to_string(), "run".to_string()]
+    };
 
     if let Some(a) = agent {
         args.push("--agent".to_string());
@@ -1099,6 +1607,13 @@ pub async fn run_opencode_turn(
 
     // The message is passed as the final argument
     args.push(message.to_string());
+
+    tracing::debug!(
+        mission_id = %mission_id,
+        runner_is_direct = runner_is_direct,
+        cli_args = ?args,
+        "OpenCode CLI args prepared"
+    );
 
     // Build environment variables
     let mut env: HashMap<String, String> = HashMap::new();
@@ -1126,6 +1641,14 @@ pub async fn run_opencode_turn(
         opencode_config_path.to_string_lossy().to_string(),
     );
 
+    if let Some(permissive) = get_opencode_permissive_from_config(_app_working_dir) {
+        env.insert("OPENCODE_PERMISSIVE".to_string(), permissive.to_string());
+    } else if let Ok(value) = std::env::var("OPENCODE_PERMISSIVE") {
+        if !value.trim().is_empty() {
+            env.insert("OPENCODE_PERMISSIVE".to_string(), value);
+        }
+    }
+
     // Disable ANSI color codes for easier parsing
     env.insert("NO_COLOR".to_string(), "1".to_string());
     env.insert("FORCE_COLOR".to_string(), "0".to_string());
@@ -1135,6 +1658,8 @@ pub async fn run_opencode_turn(
     env.insert("OPENCODE_RUN".to_string(), "true".to_string());
     env.entry("OPEN_AGENT_WORKSPACE_TYPE".to_string())
         .or_insert_with(|| workspace.workspace_type.as_str().to_string());
+
+    cleanup_opencode_listeners(&workspace_exec, work_dir).await;
 
     // Use WorkspaceExec to spawn the CLI in the correct workspace context
     let mut child = match workspace_exec
@@ -1167,14 +1692,14 @@ pub async fn run_opencode_turn(
 
     let mut final_result = String::new();
     let mut had_error = false;
+    let session_id_capture: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
-    // Create buffered readers
-    let stdout_reader = BufReader::new(stdout);
-    let mut stdout_lines = stdout_reader.lines();
+    let mut stdout_reader = stdout;
 
     // Spawn a task to read stderr events if available
     let events_tx_clone = events_tx.clone();
     let mission_id_clone = mission_id;
+    let session_id_clone = session_id_capture.clone();
     let stderr_handle = if let Some(stderr) = stderr {
         Some(tokio::spawn(async move {
             let stderr_reader = BufReader::new(stderr);
@@ -1190,6 +1715,13 @@ pub async fn run_opencode_turn(
                 }
 
                 tracing::debug!(mission_id = %mission_id_clone, line = %clean, "OpenCode CLI stderr");
+
+                if let Some(session) = extract_opencode_session_id(&clean) {
+                    let mut guard = session_id_clone.lock().unwrap();
+                    if guard.is_none() {
+                        *guard = Some(session);
+                    }
+                }
 
                 // Parse stderr for tool execution events
                 // Format: "[MAIN] ⚡ TOOL.EXECUTE: <tool>" or "✓ TOOL.RESULT: \"...\""
@@ -1248,6 +1780,7 @@ pub async fn run_opencode_turn(
 
     // Process stdout until completion or cancellation
     // stdout contains the actual assistant response text
+    let mut buffer = [0u8; 4096];
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -1259,39 +1792,28 @@ pub async fn run_opencode_turn(
                 return AgentResult::failure("Cancelled".to_string(), 0)
                     .with_terminal_reason(TerminalReason::Cancelled);
             }
-            line_result = stdout_lines.next_line() => {
-                match line_result {
-                    Ok(Some(line)) => {
-                        if line.is_empty() {
-                            continue;
-                        }
-
-                        // Log the output for debugging
-                        tracing::debug!(mission_id = %mission_id, line = %line, "OpenCode CLI stdout");
-
-                        // Accumulate output as the final result (this is the assistant's text)
-                        let delta = if final_result.is_empty() {
-                            line.clone()
-                        } else {
-                            format!("\n{}", line)
-                        };
-                        final_result.push_str(&delta);
-
-                        // Check for error indicators in stdout too
-                        if line.contains("Error:") || line.contains("error:") {
-                            had_error = true;
-                        }
-
-                        // Emit text delta for the UI
-                        let _ = events_tx.send(AgentEvent::Thinking {
-                            content: delta,
-                            done: false,
-                            mission_id: Some(mission_id),
-                        });
-                    }
-                    Ok(None) => {
+            read_result = stdout_reader.read(&mut buffer) => {
+                match read_result {
+                    Ok(0) => {
                         // EOF - process finished
                         break;
+                    }
+                    Ok(n) => {
+                        let chunk = String::from_utf8_lossy(&buffer[..n]);
+                        if !chunk.is_empty() {
+                            tracing::debug!(mission_id = %mission_id, chunk = %chunk, "OpenCode CLI stdout");
+                            final_result.push_str(&chunk);
+
+                            if chunk.contains("Error:") || chunk.contains("error:") {
+                                had_error = true;
+                            }
+
+                            let _ = events_tx.send(AgentEvent::Thinking {
+                                content: chunk.to_string(),
+                                done: false,
+                                mission_id: Some(mission_id),
+                            });
+                        }
                     }
                     Err(e) => {
                         tracing::error!("Error reading from OpenCode CLI stdout: {}", e);
@@ -1326,6 +1848,33 @@ pub async fn run_opencode_turn(
         done: true,
         mission_id: Some(mission_id),
     });
+
+    if opencode_output_needs_fallback(&final_result) {
+        let session_id = session_id_capture.lock().unwrap().clone();
+        let session_id = session_id.or_else(|| extract_opencode_session_id(&final_result));
+        if let Some(session_id) = session_id {
+            if let Some(text) = load_latest_opencode_assistant_text(workspace, &session_id) {
+                tracing::info!(
+                    mission_id = %mission_id,
+                    session_id = %session_id,
+                    text_len = text.len(),
+                    "Recovered OpenCode assistant output from storage"
+                );
+                final_result = text;
+            } else {
+                tracing::warn!(
+                    mission_id = %mission_id,
+                    session_id = %session_id,
+                    "OpenCode assistant output not found in storage"
+                );
+            }
+        } else {
+            tracing::warn!(
+                mission_id = %mission_id,
+                "OpenCode output was empty/banner-only and no session id was detected"
+            );
+        }
+    }
 
     tracing::info!(
         mission_id = %mission_id,
