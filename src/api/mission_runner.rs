@@ -1733,6 +1733,9 @@ async fn ensure_opencode_plugin_installed(
 fn sync_opencode_agent_config(
     opencode_config_dir: &std::path::Path,
     default_model: Option<&str>,
+    has_openai: bool,
+    has_anthropic: bool,
+    has_google: bool,
 ) {
     let (omo_path, omo_path_jsonc) = workspace_oh_my_opencode_config_paths(opencode_config_dir);
     let omo_path = if omo_path.exists() {
@@ -1790,13 +1793,51 @@ fn sync_opencode_agent_config(
         serde_json::json!({})
     };
 
-    let mut updated = false;
+    let provider_allowed = |provider: &str| -> bool {
+        match provider {
+            "anthropic" | "claude" => has_anthropic,
+            "openai" | "codex" => has_openai,
+            "google" | "gemini" => has_google,
+            _ => true,
+        }
+    };
+
+    let mut effective_default = default_model;
     if let Some(model) = default_model {
+        if let Some((provider, _)) = model.split_once('/') {
+            if !provider_allowed(provider) {
+                tracing::warn!(
+                    provider = %provider,
+                    "Skipping default OpenCode model override because provider is not configured"
+                );
+                effective_default = None;
+            }
+        }
+    }
+
+    let model_allowed = |model: &str| -> bool {
+        match model.split_once('/') {
+            Some((provider, _)) => provider_allowed(provider),
+            None => true,
+        }
+    };
+
+    let mut updated = false;
+    if let Some(model) = effective_default {
         if let Some(obj) = opencode_json.as_object_mut() {
             match obj.get("model").and_then(|v| v.as_str()) {
                 Some(existing) if existing == model => {}
                 _ => {
                     obj.insert("model".to_string(), serde_json::Value::String(model.to_string()));
+                    updated = true;
+                }
+            }
+        }
+    } else if let Some(obj) = opencode_json.as_object_mut() {
+        if let Some(existing) = obj.get("model").and_then(|v| v.as_str()) {
+            if let Some((provider, _)) = existing.split_once('/') {
+                if !provider_allowed(provider) {
+                    obj.remove("model");
                     updated = true;
                 }
             }
@@ -1825,9 +1866,16 @@ fn sync_opencode_agent_config(
         }
     };
     for (name, entry) in omo_agents {
-        let desired_model = default_model
-            .or_else(|| entry.get("model").and_then(|v| v.as_str()))
-            .map(|s| s.to_string());
+        let desired_model = effective_default
+            .filter(|model| model_allowed(model))
+            .map(|s| s.to_string())
+            .or_else(|| {
+                entry
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .filter(|model| model_allowed(model))
+                    .map(|s| s.to_string())
+            });
 
         if let Some(existing) = agent_entry.get_mut(name) {
             if let (Some(model), Some(existing_obj)) = (desired_model.as_ref(), existing.as_object_mut()) {
@@ -1835,6 +1883,13 @@ fn sync_opencode_agent_config(
                     Some(current) if current == model => {}
                     _ => {
                         existing_obj.insert("model".to_string(), serde_json::Value::String(model.clone()));
+                        updated = true;
+                    }
+                }
+            } else if let Some(existing_obj) = existing.as_object_mut() {
+                if let Some(current) = existing_obj.get("model").and_then(|v| v.as_str()) {
+                    if !model_allowed(current) {
+                        existing_obj.remove("model");
                         updated = true;
                     }
                 }
@@ -2718,7 +2773,7 @@ pub async fn run_opencode_turn(
         return AgentResult::failure(err, 0).with_terminal_reason(TerminalReason::LlmError);
     }
 
-    let resolved_model = model
+    let mut resolved_model = model
         .map(|m| m.to_string())
         .or_else(|| {
             std::env::var("OPEN_AGENT_OPENCODE_DEFAULT_MODEL")
@@ -2731,20 +2786,58 @@ pub async fn run_opencode_turn(
                 .filter(|v| !v.trim().is_empty())
         });
 
-    let provider_hint = resolved_model
+    let (has_openai, has_anthropic, has_google) = detect_opencode_provider_auth();
+
+    let mut provider_hint = resolved_model
         .as_deref()
         .and_then(|m| m.split_once('/'))
         .map(|(provider, _)| provider.to_lowercase());
 
-    let refresh_result = match provider_hint.as_deref() {
+    let provider_available = |provider: &str| -> bool {
+        match provider {
+            "anthropic" | "claude" => has_anthropic,
+            "openai" | "codex" => has_openai,
+            "google" | "gemini" => has_google,
+            _ => true,
+        }
+    };
+
+    if let Some(provider) = provider_hint.as_deref() {
+        if !provider_available(provider) {
+            tracing::warn!(
+                mission_id = %mission_id,
+                provider = %provider,
+                "Requested OpenCode model provider is not configured; falling back to available providers"
+            );
+            resolved_model = None;
+            provider_hint = None;
+        }
+    }
+
+    let fallback_provider = if has_openai {
+        Some("openai")
+    } else if has_google {
+        Some("google")
+    } else if has_anthropic {
+        Some("anthropic")
+    } else {
+        None
+    };
+
+    let refresh_provider = provider_hint.as_deref().or(fallback_provider);
+    let refresh_result = match refresh_provider {
         Some("anthropic") | Some("claude") => ensure_anthropic_oauth_token_valid().await,
         Some("openai") | Some("codex") => ensure_openai_oauth_token_valid().await,
         Some("google") | Some("gemini") => ensure_google_oauth_token_valid().await,
+        None => Err("No OpenCode providers configured. Add a provider in Settings → AI Providers."
+            .to_string()),
         _ => Ok(()),
     };
 
     if let Err(err) = refresh_result {
-        let label = provider_hint.unwrap_or_else(|| "provider".to_string());
+        let label = refresh_provider
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "provider".to_string());
         let err_msg = format!(
             "{} OAuth token refresh failed: {}. Please re-authenticate in Settings → AI Providers.",
             label, err
@@ -2828,8 +2921,13 @@ pub async fn run_opencode_turn(
         runner_is_direct,
     )
     .await;
-    sync_opencode_agent_config(&opencode_config_dir_host, resolved_model.as_deref());
-    let (_has_openai, _has_anthropic, has_google) = detect_opencode_provider_auth();
+    sync_opencode_agent_config(
+        &opencode_config_dir_host,
+        resolved_model.as_deref(),
+        has_openai,
+        has_anthropic,
+        has_google,
+    );
     if has_google {
         if let Some(project_id) = detect_google_project_id() {
             ensure_opencode_google_project_id(&opencode_config_dir_host, &project_id);
