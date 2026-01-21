@@ -38,30 +38,26 @@ const escapeHtml = (str: string): string =>
 function highlightJson(code: string): string {
   let html = escapeHtml(code);
 
-  // Strings (keys and values)
+  // Process in a single pass to avoid double-highlighting
+  // Match strings, numbers, booleans/null, and punctuation
   html = html.replace(
-    /(&quot;)((?:[^&]|&(?!quot;))*)(&quot;)/g,
-    (match, open, content, close) => {
-      return `<span class="token string">${open}${content}${close}</span>`;
+    /(&quot;)((?:[^&]|&(?!quot;))*)(&quot;)|(-?\b\d+\.?\d*\b)|\b(true|false|null)\b|([{}\[\]:,])/g,
+    (match, strOpen, strContent, strClose, num, bool, punct) => {
+      if (strOpen) {
+        // String (key or value)
+        return `<span class="token string">${strOpen}${strContent}${strClose}</span>`;
+      } else if (num) {
+        // Number
+        return `<span class="token number">${num}</span>`;
+      } else if (bool) {
+        // Boolean or null
+        return `<span class="token boolean">${bool}</span>`;
+      } else if (punct) {
+        // Punctuation
+        return `<span class="token punctuation">${punct}</span>`;
+      }
+      return match;
     }
-  );
-
-  // Numbers
-  html = html.replace(
-    /\b(-?\d+\.?\d*)\b/g,
-    '<span class="token number">$1</span>'
-  );
-
-  // Booleans and null
-  html = html.replace(
-    /\b(true|false|null)\b/g,
-    '<span class="token boolean">$1</span>'
-  );
-
-  // Punctuation (braces, brackets, colons, commas)
-  html = html.replace(
-    /([{}\[\]:,])/g,
-    '<span class="token punctuation">$1</span>'
   );
 
   return html;

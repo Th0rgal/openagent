@@ -40,6 +40,7 @@ pub enum WorkspaceType {
     /// Execute directly on remote host
     Host,
     /// Execute inside isolated container environment
+    #[serde(alias = "chroot")]
     Container,
 }
 
