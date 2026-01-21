@@ -636,8 +636,10 @@ pub async fn refresh_anthropic_oauth_token() -> Result<(), String> {
             status,
             error_text
         );
-        if status == reqwest::StatusCode::BAD_REQUEST
-            && error_text.to_lowercase().contains("invalid_grant")
+        let lower = error_text.to_lowercase();
+        if (status == reqwest::StatusCode::BAD_REQUEST
+            || status == reqwest::StatusCode::UNAUTHORIZED)
+            && lower.contains("invalid_grant")
         {
             if let Err(e) = remove_opencode_auth_entry(ProviderType::Anthropic) {
                 tracing::warn!("Failed to clear Anthropic auth entry after invalid_grant: {}", e);
@@ -724,11 +726,12 @@ pub async fn refresh_openai_oauth_token() -> Result<(), String> {
             status,
             error_text
         );
-        if status == reqwest::StatusCode::BAD_REQUEST
-            && error_text.to_lowercase().contains("invalid_grant")
-        {
-            if let Err(e) = remove_opencode_auth_entry(ProviderType::OpenAI) {
-                tracing::warn!("Failed to clear OpenAI auth entry after invalid_grant: {}", e);
+        let lower = error_text.to_lowercase();
+        if status == reqwest::StatusCode::BAD_REQUEST || status == reqwest::StatusCode::UNAUTHORIZED {
+            if lower.contains("invalid_grant") || lower.contains("refresh_token_reused") {
+                if let Err(e) = remove_opencode_auth_entry(ProviderType::OpenAI) {
+                    tracing::warn!("Failed to clear OpenAI auth entry after refresh failure: {}", e);
+                }
             }
         }
         return Err(format!(
@@ -811,8 +814,10 @@ pub async fn refresh_google_oauth_token() -> Result<(), String> {
             status,
             error_text
         );
-        if status == reqwest::StatusCode::BAD_REQUEST
-            && error_text.to_lowercase().contains("invalid_grant")
+        let lower = error_text.to_lowercase();
+        if (status == reqwest::StatusCode::BAD_REQUEST
+            || status == reqwest::StatusCode::UNAUTHORIZED)
+            && lower.contains("invalid_grant")
         {
             if let Err(e) = remove_opencode_auth_entry(ProviderType::Google) {
                 tracing::warn!("Failed to clear Google auth entry after invalid_grant: {}", e);
