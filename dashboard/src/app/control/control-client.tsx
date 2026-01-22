@@ -1876,7 +1876,7 @@ export default function ControlClient() {
 
   // Desktop stream state
   const [showDesktopStream, setShowDesktopStream] = useState(false);
-  const [desktopDisplayId, setDesktopDisplayId] = useState(":101");
+  const [desktopDisplayId, setDesktopDisplayId] = useState(":99");
   const [showDisplaySelector, setShowDisplaySelector] = useState(false);
   const [hasDesktopSession, setHasDesktopSession] = useState(false);
   const [desktopSessions, setDesktopSessions] = useState<DesktopSessionDetail[]>([]);
@@ -2407,11 +2407,80 @@ export default function ControlClient() {
       if (activeSession?.display) {
         setDesktopDisplayId(activeSession.display);
         setHasDesktopSession(true);
+        // Auto-open desktop panel when mission has an active session
+        setShowDesktopStream(true);
         return;
       }
       setHasDesktopSession(missionHasDesktopSession(mission));
     },
     [getActiveDesktopSession, missionHasDesktopSession]
+  );
+
+  // Detect desktop sessions from stored events (when loading from history)
+  // This handles the case where mission.desktop_sessions isn't populated yet
+  // and mission.history doesn't include tool calls (SQLite only stores user/assistant messages)
+  const applyDesktopSessionFromEvents = useCallback(
+    (events: StoredEvent[] | null) => {
+      if (!events) return;
+
+      // Track sessions by display: true = started, false = closed
+      const sessionsByDisplay = new Map<string, boolean>();
+      let latestActiveDisplay: string | null = null;
+
+      for (const event of events) {
+        if (event.event_type !== "tool_result") continue;
+
+        const toolName = event.tool_name;
+        const isStart =
+          toolName === "desktop_start_session" ||
+          toolName === "desktop_desktop_start_session";
+        const isClose =
+          toolName === "desktop_close_session" ||
+          toolName === "desktop_desktop_close_session";
+
+        if (!isStart && !isClose) continue;
+
+        // Parse result to get display
+        let result: unknown = event.content;
+        try {
+          result = event.content ? JSON.parse(event.content) : null;
+        } catch {
+          // Keep as string if not valid JSON
+        }
+
+        if (!result || typeof result !== "object") continue;
+        const display = (result as Record<string, unknown>)["display"];
+        if (typeof display !== "string") continue;
+
+        if (isStart) {
+          sessionsByDisplay.set(display, true);
+          latestActiveDisplay = display;
+        } else if (isClose) {
+          sessionsByDisplay.set(display, false);
+          if (latestActiveDisplay === display) {
+            latestActiveDisplay = null;
+          }
+        }
+      }
+
+      // Check if we found any active sessions
+      if (latestActiveDisplay) {
+        setDesktopDisplayId(latestActiveDisplay);
+        setHasDesktopSession(true);
+        setShowDesktopStream(true);
+      } else {
+        // Check if any session is still active
+        for (const [display, isActive] of sessionsByDisplay) {
+          if (isActive) {
+            setDesktopDisplayId(display);
+            setHasDesktopSession(true);
+            setShowDesktopStream(true);
+            return;
+          }
+        }
+      }
+    },
+    []
   );
 
   // Derive working directory from mission's desktop sessions for file path resolution
@@ -2703,6 +2772,10 @@ export default function ControlClient() {
         // Use events if available, otherwise fall back to basic history
         setItems(events ? eventsToItems(events) : missionHistoryToItems(mission));
         applyDesktopSessionState(mission);
+        // Also check events for desktop sessions (in case mission.desktop_sessions isn't populated yet)
+        if (events) {
+          applyDesktopSessionFromEvents(events);
+        }
       } catch (err) {
         if (cancelled || fetchingMissionIdRef.current !== id) return;
         console.error("Failed to load mission:", err);
@@ -2746,6 +2819,8 @@ export default function ControlClient() {
             .then((events) => {
               if (cancelled) return;
               setItems(eventsToItems(events));
+              // Also check events for desktop sessions
+              applyDesktopSessionFromEvents(events);
             })
             .catch(() => {}); // Keep basic history on failure
           return;
@@ -2775,6 +2850,7 @@ export default function ControlClient() {
     router,
     missionHistoryToItems,
     applyDesktopSessionState,
+    applyDesktopSessionFromEvents,
     authRetryTrigger,
   ]);
 
@@ -2909,16 +2985,27 @@ export default function ControlClient() {
     try {
       const sessions = await listDesktopSessions();
       setDesktopSessions(sessions);
-      // Update hasDesktopSession based on whether there are any running sessions
-      const hasRunning = sessions.some(s => s.process_running && s.status !== 'stopped');
-      if (hasRunning && !hasDesktopSession) {
-        setHasDesktopSession(true);
+      // Find running sessions
+      const runningSessions = sessions.filter(s => s.process_running && s.status !== 'stopped');
+      const hasRunning = runningSessions.length > 0;
+
+      if (hasRunning) {
+        // Auto-select first active session if current display isn't running
+        const currentIsRunning = runningSessions.some(s => s.display === desktopDisplayId);
+        if (!currentIsRunning) {
+          setDesktopDisplayId(runningSessions[0].display);
+        }
+        // Auto-open desktop panel when there's an active session
+        if (!hasDesktopSession) {
+          setHasDesktopSession(true);
+          setShowDesktopStream(true);
+        }
       }
     } catch (err) {
       if (isNetworkError(err)) return;
       // Silently fail - desktop sessions are optional
     }
-  }, [hasDesktopSession]);
+  }, [hasDesktopSession, desktopDisplayId]);
 
   useEffect(() => {
     refreshDesktopSessions();
@@ -3061,6 +3148,10 @@ export default function ControlClient() {
         setItems(historyItems);
         // Check if mission has an active desktop session (stored metadata or fallback to history)
         applyDesktopSessionState(mission);
+        // Also check events for desktop sessions
+        if (events) {
+          applyDesktopSessionFromEvents(events);
+        }
         // Update cache with fresh data
         setMissionItems((prev) => ({ ...prev, [missionId]: historyItems }));
         setViewingMission(mission);
@@ -3195,6 +3286,8 @@ export default function ControlClient() {
           const fullItems = eventsToItems(events);
           setItems(fullItems);
           setMissionItems((prev) => ({ ...prev, [resumed.id]: fullItems }));
+          // Also check events for desktop sessions
+          applyDesktopSessionFromEvents(events);
         })
         .catch(() => {}); // Keep basic history on failure
     } catch (err) {
@@ -3301,6 +3394,8 @@ export default function ControlClient() {
               const historyItems = eventsToItems(events);
               setItems(historyItems);
               setMissionItems((prev) => ({ ...prev, [viewingId]: historyItems }));
+              // Also check events for desktop sessions
+              applyDesktopSessionFromEvents(events);
             })
             .catch(() => {
               // Fall back to basic history if events fail
@@ -4136,15 +4231,21 @@ export default function ControlClient() {
                     title={missionStatus?.label}
                   />
                   {activeMission.workspace_name && (
-                    <>
+                    <span className="hidden sm:flex items-center gap-2">
                       <span className="text-sm font-medium text-white/50">
                         {activeMission.workspace_name}
                       </span>
                       <div className="h-4 w-px bg-white/20" />
-                    </>
+                    </span>
                   )}
                   <span className="text-sm font-medium text-white/70">
-                    {[activeMission.agent, activeMission.id.slice(0, 8)].filter(Boolean).join(' · ')}
+                    {activeMission.agent && (
+                      <span className="hidden sm:inline">
+                        {activeMission.agent}
+                        <span className="mx-1.5 text-white/40">·</span>
+                      </span>
+                    )}
+                    {activeMission.id.slice(0, 8)}
                   </span>
                 </>
               ) : (
