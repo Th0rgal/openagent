@@ -96,6 +96,7 @@ export default function SettingsPage() {
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{
     name?: string;
+    google_project_id?: string;
     api_key?: string;
     base_url?: string;
     enabled?: boolean;
@@ -381,6 +382,7 @@ export default function SettingsPage() {
     setEditingProvider(provider.id);
     setEditForm({
       name: provider.name,
+      google_project_id: provider.google_project_id ?? '',
       api_key: '',
       base_url: provider.base_url || '',
       enabled: provider.enabled,
@@ -393,6 +395,10 @@ export default function SettingsPage() {
     try {
       await updateAIProvider(editingProvider, {
         name: editForm.name,
+        google_project_id:
+          editForm.google_project_id === ''
+            ? null
+            : editForm.google_project_id || undefined,
         api_key: editForm.api_key || undefined,
         base_url: editForm.base_url || undefined,
         enabled: editForm.enabled,
@@ -588,6 +594,17 @@ export default function SettingsPage() {
                             placeholder="New API key (leave empty to keep)"
                             className="w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500/50"
                           />
+                          {provider.provider_type === 'google' && (
+                            <input
+                              type="text"
+                              value={editForm.google_project_id ?? ''}
+                              onChange={(e) =>
+                                setEditForm({ ...editForm, google_project_id: e.target.value })
+                              }
+                              placeholder="Google Cloud project ID (required for Gemini)"
+                              className="w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500/50"
+                            />
+                          )}
                           <div className="flex items-center justify-between pt-1">
                             <label className="flex items-center gap-2 text-xs text-white/60 cursor-pointer">
                               <input

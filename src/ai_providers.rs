@@ -272,6 +272,9 @@ pub struct AIProvider {
     pub provider_type: ProviderType,
     /// Human-readable name (e.g., "My Claude Account", "Work OpenAI")
     pub name: String,
+    /// Optional Google Cloud project ID (required for Gemini via OpenCode)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub google_project_id: Option<String>,
     /// API key (if using API key auth)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
@@ -316,6 +319,7 @@ impl AIProvider {
             id: Uuid::new_v4(),
             provider_type,
             name,
+            google_project_id: None,
             api_key: None,
             oauth: None,
             base_url: None,

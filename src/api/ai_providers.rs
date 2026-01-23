@@ -583,6 +583,9 @@ pub struct ProviderTypeInfo {
 pub struct CreateProviderRequest {
     pub provider_type: ProviderType,
     pub name: String,
+    /// Optional Google Cloud project ID (for Google provider)
+    #[serde(default)]
+    pub google_project_id: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,
     #[serde(default)]
@@ -602,6 +605,8 @@ fn default_true() -> bool {
 #[derive(Debug, Deserialize)]
 pub struct UpdateProviderRequest {
     pub name: Option<String>,
+    /// Optional Google Cloud project ID update (for Google provider)
+    pub google_project_id: Option<Option<String>>,
     pub api_key: Option<Option<String>>,
     pub base_url: Option<Option<String>>,
     pub enabled: Option<bool>,
@@ -615,6 +620,7 @@ pub struct ProviderResponse {
     pub provider_type: ProviderType,
     pub provider_type_name: String,
     pub name: String,
+    pub google_project_id: Option<String>,
     pub has_api_key: bool,
     pub has_oauth: bool,
     pub base_url: Option<String>,
@@ -649,6 +655,7 @@ struct ProviderConfigEntry {
     name: Option<String>,
     base_url: Option<String>,
     enabled: Option<bool>,
+    google_project_id: Option<String>,
 }
 
 fn build_provider_response(
@@ -665,6 +672,9 @@ fn build_provider_response(
         .unwrap_or_else(|| provider_type.display_name().to_string());
     let base_url = config.as_ref().and_then(|c| c.base_url.clone());
     let enabled = config.as_ref().and_then(|c| c.enabled).unwrap_or(true);
+    let google_project_id = config
+        .as_ref()
+        .and_then(|c| c.google_project_id.clone());
     let is_default = default_provider
         .map(|p| p == provider_type)
         .unwrap_or(false);
@@ -692,6 +702,7 @@ fn build_provider_response(
         provider_type,
         provider_type_name: provider_type.display_name().to_string(),
         name,
+        google_project_id,
         has_api_key: matches!(auth, Some(AuthKind::ApiKey)),
         has_oauth: matches!(auth, Some(AuthKind::OAuth)),
         base_url,
@@ -1587,12 +1598,23 @@ fn get_provider_config_entry(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     let enabled = entry.get("enabled").and_then(|v| v.as_bool());
+    let google_project_id = if provider == ProviderType::Google {
+        entry
+            .get("options")
+            .and_then(|v| v.as_object())
+            .and_then(|opts| opts.get("projectId"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    } else {
+        None
+    };
     // Note: use_for_backends is now stored separately in .openagent/provider_backends.json
     // and should be read using read_provider_backends_state() instead
     Some(ProviderConfigEntry {
         name,
         base_url,
         enabled,
+        google_project_id,
     })
 }
 
@@ -1603,6 +1625,7 @@ fn set_provider_config_entry(
     base_url: Option<Option<String>>,
     enabled: Option<bool>,
     use_for_backends: Option<Vec<String>>,
+    google_project_id: Option<Option<String>>,
 ) {
     if !config.is_object() {
         *config = serde_json::json!({});
@@ -1649,6 +1672,34 @@ fn set_provider_config_entry(
     // Remove any existing useForBackends for migration/cleanup.
     let _ = use_for_backends;
     entry_obj.remove("useForBackends");
+
+    if provider == ProviderType::Google {
+        if let Some(project_id) = google_project_id {
+            match project_id {
+                Some(value) => {
+                    let options = entry_obj
+                        .entry("options".to_string())
+                        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                    if let Some(options_obj) = options.as_object_mut() {
+                        options_obj.insert(
+                            "projectId".to_string(),
+                            serde_json::Value::String(value),
+                        );
+                    }
+                }
+                None => {
+                    if let Some(options) = entry_obj.get_mut("options") {
+                        if let Some(options_obj) = options.as_object_mut() {
+                            options_obj.remove("projectId");
+                        }
+                        if options.as_object().map(|o| o.is_empty()).unwrap_or(false) {
+                            entry_obj.remove("options");
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn remove_provider_config_entry(config: &mut serde_json::Value, provider: ProviderType) {
@@ -2220,6 +2271,7 @@ async fn create_provider(
         Some(req.base_url),
         Some(req.enabled),
         use_for_backends.clone(),
+        req.google_project_id.map(Some),
     );
 
     write_opencode_config(&config_path, &opencode_config)
@@ -2328,6 +2380,7 @@ async fn update_provider(
         req.base_url,
         req.enabled,
         req.use_for_backends.clone(),
+        req.google_project_id,
     );
 
     write_opencode_config(&config_path, &opencode_config)
@@ -2915,6 +2968,7 @@ async fn oauth_callback_inner(
                         None,
                         None,
                         req.use_for_backends.clone(),
+                        None,
                     );
                     if let Err(e) = write_opencode_config(&config_path, &opencode_config) {
                         tracing::error!("Failed to write OpenCode config: {}", e);
@@ -2990,6 +3044,7 @@ async fn oauth_callback_inner(
                         None,
                         None,
                         req.use_for_backends.clone(),
+                        None,
                     );
                     if let Err(e) = write_opencode_config(&config_path, &opencode_config) {
                         tracing::error!("Failed to write OpenCode config: {}", e);

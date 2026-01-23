@@ -2403,6 +2403,7 @@ export interface AIProvider {
   provider_type: AIProviderType;
   provider_type_name: string;
   name: string;
+  google_project_id?: string | null;
   has_api_key: boolean;
   has_oauth: boolean;
   base_url: string | null;
@@ -2454,6 +2455,7 @@ export async function getAIProvider(id: string): Promise<AIProvider> {
 export async function createAIProvider(data: {
   provider_type: AIProviderType;
   name: string;
+  google_project_id?: string;
   api_key?: string;
   base_url?: string;
   enabled?: boolean;
@@ -2474,6 +2476,7 @@ export async function updateAIProvider(
   id: string,
   data: {
     name?: string;
+    google_project_id?: string | null;
     api_key?: string | null;
     base_url?: string | null;
     enabled?: boolean;

@@ -1891,6 +1891,37 @@ fn auth_entry_has_credentials(value: &serde_json::Value) -> bool {
         || value.get("access_token").is_some()
 }
 
+fn load_provider_auth_entries(
+    auth_dir: &std::path::Path,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut entries = serde_json::Map::new();
+    let Ok(dir_entries) = std::fs::read_dir(auth_dir) else {
+        return entries;
+    };
+
+    for entry in dir_entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if stem.is_empty() {
+            continue;
+        }
+        let Ok(contents) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
+            continue;
+        };
+        if auth_entry_has_credentials(&value) {
+            entries.insert(stem.to_string(), value);
+        }
+    }
+
+    entries
+}
+
 fn detect_opencode_provider_auth(app_working_dir: Option<&std::path::Path>) -> OpenCodeAuthState {
     let mut has_openai = false;
     let mut has_anthropic = false;
@@ -2929,6 +2960,34 @@ fn sync_opencode_auth_to_workspace(
                     dest.display(),
                     e
                 );
+            }
+        }
+    }
+
+    // Merge provider auth files into auth.json for env export (e.g., XAI_API_KEY)
+    if let Some(provider_dir) = workspace_opencode_provider_auth_dir(workspace) {
+        let provider_entries = load_provider_auth_entries(&provider_dir);
+        if !provider_entries.is_empty() {
+            let mut merged = match auth_json.take() {
+                Some(serde_json::Value::Object(map)) => map,
+                Some(_) => serde_json::Map::new(),
+                None => serde_json::Map::new(),
+            };
+            for (key, value) in provider_entries {
+                merged.entry(key).or_insert(value);
+            }
+            auth_json = Some(serde_json::Value::Object(merged));
+
+            if let Some(dest_path) = workspace_opencode_auth_path(workspace) {
+                if let Some(ref value) = auth_json {
+                    if let Err(e) = write_json_file(&dest_path, value) {
+                        tracing::warn!(
+                            "Failed to write merged OpenCode auth.json to workspace {}: {}",
+                            dest_path.display(),
+                            e
+                        );
+                    }
+                }
             }
         }
     }
