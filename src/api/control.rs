@@ -68,6 +68,26 @@ fn build_history_context(history: &[(String, String)], max_chars: usize) -> Stri
     result
 }
 
+async fn resolve_claudecode_default_model(library: &SharedLibrary) -> Option<String> {
+    let lib = {
+        let guard = library.read().await;
+        guard.clone()
+    }?;
+
+    match lib.get_claudecode_config().await {
+        Ok(config) => config
+            .default_model
+            .and_then(|model| {
+                let trimmed = model.trim().to_string();
+                if trimmed.is_empty() { None } else { Some(trimmed) }
+            }),
+        Err(err) => {
+            tracing::warn!("Failed to load Claude Code config from library: {}", err);
+            None
+        }
+    }
+}
+
 async fn close_mission_desktop_sessions(
     mission_store: &Arc<dyn MissionStore>,
     mission_id: Uuid,
@@ -1076,9 +1096,15 @@ pub async fn create_mission(
         })
         .unwrap_or((None, None, None, None, None));
 
+    let mut model_override = model_override;
     if let Some(value) = backend.as_ref() {
         if value.trim().is_empty() {
             backend = None;
+        }
+    }
+    if let Some(value) = model_override.as_ref() {
+        if value.trim().is_empty() {
+            model_override = None;
         }
     }
 
@@ -1100,6 +1126,12 @@ pub async fn create_mission(
                 StatusCode::BAD_REQUEST,
                 format!("Unknown backend: {}", backend_id),
             ));
+        }
+    }
+
+    if backend.as_deref() == Some("claudecode") && model_override.is_none() {
+        if let Some(default_model) = resolve_claudecode_default_model(&state.library).await {
+            model_override = Some(default_model);
         }
     }
 
@@ -3555,8 +3587,13 @@ async fn run_single_control_turn(
     model_override: Option<String>,
     agent_override: Option<String>,
 ) -> crate::agents::AgentResult {
-    if model_override.is_some() {
-        config.default_model = model_override;
+    let is_claudecode = backend_id.as_deref() == Some("claudecode");
+    if let Some(model) = model_override {
+        config.default_model = Some(model);
+    } else if is_claudecode && config.default_model.is_none() {
+        if let Some(default_model) = resolve_claudecode_default_model(&library).await {
+            config.default_model = Some(default_model);
+        }
     }
     if let Some(agent) = agent_override {
         config.opencode_agent = Some(agent);

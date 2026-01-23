@@ -16,7 +16,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use futures::{SinkExt, StreamExt};
+use futures::{FutureExt, SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sysinfo::{Networks, System};
 use tokio::sync::{broadcast, RwLock};
@@ -84,7 +84,12 @@ impl MonitoringState {
         // Start the background collector task
         let state_clone = Arc::clone(&state);
         tokio::spawn(async move {
-            state_clone.run_collector().await;
+            let result = std::panic::AssertUnwindSafe(state_clone.run_collector())
+                .catch_unwind()
+                .await;
+            if let Err(err) = result {
+                tracing::error!("Monitoring collector panicked: {:?}", err);
+            }
         });
 
         state

@@ -790,6 +790,26 @@ fn build_history_context(history: &[(String, String)], max_chars: usize) -> Stri
     result
 }
 
+async fn resolve_claudecode_default_model(library: &SharedLibrary) -> Option<String> {
+    let lib = {
+        let guard = library.read().await;
+        guard.clone()
+    }?;
+
+    match lib.get_claudecode_config().await {
+        Ok(config) => config
+            .default_model
+            .and_then(|model| {
+                let trimmed = model.trim().to_string();
+                if trimmed.is_empty() { None } else { Some(trimmed) }
+            }),
+        Err(err) => {
+            tracing::warn!("Failed to load Claude Code config from library: {}", err);
+            None
+        }
+    }
+}
+
 /// Execute a single turn for a mission.
 async fn run_mission_turn(
     config: Config,
@@ -816,6 +836,11 @@ async fn run_mission_turn(
     let effective_agent = agent_override.clone();
     if let Some(ref agent) = effective_agent {
         config.opencode_agent = Some(agent.clone());
+    }
+    if backend_id == "claudecode" && config.default_model.is_none() {
+        if let Some(default_model) = resolve_claudecode_default_model(&library).await {
+            config.default_model = Some(default_model);
+        }
     }
     tracing::info!(
         mission_id = %mission_id,
@@ -2555,13 +2580,14 @@ fn sync_opencode_agent_config(
         }
     };
     for (name, entry) in omo_agents {
-        let desired_model = effective_default
+        // Agent-specific model from oh-my-opencode.json takes priority over fallback default
+        let desired_model = entry
+            .get("model")
+            .and_then(|v| v.as_str())
             .filter(|model| model_allowed(model))
             .map(|s| s.to_string())
             .or_else(|| {
-                entry
-                    .get("model")
-                    .and_then(|v| v.as_str())
+                effective_default
                     .filter(|model| model_allowed(model))
                     .map(|s| s.to_string())
             });
@@ -2621,6 +2647,7 @@ fn workspace_abs_path(workspace: &Workspace, path: &std::path::Path) -> std::pat
 }
 
 fn find_oh_my_opencode_cli_js(workspace: &Workspace) -> Option<std::path::PathBuf> {
+    // Static paths for global npm installations
     let candidates = [
         "/usr/local/lib/node_modules/oh-my-opencode/dist/cli/index.js",
         "/usr/lib/node_modules/oh-my-opencode/dist/cli/index.js",
@@ -2634,6 +2661,26 @@ fn find_oh_my_opencode_cli_js(workspace: &Workspace) -> Option<std::path::PathBu
             return Some(path);
         }
     }
+
+    // Search bun cache for oh-my-opencode (used when installed via bunx)
+    // Pattern: ~/.cache/.bun/install/cache/oh-my-opencode@<version>@@@1/dist/cli/index.js
+    let bun_cache_bases = ["/root/.cache/.bun/install/cache", "/home/*/.cache/.bun/install/cache"];
+    for base in bun_cache_bases {
+        let base_path = workspace_abs_path(workspace, std::path::Path::new(base));
+        if let Ok(entries) = std::fs::read_dir(&base_path) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with("oh-my-opencode@") {
+                    let cli_js = entry.path().join("dist/cli/index.js");
+                    if cli_js.exists() {
+                        return Some(cli_js);
+                    }
+                }
+            }
+        }
+    }
+
     None
 }
 
@@ -3609,10 +3656,14 @@ async fn ensure_opencode_cli_available(
 
     let mut args = Vec::new();
     args.push("-lc".to_string());
+    // Use explicit /root path for container workspaces since $HOME may not be set in nspawn
+    // Try both /root and $HOME to cover both container and host workspaces
     args.push(
         format!(
             "{} | bash -s -- --no-modify-path \
-        && if [ -x \"$HOME/.opencode/bin/opencode\" ]; then install -m 0755 \"$HOME/.opencode/bin/opencode\" /usr/local/bin/opencode; fi"
+        && for bindir in /root/.opencode/bin \"$HOME/.opencode/bin\"; do \
+            if [ -x \"$bindir/opencode\" ]; then install -m 0755 \"$bindir/opencode\" /usr/local/bin/opencode && break; fi; \
+        done"
             , fetcher
         ),
     );
