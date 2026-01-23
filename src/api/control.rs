@@ -2320,6 +2320,7 @@ async fn control_actor_loop(
                                                 mission.workspace_id,
                                                 mission.agent.clone(),
                                                 Some(mission.backend.clone()),
+                                                mission.session_id.clone(),
                                             );
                                             // Load existing history
                                             for entry in &mission.history {
@@ -2686,6 +2687,7 @@ async fn control_actor_loop(
                                 mission.workspace_id,
                                 mission.agent.clone(),
                                 Some(mission.backend.clone()),
+                                mission.session_id.clone(),
                             );
 
                             // Load existing history into runner to preserve conversation context
@@ -3709,6 +3711,7 @@ async fn run_single_control_turn(
                 cancel,
                 None, // secrets - not available in control context
                 &config.working_dir,
+                None, // session_id - not available in control session context
             )
             .await
         }

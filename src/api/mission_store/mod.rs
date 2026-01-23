@@ -53,6 +53,9 @@ pub struct Mission {
     /// Desktop sessions started during this mission (used for reconnect/stream resume)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub desktop_sessions: Vec<DesktopSessionInfo>,
+    /// Session ID for conversation persistence (used by Claude Code --session-id)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 fn default_backend() -> String {

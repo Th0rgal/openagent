@@ -179,6 +179,19 @@ impl SqliteMissionStore {
             .map_err(|e| format!("Failed to add backend column: {}", e))?;
         }
 
+        // Check if 'session_id' column exists in missions table
+        let has_session_id_column: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('missions') WHERE name = 'session_id'")
+            .map_err(|e| format!("Failed to check for session_id column: {}", e))?
+            .exists([])
+            .map_err(|e| format!("Failed to query table info: {}", e))?;
+
+        if !has_session_id_column {
+            tracing::info!("Running migration: adding 'session_id' column to missions table");
+            conn.execute("ALTER TABLE missions ADD COLUMN session_id TEXT", [])
+                .map_err(|e| format!("Failed to add session_id column: {}", e))?;
+        }
+
         Ok(())
     }
 }
@@ -220,7 +233,7 @@ impl MissionStore for SqliteMissionStore {
                 .prepare(
                     "SELECT id, status, title, workspace_id, workspace_name, agent, model_override,
                             created_at, updated_at, interrupted_at, resumable, desktop_sessions,
-                            COALESCE(backend, 'opencode') as backend
+                            COALESCE(backend, 'opencode') as backend, session_id
                      FROM missions
                      ORDER BY updated_at DESC
                      LIMIT ?1 OFFSET ?2",
@@ -234,6 +247,7 @@ impl MissionStore for SqliteMissionStore {
                     let workspace_id_str: String = row.get(3)?;
                     let desktop_sessions_json: Option<String> = row.get(11)?;
                     let backend: String = row.get(12)?;
+                    let session_id: Option<String> = row.get(13)?;
 
                     Ok(Mission {
                         id: Uuid::parse_str(&id_str).unwrap_or_default(),
@@ -253,6 +267,7 @@ impl MissionStore for SqliteMissionStore {
                         desktop_sessions: desktop_sessions_json
                             .and_then(|s| serde_json::from_str(&s).ok())
                             .unwrap_or_default(),
+                        session_id,
                     })
                 })
                 .map_err(|e| e.to_string())?
@@ -277,7 +292,7 @@ impl MissionStore for SqliteMissionStore {
                 .prepare(
                     "SELECT id, status, title, workspace_id, workspace_name, agent, model_override,
                             created_at, updated_at, interrupted_at, resumable, desktop_sessions,
-                            COALESCE(backend, 'opencode') as backend
+                            COALESCE(backend, 'opencode') as backend, session_id
                      FROM missions WHERE id = ?1",
                 )
                 .map_err(|e| e.to_string())?;
@@ -289,6 +304,7 @@ impl MissionStore for SqliteMissionStore {
                     let workspace_id_str: String = row.get(3)?;
                     let desktop_sessions_json: Option<String> = row.get(11)?;
                     let backend: String = row.get(12)?;
+                    let session_id: Option<String> = row.get(13)?;
 
                     Ok(Mission {
                         id: Uuid::parse_str(&id_str).unwrap_or_default(),
@@ -308,6 +324,7 @@ impl MissionStore for SqliteMissionStore {
                         desktop_sessions: desktop_sessions_json
                             .and_then(|s| serde_json::from_str(&s).ok())
                             .unwrap_or_default(),
+                        session_id,
                     })
                 })
                 .optional()
@@ -367,6 +384,8 @@ impl MissionStore for SqliteMissionStore {
         let id = Uuid::new_v4();
         let workspace_id = workspace_id.unwrap_or(crate::workspace::DEFAULT_WORKSPACE_ID);
         let backend = backend.unwrap_or("opencode").to_string();
+        // Generate session_id for conversation persistence (used by Claude Code --session-id)
+        let session_id = Uuid::new_v4().to_string();
 
         let mission = Mission {
             id,
@@ -383,14 +402,15 @@ impl MissionStore for SqliteMissionStore {
             interrupted_at: None,
             resumable: false,
             desktop_sessions: Vec::new(),
+            session_id: Some(session_id.clone()),
         };
 
         let m = mission.clone();
         tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             conn.execute(
-                "INSERT INTO missions (id, status, title, workspace_id, agent, model_override, backend, created_at, updated_at, resumable)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO missions (id, status, title, workspace_id, agent, model_override, backend, created_at, updated_at, resumable, session_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     m.id.to_string(),
                     status_to_string(m.status),
@@ -402,6 +422,7 @@ impl MissionStore for SqliteMissionStore {
                     m.created_at,
                     m.updated_at,
                     0,
+                    m.session_id,
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -659,6 +680,7 @@ impl MissionStore for SqliteMissionStore {
                         desktop_sessions: desktop_sessions_json
                             .and_then(|s| serde_json::from_str(&s).ok())
                             .unwrap_or_default(),
+                        session_id: None, // Not needed for stale mission checks
                     })
                 })
                 .map_err(|e| e.to_string())?

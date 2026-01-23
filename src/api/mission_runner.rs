@@ -489,6 +489,9 @@ pub struct MissionRunner {
     /// Backend ID used for this mission
     pub backend_id: String,
 
+    /// Session ID for conversation persistence (used by Claude Code --session-id)
+    pub session_id: Option<String>,
+
     /// Current state
     pub state: MissionRunState,
 
@@ -530,11 +533,13 @@ impl MissionRunner {
         workspace_id: Uuid,
         agent_override: Option<String>,
         backend_id: Option<String>,
+        session_id: Option<String>,
     ) -> Self {
         Self {
             mission_id,
             workspace_id,
             backend_id: backend_id.unwrap_or_else(|| "opencode".to_string()),
+            session_id,
             state: MissionRunState::Queued,
             agent_override,
             queue: VecDeque::new(),
@@ -661,6 +666,7 @@ impl MissionRunner {
         let workspace_id = self.workspace_id;
         let agent_override = self.agent_override.clone();
         let backend_id = self.backend_id.clone();
+        let session_id = self.session_id.clone();
         let user_message = msg.content.clone();
         let msg_id = msg.id;
         tracing::info!(
@@ -707,6 +713,7 @@ impl MissionRunner {
                 backend_id,
                 agent_override,
                 secrets,
+                session_id,
             )
             .await;
             (msg_id, user_message, result)
@@ -831,6 +838,7 @@ async fn run_mission_turn(
     backend_id: String,
     agent_override: Option<String>,
     secrets: Option<Arc<SecretsStore>>,
+    session_id: Option<String>,
 ) -> AgentResult {
     let mut config = config;
     let effective_agent = agent_override.clone();
@@ -947,6 +955,7 @@ async fn run_mission_turn(
                 cancel,
                 secrets,
                 &config.working_dir,
+                session_id.as_deref(),
             )
             .await
         }
@@ -1046,6 +1055,7 @@ pub async fn run_claudecode_turn(
     cancel: CancellationToken,
     secrets: Option<Arc<SecretsStore>>,
     app_working_dir: &std::path::Path,
+    session_id: Option<&str>,
 ) -> AgentResult {
     use super::ai_providers::{
         get_anthropic_auth_from_workspace, get_anthropic_auth_from_host_with_expiry,
@@ -1242,7 +1252,10 @@ pub async fn run_claudecode_turn(
         .or_else(|| std::env::var("CLAUDE_CLI_PATH").ok())
         .unwrap_or_else(|| "claude".to_string());
 
-    let session_id = Uuid::new_v4().to_string();
+    // Use stored session_id for conversation persistence, or generate new one as fallback
+    let session_id = session_id
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
 
     let workspace_exec = WorkspaceExec::new(workspace.clone());
     let cli_path = match ensure_claudecode_cli_available(&workspace_exec, work_dir, &cli_path).await

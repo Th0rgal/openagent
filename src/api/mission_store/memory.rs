@@ -71,6 +71,7 @@ impl MissionStore for InMemoryMissionStore {
             interrupted_at: None,
             resumable: false,
             desktop_sessions: Vec::new(),
+            session_id: Some(Uuid::new_v4().to_string()),
         };
         self.missions
             .write()
