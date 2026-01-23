@@ -905,6 +905,16 @@ function ThinkingPanel({
     });
   }, [items]);
 
+  // Performance: limit visible thoughts, load more on demand
+  const INITIAL_VISIBLE_THOUGHTS = 10;
+  const LOAD_MORE_THOUGHTS = 10;
+  const [visibleThoughtsLimit, setVisibleThoughtsLimit] = useState(INITIAL_VISIBLE_THOUGHTS);
+
+  // Reset limit when items change significantly (new mission)
+  useEffect(() => {
+    setVisibleThoughtsLimit(INITIAL_VISIBLE_THOUGHTS);
+  }, [items.length === 0]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when active thought content changes
@@ -967,7 +977,20 @@ function ThinkingPanel({
             {/* Completed thoughts (history - scroll up to see) */}
             {completedItems.length > 0 && (
               <>
-                {completedItems.map((item) => (
+                {/* Load more button if there are hidden thoughts */}
+                {completedItems.length > visibleThoughtsLimit && (
+                  <button
+                    onClick={() => setVisibleThoughtsLimit(prev => prev + LOAD_MORE_THOUGHTS)}
+                    className="w-full py-1.5 px-3 text-[10px] text-white/40 hover:text-white/60 hover:bg-white/5 rounded-lg transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <ChevronUp className="w-3 h-3" />
+                    Load {Math.min(LOAD_MORE_THOUGHTS, completedItems.length - visibleThoughtsLimit)} older
+                    <span className="text-white/25">
+                      ({completedItems.length - visibleThoughtsLimit} hidden)
+                    </span>
+                  </button>
+                )}
+                {completedItems.slice(-visibleThoughtsLimit).map((item) => (
                   <ThinkingPanelItem key={item.id} item={item} isActive={false} basePath={basePath} />
                 ))}
                 {activeItem && (
