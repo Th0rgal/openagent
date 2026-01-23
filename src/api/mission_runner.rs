@@ -1410,6 +1410,31 @@ pub async fn run_claudecode_turn(
         }
     };
 
+    // Capture stderr for debugging
+    let stderr = child.stderr.take();
+    let stderr_capture = std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
+    let stderr_capture_clone = stderr_capture.clone();
+    let mission_id_for_stderr = mission_id;
+    let stderr_handle = if let Some(stderr) = stderr {
+        Some(tokio::spawn(async move {
+            let stderr_reader = BufReader::new(stderr);
+            let mut stderr_lines = stderr_reader.lines();
+            while let Ok(Some(line)) = stderr_lines.next_line().await {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    tracing::debug!(mission_id = %mission_id_for_stderr, stderr = %trimmed, "Claude Code stderr");
+                    let mut captured = stderr_capture_clone.lock().await;
+                    if !captured.is_empty() {
+                        captured.push('\n');
+                    }
+                    captured.push_str(trimmed);
+                }
+            }
+        }))
+    } else {
+        None
+    };
+
     // Track tool calls for result mapping
     let mut pending_tools: HashMap<String, String> = HashMap::new();
     let mut total_cost_usd = 0.0f64;
@@ -1439,6 +1464,9 @@ pub async fn run_claudecode_turn(
                 tracing::info!(mission_id = %mission_id, "Claude Code execution cancelled, killing process");
                 // Kill the process to stop consuming API resources
                 let _ = child.kill().await;
+                if let Some(handle) = stderr_handle {
+                    handle.abort();
+                }
                 return AgentResult::failure("Cancelled".to_string(), 0)
                     .with_terminal_reason(TerminalReason::Cancelled);
             }
@@ -1446,6 +1474,9 @@ pub async fn run_claudecode_turn(
                 let err_msg = "Claude Code produced no output. No Anthropic credentials detected; please authenticate in Settings → AI Providers or set CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY.";
                 tracing::warn!(mission_id = %mission_id, "{}", err_msg);
                 let _ = child.kill().await;
+                if let Some(handle) = stderr_handle {
+                    handle.abort();
+                }
                 return AgentResult::failure(err_msg.to_string(), 0)
                     .with_terminal_reason(TerminalReason::LlmError);
             }
@@ -1639,7 +1670,12 @@ pub async fn run_claudecode_turn(
     }
 
     // Wait for child process to finish and clean up
-    let _ = child.wait().await;
+    let exit_status = child.wait().await;
+
+    // Wait for stderr capture to complete
+    if let Some(handle) = stderr_handle {
+        let _ = handle.await;
+    }
 
     // Convert cost from USD to cents
     let cost_cents = (total_cost_usd * 100.0) as u64;
@@ -1657,8 +1693,28 @@ pub async fn run_claudecode_turn(
 
     if final_result.trim().is_empty() && !had_error {
         had_error = true;
-        final_result =
-            "Claude Code produced no output. Check CLI installation or authentication.".to_string();
+        // Include stderr in error message if available
+        let stderr_content = stderr_capture.lock().await;
+        if !stderr_content.is_empty() {
+            tracing::warn!(
+                mission_id = %mission_id,
+                stderr = %stderr_content,
+                exit_status = ?exit_status,
+                "Claude Code produced no output but had stderr"
+            );
+            final_result = format!(
+                "Claude Code error: {}",
+                stderr_content.lines().take(5).collect::<Vec<_>>().join(" | ")
+            );
+        } else {
+            tracing::warn!(
+                mission_id = %mission_id,
+                exit_status = ?exit_status,
+                "Claude Code produced no output and no stderr"
+            );
+            final_result =
+                "Claude Code produced no output. Check CLI installation or authentication.".to_string();
+        }
     }
 
     if had_error {
