@@ -5,13 +5,43 @@ import { listLibraryCommands, getVisibleAgents, type CommandSummary, type Comman
 import { cn } from '@/lib/utils';
 
 // Built-in oh-my-opencode commands
-const BUILTIN_COMMANDS: CommandSummary[] = [
+const OPENCODE_BUILTIN_COMMANDS: CommandSummary[] = [
   { name: 'ralph-loop', description: 'Start self-referential development loop until completion', path: 'builtin' },
   { name: 'cancel-ralph', description: 'Cancel active Ralph Loop', path: 'builtin' },
   { name: 'start-work', description: 'Start Sisyphus work session from Prometheus plan', path: 'builtin' },
   { name: 'refactor', description: 'Intelligent refactoring with LSP, AST-grep, and TDD verification', path: 'builtin' },
   { name: 'init-deep', description: 'Initialize hierarchical AGENTS.md knowledge base', path: 'builtin' },
 ];
+
+// Built-in Claude Code commands
+const CLAUDECODE_BUILTIN_COMMANDS: CommandSummary[] = [
+  { name: 'plan', description: 'Enter plan mode to design an implementation approach', path: 'builtin-claude' },
+  { name: 'compact', description: 'Compact conversation history to save context', path: 'builtin-claude' },
+  { name: 'clear', description: 'Clear conversation history and start fresh', path: 'builtin-claude' },
+  { name: 'config', description: 'Show or modify configuration settings', path: 'builtin-claude' },
+  { name: 'cost', description: 'Show token usage and API costs', path: 'builtin-claude' },
+  { name: 'doctor', description: 'Check installation and diagnose issues', path: 'builtin-claude' },
+  { name: 'help', description: 'Show available commands and usage', path: 'builtin-claude' },
+  { name: 'memory', description: 'Manage persistent memories across sessions', path: 'builtin-claude' },
+  { name: 'mcp', description: 'Manage Model Context Protocol servers', path: 'builtin-claude' },
+  { name: 'review', description: 'Request a code review of recent changes', path: 'builtin-claude' },
+  { name: 'bug', description: 'Report a bug with diagnostic info', path: 'builtin-claude' },
+  { name: 'login', description: 'Log in to your Anthropic account', path: 'builtin-claude' },
+  { name: 'logout', description: 'Log out of your Anthropic account', path: 'builtin-claude' },
+  { name: 'resume', description: 'Resume a previous conversation', path: 'builtin-claude' },
+];
+
+// Get builtin commands based on backend type
+function getBuiltinCommands(backend?: string): CommandSummary[] {
+  if (backend === 'claudecode') {
+    return CLAUDECODE_BUILTIN_COMMANDS;
+  }
+  if (backend === 'opencode') {
+    return OPENCODE_BUILTIN_COMMANDS;
+  }
+  // If no backend specified, show both
+  return [...OPENCODE_BUILTIN_COMMANDS, ...CLAUDECODE_BUILTIN_COMMANDS];
+}
 
 export interface SubmitPayload {
   content: string;
@@ -31,6 +61,8 @@ interface EnhancedInputProps {
   placeholder?: string;
   disabled?: boolean;
   className?: string;
+  /** Backend type for the current mission ("opencode" or "claudecode") */
+  backend?: string;
 }
 
 interface AutocompleteItem {
@@ -49,6 +81,7 @@ export const EnhancedInput = forwardRef<EnhancedInputHandle, EnhancedInputProps>
   placeholder = "Message the root agent...",
   disabled = false,
   className,
+  backend,
 }, ref) {
   const [commands, setCommands] = useState<CommandSummary[]>([]);
   const [agents, setAgents] = useState<string[]>([]);
@@ -64,14 +97,15 @@ export const EnhancedInput = forwardRef<EnhancedInputHandle, EnhancedInputProps>
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const autocompleteRef = useRef<HTMLDivElement>(null);
 
-  // Load commands and agents on mount
+  // Load commands and agents on mount or when backend changes
   useEffect(() => {
     async function loadData() {
+      const builtinCommands = getBuiltinCommands(backend);
       try {
         const libraryCommands = await listLibraryCommands();
-        setCommands([...BUILTIN_COMMANDS, ...libraryCommands]);
+        setCommands([...builtinCommands, ...libraryCommands]);
       } catch {
-        setCommands(BUILTIN_COMMANDS);
+        setCommands(builtinCommands);
       }
 
       try {
@@ -85,7 +119,7 @@ export const EnhancedInput = forwardRef<EnhancedInputHandle, EnhancedInputProps>
       }
     }
     loadData();
-  }, []);
+  }, [backend]);
 
   const parseAgentNames = (payload: unknown): string[] => {
     const normalizeEntry = (entry: unknown): string | null => {
@@ -173,7 +207,7 @@ export const EnhancedInput = forwardRef<EnhancedInputHandle, EnhancedInputProps>
         type: 'command',
         name: cmd.name,
         description: cmd.description,
-        source: cmd.path === 'builtin' ? 'oh-my-opencode' : 'library',
+        source: cmd.path === 'builtin' ? 'oh-my-opencode' : cmd.path === 'builtin-claude' ? 'claude-code' : 'library',
         params: cmd.params,
       })));
       setAutocompleteType('command');

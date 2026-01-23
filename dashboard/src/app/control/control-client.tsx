@@ -5420,6 +5420,7 @@ export default function ControlClient() {
                   onSubmit={handleEnhancedSubmit}
                   onCanSubmitChange={setCanSubmitInput}
                   placeholder="Message the root agent… (paste files to upload)"
+                  backend={viewingMission?.backend ?? currentMission?.backend}
                 />
 
                 {isBusy ? (
