@@ -1258,10 +1258,21 @@ pub async fn run_claudecode_turn(
         .or_else(|| std::env::var("CLAUDE_CLI_PATH").ok())
         .unwrap_or_else(|| "claude".to_string());
 
-    // Use stored session_id for conversation persistence, or generate new one as fallback
-    let session_id = session_id
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    // Use stored session_id for conversation persistence.
+    // If session_id is None (legacy mission), generate a new one but warn that continuation
+    // won't work correctly since the generated ID isn't persisted back to the mission store.
+    let session_id = match session_id {
+        Some(id) => id.to_string(),
+        None => {
+            let generated = Uuid::new_v4().to_string();
+            tracing::warn!(
+                mission_id = %mission_id,
+                generated_session_id = %generated,
+                "Mission has no stored session_id (legacy mission). Generated temporary ID, but conversation continuation will not work correctly. Consider recreating the mission."
+            );
+            generated
+        }
+    };
 
     let workspace_exec = WorkspaceExec::new(workspace.clone());
     let cli_path = match ensure_claudecode_cli_available(&workspace_exec, work_dir, &cli_path).await
@@ -1706,7 +1717,10 @@ pub async fn run_claudecode_turn(
     // If no final result from Assistant or Result events, use accumulated text buffer
     // This handles plan mode and other cases where text is streamed incrementally
     if final_result.trim().is_empty() && !text_buffer.is_empty() {
-        final_result = text_buffer.values().cloned().collect::<Vec<_>>().join("");
+        // Sort by content block index to ensure correct ordering (HashMap iteration is non-deterministic)
+        let mut sorted_entries: Vec<_> = text_buffer.iter().collect();
+        sorted_entries.sort_by_key(|(idx, _)| *idx);
+        final_result = sorted_entries.into_iter().map(|(_, text)| text.clone()).collect::<Vec<_>>().join("");
         tracing::debug!(
             mission_id = %mission_id,
             "Using accumulated text buffer as final result ({} chars)",
