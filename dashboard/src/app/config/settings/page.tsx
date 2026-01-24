@@ -821,7 +821,7 @@ export default function SettingsPage() {
         </div>
       </div>
         </>
-      ) : (
+      ) : activeHarness === 'claudecode' ? (
         /* Claude Code Section */
         <div className="space-y-4">
           {/* Claude Code Settings Header */}
@@ -980,7 +980,59 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
-      )}
+      ) : activeHarness === 'amp' ? (
+        /* Amp Section */
+        <div className="space-y-4">
+          {/* Amp Settings Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-medium text-white">Amp Settings</h2>
+              <p className="text-sm text-white/50">Configure default mode and agent for Amp missions</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={loadSettings}
+                disabled={loading}
+                title="Reloads the source from disk"
+                className="flex items-center gap-2 px-3 py-1.5 text-sm text-white/70 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] rounded-lg transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+                Reload
+              </button>
+            </div>
+          </div>
+
+          {/* Amp Info */}
+          <div className="p-4 rounded-xl bg-indigo-500/5 border border-indigo-500/20">
+            <div className="flex items-start gap-3">
+              <Info className="h-5 w-5 text-indigo-400 flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-indigo-400/80">
+                <p className="font-medium text-indigo-400">Amp Configuration</p>
+                <p className="mt-1">
+                  Amp uses built-in modes (Smart/Rush) and doesn't require agent configuration in the Library.
+                  Configure CLI path and mode in the{' '}
+                  <a href="/settings" className="underline hover:text-indigo-300">Settings page</a> → Backends → Amp.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Amp Modes */}
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium text-white/80">Available Modes</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 rounded-lg border border-white/[0.06] bg-white/[0.02]">
+                <div className="font-medium text-white/80">Smart Mode</div>
+                <p className="text-xs text-white/50 mt-1">Full capability mode with comprehensive tool access.</p>
+              </div>
+              <div className="p-3 rounded-lg border border-white/[0.06] bg-white/[0.02]">
+                <div className="font-medium text-white/80">Rush Mode</div>
+                <p className="text-xs text-white/50 mt-1">Faster, cheaper mode for simpler tasks.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Commit Dialog */}
       {showCommitDialog && (

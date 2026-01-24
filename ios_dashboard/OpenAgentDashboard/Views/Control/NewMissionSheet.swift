@@ -513,25 +513,6 @@ struct NewMissionOptions {
     let backend: String
 }
 
-// MARK: - Legacy Support
-
-extension NewMissionSheet {
-    /// Legacy initializer for backward compatibility
-    init(
-        workspaces: [Workspace],
-        selectedWorkspaceId: Binding<String?>,
-        onCreate: @escaping (String?) -> Void,
-        onCancel: @escaping () -> Void
-    ) {
-        self.workspaces = workspaces
-        self._selectedWorkspaceId = selectedWorkspaceId
-        self.onCreate = { options in
-            onCreate(options.workspaceId)
-        }
-        self.onCancel = onCancel
-    }
-}
-
 #Preview {
     NewMissionSheet(
         workspaces: [
@@ -555,7 +536,7 @@ extension NewMissionSheet {
             )
         ],
         selectedWorkspaceId: .constant("00000000-0000-0000-0000-000000000000"),
-        onCreate: { _ in },
+        onCreate: { (_: NewMissionOptions) in },
         onCancel: {}
     )
 }
