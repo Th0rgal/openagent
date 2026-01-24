@@ -4312,12 +4312,17 @@ export default function ControlClient() {
     : null;
 
   // Determine if we should show the resume UI for interrupted/blocked missions
-  // Don't show resume UI if: mission is running, or the last turn completed (assistant message at end)
+  // Don't show resume UI if:
+  // - Mission is running
+  // - Last turn completed (assistant message at end - ready for user input)
+  // - User just sent a message (waiting for assistant response)
   const lastItem = items[items.length - 1];
   const lastTurnCompleted = lastItem?.kind === 'assistant';
+  const waitingForResponse = lastItem?.kind === 'user';
   const showResumeUI = activeMission &&
     !viewingMissionIsRunning &&
     !lastTurnCompleted &&
+    !waitingForResponse &&
     (activeMission.status === 'interrupted' || activeMission.status === 'blocked');
 
   return (
