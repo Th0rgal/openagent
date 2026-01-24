@@ -196,8 +196,9 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         opencode_permissive,
     ));
     backend_registry.register(crate::backend::claudecode::registry_entry());
+    backend_registry.register(crate::backend::amp::registry_entry());
     let backend_registry = Arc::new(RwLock::new(backend_registry));
-    tracing::info!("Backend registry initialized with {} backends", 2);
+    tracing::info!("Backend registry initialized with {} backends", 3);
 
     // Note: No central OpenCode server cleanup needed - missions use per-workspace CLI execution
 

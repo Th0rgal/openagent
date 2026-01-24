@@ -980,6 +980,21 @@ async fn run_mission_turn(
             )
             .await
         }
+        "amp" => {
+            run_amp_turn(
+                &workspace,
+                &mission_work_dir,
+                &user_message,
+                effective_agent.as_deref(), // Used as mode (smart/rush)
+                mission_id,
+                events_tx.clone(),
+                cancel,
+                &config.working_dir,
+                session_id.as_deref(),
+                is_continuation,
+            )
+            .await
+        }
         _ => {
             // Don't send Error event - the failure will be emitted as an AssistantMessage
             // with success=false by the caller (control.rs), avoiding duplicate messages.
@@ -4674,6 +4689,395 @@ pub async fn run_opencode_turn(
     if let Some(model) = model_used {
         result = result.with_model(model);
     }
+    result
+}
+
+/// Execute a turn using Amp CLI backend.
+///
+/// For Host workspaces: spawns the CLI directly on the host.
+/// For Container workspaces: spawns the CLI inside the container using systemd-nspawn.
+pub async fn run_amp_turn(
+    workspace: &Workspace,
+    work_dir: &std::path::Path,
+    message: &str,
+    mode: Option<&str>,
+    mission_id: Uuid,
+    events_tx: broadcast::Sender<AgentEvent>,
+    cancel: CancellationToken,
+    app_working_dir: &std::path::Path,
+    session_id: Option<&str>,
+    is_continuation: bool,
+) -> AgentResult {
+    use crate::backend::amp::client::{AmpEvent, ContentBlock, StreamEvent};
+    use std::collections::HashMap;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let workspace_exec = WorkspaceExec::new(workspace.clone());
+
+    // Check if amp CLI is available
+    if !command_available(&workspace_exec, work_dir, "amp").await {
+        let auto_install = env_var_bool("OPEN_AGENT_AUTO_INSTALL_AMP", true);
+        if auto_install {
+            // Try to install via npm
+            if command_available(&workspace_exec, work_dir, "npm").await {
+                tracing::info!(mission_id = %mission_id, "Auto-installing Amp CLI via npm");
+                let install_result = workspace_exec
+                    .output(
+                        work_dir,
+                        "/bin/sh",
+                        &["-lc".to_string(), "npm install -g @sourcegraph/amp".to_string()],
+                        HashMap::new(),
+                    )
+                    .await;
+                if let Err(e) = install_result {
+                    tracing::warn!(mission_id = %mission_id, error = %e, "Failed to auto-install Amp CLI");
+                }
+            }
+        }
+
+        if !command_available(&workspace_exec, work_dir, "amp").await {
+            let err_msg = "Amp CLI not found. Install it with: npm install -g @sourcegraph/amp";
+            tracing::error!(mission_id = %mission_id, "{}", err_msg);
+            return AgentResult::failure(err_msg.to_string(), 0)
+                .with_terminal_reason(TerminalReason::LlmError);
+        }
+    }
+
+    tracing::info!(
+        mission_id = %mission_id,
+        work_dir = %work_dir.display(),
+        workspace_type = ?workspace.workspace_type,
+        mode = ?mode,
+        is_continuation = is_continuation,
+        "Starting Amp execution via WorkspaceExec"
+    );
+
+    // Build CLI arguments
+    let mut args = vec![];
+
+    // For continuation, use threads continue
+    if is_continuation {
+        if let Some(sid) = session_id {
+            args.push("threads".to_string());
+            args.push("continue".to_string());
+            args.push(sid.to_string());
+        }
+    }
+
+    // Core flags
+    args.push("--execute".to_string());
+    args.push("--stream-json".to_string());
+    args.push("--dangerously-allow-all".to_string());
+
+    // Mode (smart/rush)
+    if let Some(m) = mode {
+        args.push("--mode".to_string());
+        args.push(m.to_string());
+    }
+
+    // Message as final argument
+    args.push(message.to_string());
+
+    // Build environment
+    let mut env = HashMap::new();
+    
+    // Pass through AMP_API_KEY if available
+    if let Ok(api_key) = std::env::var("AMP_API_KEY") {
+        env.insert("AMP_API_KEY".to_string(), api_key);
+    }
+
+    // Use WorkspaceExec to spawn the CLI
+    let mut child = match workspace_exec
+        .spawn_streaming(work_dir, "amp", &args, env)
+        .await
+    {
+        Ok(child) => child,
+        Err(e) => {
+            let err_msg = format!("Failed to start Amp CLI: {}", e);
+            tracing::error!("{}", err_msg);
+            return AgentResult::failure(err_msg, 0).with_terminal_reason(TerminalReason::LlmError);
+        }
+    };
+
+    // Get stdout for reading events
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let err_msg = "Failed to capture Amp stdout";
+            tracing::error!("{}", err_msg);
+            return AgentResult::failure(err_msg.to_string(), 0)
+                .with_terminal_reason(TerminalReason::LlmError);
+        }
+    };
+
+    // Capture stderr for debugging
+    let stderr = child.stderr.take();
+    let stderr_capture = std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
+    let stderr_capture_clone = stderr_capture.clone();
+    let mission_id_for_stderr = mission_id;
+    let stderr_handle = if let Some(stderr) = stderr {
+        Some(tokio::spawn(async move {
+            let stderr_reader = BufReader::new(stderr);
+            let mut stderr_lines = stderr_reader.lines();
+            while let Ok(Some(line)) = stderr_lines.next_line().await {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    tracing::debug!(mission_id = %mission_id_for_stderr, stderr = %trimmed, "Amp CLI stderr");
+                    let mut captured = stderr_capture_clone.lock().await;
+                    if !captured.is_empty() {
+                        captured.push('\n');
+                    }
+                    captured.push_str(trimmed);
+                }
+            }
+        }))
+    } else {
+        None
+    };
+
+    // Track tool calls for result mapping
+    let mut pending_tools: HashMap<String, String> = HashMap::new();
+    let mut final_result = String::new();
+    let mut had_error = false;
+    let mut model_used: Option<String> = None;
+
+    // Track content blocks for streaming
+    let mut block_types: HashMap<u32, String> = HashMap::new();
+    let mut thinking_buffer: HashMap<u32, String> = HashMap::new();
+    let mut text_buffer: HashMap<u32, String> = HashMap::new();
+    let mut last_thinking_len: usize = 0;
+
+    let reader = BufReader::new(stdout);
+    let mut lines = reader.lines();
+
+    // Process events until completion or cancellation
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                tracing::info!(mission_id = %mission_id, "Amp execution cancelled, killing process");
+                let _ = child.kill().await;
+                if let Some(handle) = stderr_handle {
+                    handle.abort();
+                }
+                return AgentResult::failure("Cancelled".to_string(), 0)
+                    .with_terminal_reason(TerminalReason::Cancelled);
+            }
+            line_result = lines.next_line() => {
+                match line_result {
+                    Ok(Some(line)) => {
+                        if line.is_empty() {
+                            continue;
+                        }
+
+                        let amp_event: AmpEvent = match serde_json::from_str(&line) {
+                            Ok(event) => event,
+                            Err(e) => {
+                                tracing::warn!(
+                                    mission_id = %mission_id,
+                                    error = %e,
+                                    line = %if line.len() > 200 { format!("{}...", &line[..200]) } else { line.clone() },
+                                    "Failed to parse Amp event"
+                                );
+                                continue;
+                            }
+                        };
+
+                        match amp_event {
+                            AmpEvent::System(sys) => {
+                                tracing::debug!(
+                                    mission_id = %mission_id,
+                                    session_id = %sys.session_id,
+                                    model = ?sys.model,
+                                    "Amp session init"
+                                );
+                                if sys.model.is_some() {
+                                    model_used = sys.model;
+                                }
+                            }
+                            AmpEvent::StreamEvent(wrapper) => {
+                                match wrapper.event {
+                                    StreamEvent::ContentBlockDelta { index, delta } => {
+                                        if delta.delta_type == "thinking_delta" {
+                                            if let Some(thinking_text) = delta.thinking {
+                                                if !thinking_text.is_empty() {
+                                                    let buffer = thinking_buffer.entry(index).or_default();
+                                                    buffer.push_str(&thinking_text);
+
+                                                    let total_len = thinking_buffer.values().map(|s| s.len()).sum::<usize>();
+                                                    if total_len > last_thinking_len {
+                                                        let accumulated: String = thinking_buffer.values().cloned().collect::<Vec<_>>().join("");
+                                                        last_thinking_len = total_len;
+
+                                                        let _ = events_tx.send(AgentEvent::Thinking {
+                                                            content: accumulated,
+                                                            done: false,
+                                                            mission_id: Some(mission_id),
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        } else if delta.delta_type == "text_delta" {
+                                            if let Some(text) = delta.text {
+                                                if !text.is_empty() {
+                                                    let buffer = text_buffer.entry(index).or_default();
+                                                    buffer.push_str(&text);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    StreamEvent::ContentBlockStart { index, content_block } => {
+                                        block_types.insert(index, content_block.block_type.clone());
+
+                                        if content_block.block_type == "tool_use" {
+                                            if let (Some(id), Some(name)) = (content_block.id, content_block.name) {
+                                                pending_tools.insert(id, name);
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            AmpEvent::Assistant(evt) => {
+                                for block in evt.message.content {
+                                    match block {
+                                        ContentBlock::Text { text } => {
+                                            if !text.is_empty() {
+                                                final_result = text;
+                                            }
+                                        }
+                                        ContentBlock::ToolUse { id, name, input } => {
+                                            pending_tools.insert(id.clone(), name.clone());
+                                            let _ = events_tx.send(AgentEvent::ToolCall {
+                                                tool_call_id: id.clone(),
+                                                name: name.clone(),
+                                                args: input,
+                                                mission_id: Some(mission_id),
+                                            });
+                                        }
+                                        ContentBlock::Thinking { thinking } => {
+                                            if !thinking.is_empty() {
+                                                let _ = events_tx.send(AgentEvent::Thinking {
+                                                    content: thinking,
+                                                    done: true,
+                                                    mission_id: Some(mission_id),
+                                                });
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            AmpEvent::User(evt) => {
+                                for block in evt.message.content {
+                                    if let ContentBlock::ToolResult { tool_use_id, content, is_error } = block {
+                                        let name = pending_tools
+                                            .get(&tool_use_id)
+                                            .cloned()
+                                            .unwrap_or_else(|| "unknown".to_string());
+
+                                        let content_str = content.to_string_lossy();
+
+                                        let result_value = if let Some(ref extra) = evt.tool_use_result {
+                                            serde_json::json!({
+                                                "content": content_str,
+                                                "stdout": extra.stdout,
+                                                "stderr": extra.stderr,
+                                                "is_error": is_error,
+                                                "interrupted": extra.interrupted,
+                                            })
+                                        } else {
+                                            serde_json::json!(content_str)
+                                        };
+
+                                        let _ = events_tx.send(AgentEvent::ToolResult {
+                                            tool_call_id: tool_use_id,
+                                            name,
+                                            result: result_value,
+                                            mission_id: Some(mission_id),
+                                        });
+                                    }
+                                }
+                            }
+                            AmpEvent::Result(res) => {
+                                if res.is_error || res.subtype == "error" {
+                                    had_error = true;
+                                    let err_msg = res.result.clone().unwrap_or_else(|| "Unknown error".to_string());
+                                    let _ = events_tx.send(AgentEvent::Error {
+                                        message: err_msg.clone(),
+                                        mission_id: Some(mission_id),
+                                        resumable: true,
+                                    });
+                                    final_result = err_msg;
+                                } else {
+                                    if let Some(result) = res.result {
+                                        final_result = result;
+                                    }
+                                }
+                                
+                                tracing::debug!(
+                                    mission_id = %mission_id,
+                                    subtype = %res.subtype,
+                                    duration_ms = ?res.duration_ms,
+                                    num_turns = ?res.num_turns,
+                                    "Amp result received"
+                                );
+                                
+                                // Result event means we're done
+                                break;
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        // EOF
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::error!(mission_id = %mission_id, error = %e, "Error reading Amp stdout");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Wait for process to finish
+    let exit_status = child.wait().await;
+    if let Some(handle) = stderr_handle {
+        handle.abort();
+    }
+
+    // Check exit status
+    let success = match exit_status {
+        Ok(status) => status.success() && !had_error,
+        Err(e) => {
+            tracing::error!(mission_id = %mission_id, error = %e, "Failed to wait for Amp process");
+            false
+        }
+    };
+
+    // Emit assistant message
+    let _ = events_tx.send(AgentEvent::AssistantMessage {
+        id: Uuid::new_v4(),
+        content: final_result.clone(),
+        success,
+        cost_cents: 0, // Amp doesn't report cost in stream-json
+        model: model_used.clone(),
+        mission_id: Some(mission_id),
+        shared_files: None,
+        resumable: !success,
+    });
+
+    let mut result = if success {
+        AgentResult::success(final_result, 0)
+    } else {
+        AgentResult::failure(final_result, 0)
+            .with_terminal_reason(TerminalReason::LlmError)
+    };
+
+    if let Some(model) = model_used {
+        result = result.with_model(model);
+    }
+
     result
 }
 

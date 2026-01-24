@@ -53,6 +53,17 @@ in the correct workspace without a host-proxy tool.
   (or `/root/.claude/.credentials.json` in containers) to enable token refresh.
 - Built-in `Bash` is **enabled** in the permissions allowlist.
 
+### Amp
+
+- Runs **per workspace** using the Amp CLI.
+- Configuration is written to each workspace:
+  - `AGENTS.md` (general workspace context, like `CLAUDE.md`)
+  - `.agents/skills/<name>/SKILL.md` (native skills with YAML frontmatter)
+  - `settings.json` (MCP servers + permissions)
+- Auth via `AMP_API_KEY` environment variable.
+- Uses `--dangerously-allow-all` for permissive tool access.
+- Modes: `smart` (full capability) or `rush` (faster, cheaper).
+
 ## Tool policy
 
 - **Built-in bash is the default** for both OpenCode and Claude Code.
