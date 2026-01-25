@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState, useMemo } from 'react';
-import { Search, XCircle, Check } from 'lucide-react';
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import { Search, XCircle, Check, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { type Mission, type MissionStatus, type RunningMissionInfo } from '@/lib/api';
 
@@ -12,7 +12,7 @@ interface MissionSwitcherProps {
   runningMissions: RunningMissionInfo[];
   currentMissionId?: string | null;
   viewingMissionId?: string | null;
-  onSelectMission: (missionId: string) => void;
+  onSelectMission: (missionId: string) => Promise<void> | void;
   onCancelMission: (missionId: string) => void;
   onRefresh?: () => void;
 }
@@ -86,6 +86,23 @@ export function MissionSwitcher({
   const listRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [loadingMissionId, setLoadingMissionId] = useState<string | null>(null);
+
+  // Handle mission selection with loading state
+  const handleSelect = useCallback(async (missionId: string) => {
+    // Don't allow selecting while already loading
+    if (loadingMissionId) return;
+    
+    setLoadingMissionId(missionId);
+    try {
+      await onSelectMission(missionId);
+      onClose();
+    } catch (err) {
+      console.error('Failed to load mission:', err);
+      // Clear loading state on error so user can try again
+      setLoadingMissionId(null);
+    }
+  }, [loadingMissionId, onSelectMission, onClose]);
 
   // Compute filtered missions
   const runningMissionIds = useMemo(
@@ -152,6 +169,7 @@ export function MissionSwitcher({
     if (open) {
       setSearchQuery('');
       setSelectedIndex(0);
+      setLoadingMissionId(null);
       // Focus input after animation
       setTimeout(() => inputRef.current?.focus(), 50);
       // Refresh missions list
@@ -169,6 +187,17 @@ export function MissionSwitcher({
     if (!open) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore keyboard nav while loading
+      if (loadingMissionId) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          // Allow escape to cancel and close
+          setLoadingMissionId(null);
+          onClose();
+        }
+        return;
+      }
+      
       switch (e.key) {
         case 'Escape':
           e.preventDefault();
@@ -187,8 +216,7 @@ export function MissionSwitcher({
         case 'Enter':
           e.preventDefault();
           if (filteredItems[selectedIndex]) {
-            onSelectMission(filteredItems[selectedIndex].id);
-            onClose();
+            handleSelect(filteredItems[selectedIndex].id);
           }
           break;
       }
@@ -196,7 +224,7 @@ export function MissionSwitcher({
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [open, onClose, filteredItems, selectedIndex, onSelectMission]);
+  }, [open, onClose, filteredItems, selectedIndex, handleSelect, loadingMissionId]);
 
   // Scroll selected item into view
   useEffect(() => {
@@ -298,6 +326,7 @@ export function MissionSwitcher({
                   isRunning &&
                   runningInfo?.state === 'running' &&
                   (runningInfo?.seconds_since_activity ?? 0) > 120;
+                const isLoading = loadingMissionId === item.id;
 
                 return (
                   <div key={item.id}>
@@ -317,33 +346,36 @@ export function MissionSwitcher({
                     )}
                     <div
                       data-selected={isSelected}
-                      onClick={() => {
-                        onSelectMission(item.id);
-                        onClose();
-                      }}
+                      onClick={() => handleSelect(item.id)}
                       className={cn(
                         'group flex items-center gap-3 px-3 py-2 mx-2 rounded-lg cursor-pointer transition-colors',
                         isSelected
                           ? 'bg-indigo-500/15 text-white'
                           : 'text-white/70 hover:bg-white/[0.04]',
                         isSeverlyStalled && 'bg-red-500/10',
-                        isStalled && !isSeverlyStalled && 'bg-amber-500/10'
+                        isStalled && !isSeverlyStalled && 'bg-amber-500/10',
+                        isLoading && 'bg-indigo-500/20 pointer-events-none',
+                        loadingMissionId && !isLoading && 'opacity-50 pointer-events-none'
                       )}
                     >
-                      {/* Status dot */}
-                      <div
-                        className={cn(
-                          'h-2 w-2 rounded-full shrink-0',
-                          mission
-                            ? missionStatusDotClass(mission.status)
-                            : isRunning
-                            ? 'bg-emerald-400'
-                            : 'bg-gray-400',
-                          isRunning &&
-                            runningInfo?.state === 'running' &&
-                            'animate-pulse'
-                        )}
-                      />
+                      {/* Status dot or loading spinner */}
+                      {isLoading ? (
+                        <Loader2 className="h-4 w-4 text-indigo-400 animate-spin shrink-0" />
+                      ) : (
+                        <div
+                          className={cn(
+                            'h-2 w-2 rounded-full shrink-0',
+                            mission
+                              ? missionStatusDotClass(mission.status)
+                              : isRunning
+                              ? 'bg-emerald-400'
+                              : 'bg-gray-400',
+                            isRunning &&
+                              runningInfo?.state === 'running' &&
+                              'animate-pulse'
+                          )}
+                        />
+                      )}
 
                       {/* Mission info */}
                       <div className="flex-1 min-w-0">
@@ -366,9 +398,11 @@ export function MissionSwitcher({
                         )}
                       </div>
 
-                      {/* Status label */}
+                      {/* Status label or loading text */}
                       <span className="text-[10px] text-white/30 shrink-0">
-                        {isRunning
+                        {isLoading
+                          ? 'Loading...'
+                          : isRunning
                           ? runningInfo?.state || 'running'
                           : mission
                           ? missionStatusLabel(mission.status)
@@ -376,12 +410,12 @@ export function MissionSwitcher({
                       </span>
 
                       {/* Viewing indicator */}
-                      {isViewing && (
+                      {isViewing && !isLoading && (
                         <Check className="h-4 w-4 text-indigo-400 shrink-0" />
                       )}
 
                       {/* Cancel button for running missions */}
-                      {isRunning && (
+                      {isRunning && !isLoading && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();

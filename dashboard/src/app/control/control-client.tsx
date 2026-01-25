@@ -809,6 +809,9 @@ function ThinkingGroupItem({
 }
 
 // Thinking panel item - simplified version for side panel
+// Threshold for collapsing long thoughts (in characters)
+const THOUGHT_COLLAPSE_THRESHOLD = 800;
+
 function ThinkingPanelItem({
   item,
   isActive,
@@ -819,6 +822,7 @@ function ThinkingPanelItem({
   basePath?: string;
 }) {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   useEffect(() => {
     if (item.done) return;
@@ -840,17 +844,27 @@ function ThinkingPanelItem({
     ? formatDuration(Math.floor((item.endTime - item.startTime) / 1000))
     : formatDuration(elapsedSeconds);
 
+  // For completed items, check if content is long enough to collapse
+  const isLongContent = !isActive && item.content.length > THOUGHT_COLLAPSE_THRESHOLD;
+  const shouldTruncate = isLongContent && !isExpanded;
+  
+  // Get truncated content for display
+  const displayContent = shouldTruncate
+    ? item.content.slice(0, THOUGHT_COLLAPSE_THRESHOLD) + "..."
+    : item.content;
+
   return (
     <div className={cn(
-      "rounded-lg border p-3 transition-all",
+      "rounded-lg border p-3",
+      // Unified styling - subtle border highlight for active, same base appearance
       isActive
-        ? "border-indigo-500/30 bg-indigo-500/5"
+        ? "border-indigo-500/30 bg-white/[0.02]"
         : "border-white/[0.06] bg-white/[0.02]"
     )}>
       <div className="flex items-center gap-2 mb-2">
         <Brain
           className={cn(
-            "h-3.5 w-3.5",
+            "h-3.5 w-3.5 shrink-0",
             isActive ? "animate-pulse text-indigo-400" : "text-white/40"
           )}
         />
@@ -861,18 +875,36 @@ function ThinkingPanelItem({
           {isActive ? `Thinking for ${duration}` : `Thought for ${duration}`}
         </span>
       </div>
-      <div className={cn(
-        "text-xs leading-relaxed",
-        isActive ? "text-white/70" : "text-white/40",
-        "max-h-[50vh] overflow-y-auto"
-      )}>
+      {/* Content area - no internal scroll, unified text color */}
+      <div className="text-xs leading-relaxed text-white/60">
         {item.content ? (
-          <StreamingMarkdown
-            content={item.content}
-            isStreaming={isActive}
-            className="text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1"
-            basePath={basePath}
-          />
+          <>
+            <StreamingMarkdown
+              content={displayContent}
+              isStreaming={isActive}
+              className="text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1"
+              basePath={basePath}
+            />
+            {/* Expand/collapse button for long content */}
+            {isLongContent && (
+              <button
+                onClick={() => setIsExpanded(!isExpanded)}
+                className="mt-2 text-[10px] text-indigo-400/70 hover:text-indigo-400 transition-colors flex items-center gap-1"
+              >
+                {isExpanded ? (
+                  <>
+                    <ChevronUp className="h-3 w-3" />
+                    Show less
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="h-3 w-3" />
+                    Show more ({Math.round((item.content.length - THOUGHT_COLLAPSE_THRESHOLD) / 100) * 100}+ chars)
+                  </>
+                )}
+              </button>
+            )}
+          </>
         ) : (
           <span className="italic text-white/30">Processing...</span>
         )}
@@ -2612,6 +2644,8 @@ export default function ControlClient() {
   const eventsToItems = useCallback((events: StoredEvent[]): ChatItem[] => {
     const items: ChatItem[] = [];
     const toolCallMap = new Map<string, number>(); // tool_call_id -> index in items
+    // Track seen event IDs to prevent duplicate items (backend may store duplicates)
+    const seenEventIds = new Set<string>();
     // Track current in-progress thinking item index for consolidation
     // Multiple thinking events (deltas) are streamed and stored; we consolidate them here
     let currentThinkingIdx: number | null = null;
@@ -2635,16 +2669,23 @@ export default function ControlClient() {
       const timestamp = new Date(event.timestamp).getTime();
 
       switch (event.event_type) {
-        case "user_message":
+        case "user_message": {
           // Finalize any pending thinking before user message
           finalizePendingThinking(timestamp);
+          // Use event_id (UUID) if available for deduplication with SSE events,
+          // fall back to row id for older events without event_id
+          const itemId = event.event_id ?? `event-${event.id}`;
+          // Skip duplicate events (backend may store the same event multiple times)
+          if (seenEventIds.has(itemId)) break;
+          seenEventIds.add(itemId);
           items.push({
             kind: "user" as const,
-            id: `event-${event.id}`,
+            id: itemId,
             content: event.content,
             timestamp,
           });
           break;
+        }
 
         case "assistant_message": {
           // Finalize any pending thinking before assistant message
@@ -2668,9 +2709,14 @@ export default function ControlClient() {
             }
           }
 
+          // Use event_id (UUID) if available for deduplication with SSE events
+          const assistantId = event.event_id ?? `event-${event.id}`;
+          // Skip duplicate events
+          if (seenEventIds.has(assistantId)) break;
+          seenEventIds.add(assistantId);
           items.push({
             kind: "assistant" as const,
-            id: `event-${event.id}`,
+            id: assistantId,
             content: event.content,
             success: !isFailure,
             costCents: typeof meta.cost_cents === "number" ? meta.cost_cents : 0,
@@ -4113,8 +4159,9 @@ export default function ControlClient() {
         }
         applyDesktopSessionState(mission);
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         console.error("Failed to sync mission before sending:", err);
-        toast.error("Failed to sync mission before sending");
+        toast.error(`Failed to sync mission: ${errMsg}. Check API connection in Settings.`);
         return;
       }
     }
@@ -4201,8 +4248,9 @@ export default function ControlClient() {
         }
         applyDesktopSessionState(mission);
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         console.error("Failed to sync mission before sending:", err);
-        toast.error("Failed to sync mission before sending");
+        toast.error(`Failed to sync mission: ${errMsg}. Check API connection in Settings.`);
         submittingRef.current = false;
         return;
       }
@@ -4352,9 +4400,7 @@ export default function ControlClient() {
         runningMissions={runningMissions}
         currentMissionId={currentMission?.id}
         viewingMissionId={viewingMissionId}
-        onSelectMission={(missionId) => {
-          handleViewMission(missionId);
-        }}
+        onSelectMission={handleViewMission}
         onCancelMission={handleCancelMission}
         onRefresh={refreshRecentMissions}
       />
