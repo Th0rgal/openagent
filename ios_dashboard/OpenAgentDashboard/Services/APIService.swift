@@ -103,17 +103,35 @@ final class APIService {
         try await get("/api/control/missions/current")
     }
     
-    func createMission(workspaceId: String? = nil, title: String? = nil) async throws -> Mission {
+    func createMission(
+        workspaceId: String? = nil,
+        title: String? = nil,
+        agent: String? = nil,
+        modelOverride: String? = nil,
+        backend: String? = nil
+    ) async throws -> Mission {
         struct CreateMissionRequest: Encodable {
             let workspaceId: String?
             let title: String?
+            let agent: String?
+            let modelOverride: String?
+            let backend: String?
 
             enum CodingKeys: String, CodingKey {
                 case workspaceId = "workspace_id"
                 case title
+                case agent
+                case modelOverride = "model_override"
+                case backend
             }
         }
-        return try await post("/api/control/missions", body: CreateMissionRequest(workspaceId: workspaceId, title: title))
+        return try await post("/api/control/missions", body: CreateMissionRequest(
+            workspaceId: workspaceId,
+            title: title,
+            agent: agent,
+            modelOverride: modelOverride,
+            backend: backend
+        ))
     }
     
     func loadMission(id: String) async throws -> Mission {
@@ -303,6 +321,31 @@ final class APIService {
         
         let uploadResponse = try JSONDecoder().decode(UploadResponse.self, from: responseData)
         return uploadResponse.path
+    }
+    
+    // MARK: - Backends
+    
+    func listBackends() async throws -> [Backend] {
+        try await get("/api/backends")
+    }
+    
+    func getBackend(id: String) async throws -> Backend {
+        try await get("/api/backends/\(id)")
+    }
+    
+    func listBackendAgents(backendId: String) async throws -> [BackendAgent] {
+        try await get("/api/backends/\(backendId)/agents")
+    }
+    
+    func getBackendConfig(backendId: String) async throws -> BackendConfig {
+        try await get("/api/backends/\(backendId)/config")
+    }
+    
+    // MARK: - Providers
+    
+    func listProviders(includeAll: Bool = false) async throws -> ProvidersResponse {
+        let path = includeAll ? "/api/providers?include_all=true" : "/api/providers"
+        return try await get(path)
     }
     
     // MARK: - Workspaces

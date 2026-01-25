@@ -26,6 +26,7 @@ const componentNames: Record<string, string> = {
   open_agent: 'Open Agent',
   opencode: 'OpenCode',
   claude_code: 'Claude Code',
+  amp: 'Amp',
   oh_my_opencode: 'oh-my-opencode',
 };
 
@@ -34,6 +35,7 @@ const componentIcons: Record<string, string> = {
   open_agent: '🚀',
   opencode: '⚡',
   claude_code: '🤖',
+  amp: '⚡',
   oh_my_opencode: '🎭',
 };
 
@@ -106,7 +108,8 @@ export function ServerConnectionCard({
           `${componentNames[component.name] || component.name} updated successfully!`
         );
         setUpdatingComponent(null);
-        mutate(); // Revalidate components list
+        // Small delay to ensure backend has updated its cache/state
+        setTimeout(() => mutate(), 500);
       },
       (error: string) => {
         toast.error(`Update failed: ${error}`);

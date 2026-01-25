@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import useSWR from 'swr';
 import { toast } from '@/components/toast';
 import {
@@ -21,6 +21,8 @@ import {
   updateBackendConfig,
   getProviderForBackend,
   BackendProviderResponse,
+  downloadBackup,
+  restoreBackup,
 } from '@/lib/api';
 import {
   Server,
@@ -37,6 +39,9 @@ import {
   Key,
   Check,
   X,
+  Download,
+  Upload,
+  Archive,
 } from 'lucide-react';
 import { readSavedSettings, writeSavedSettings } from '@/lib/settings';
 import { cn } from '@/lib/utils';
@@ -108,7 +113,7 @@ export default function SettingsPage() {
   const [savingLibraryRemote, setSavingLibraryRemote] = useState(false);
 
   // Backend settings state
-  const [activeBackendTab, setActiveBackendTab] = useState<'opencode' | 'claudecode'>('opencode');
+  const [activeBackendTab, setActiveBackendTab] = useState<'opencode' | 'claudecode' | 'amp'>('opencode');
   const [savingBackend, setSavingBackend] = useState(false);
   const [opencodeForm, setOpencodeForm] = useState({
     base_url: '',
@@ -122,6 +127,22 @@ export default function SettingsPage() {
     api_key_configured: false,
     enabled: true,
   });
+  const [ampForm, setAmpForm] = useState({
+    cli_path: '',
+    default_mode: 'smart',
+    permissive: true,
+    enabled: true,
+    api_key: '',
+  });
+
+  // Backup/restore state
+  const [downloadingBackup, setDownloadingBackup] = useState(false);
+  const [restoringBackup, setRestoringBackup] = useState(false);
+  const fileInputRef = useCallback((node: HTMLInputElement | null) => {
+    if (node) {
+      node.value = '';
+    }
+  }, []);
 
   // SWR: fetch health status
   const { data: health, isLoading: healthLoading, mutate: mutateHealth } = useSWR(
@@ -168,6 +189,11 @@ export default function SettingsPage() {
   const { data: claudecodeBackendConfig, mutate: mutateClaudeBackend } = useSWR(
     'backend-claudecode-config',
     () => getBackendConfig('claudecode'),
+    { revalidateOnFocus: false }
+  );
+  const { data: ampBackendConfig, mutate: mutateAmpBackend } = useSWR(
+    'backend-amp-config',
+    () => getBackendConfig('amp'),
     { revalidateOnFocus: false }
   );
 
@@ -245,6 +271,18 @@ export default function SettingsPage() {
       enabled: claudecodeBackendConfig.enabled,
     }));
   }, [claudecodeBackendConfig]);
+
+  useEffect(() => {
+    if (!ampBackendConfig?.settings) return;
+    const settings = ampBackendConfig.settings as Record<string, unknown>;
+    setAmpForm({
+      cli_path: typeof settings.cli_path === 'string' ? settings.cli_path : '',
+      default_mode: typeof settings.default_mode === 'string' ? settings.default_mode : 'smart',
+      permissive: settings.permissive !== false,
+      enabled: ampBackendConfig.enabled,
+      api_key: typeof settings.api_key === 'string' ? settings.api_key : '',
+    });
+  }, [ampBackendConfig]);
 
   const handleSave = () => {
     if (!validateUrl(apiUrl)) {
@@ -378,6 +416,32 @@ export default function SettingsPage() {
     }
   };
 
+  const handleSaveAmpBackend = async () => {
+    setSavingBackend(true);
+    try {
+      const settings: Record<string, unknown> = {
+        cli_path: ampForm.cli_path || null,
+        default_mode: ampForm.default_mode || 'smart',
+        permissive: ampForm.permissive,
+        api_key: ampForm.api_key || null,
+      };
+
+      const result = await updateBackendConfig('amp', settings, {
+        enabled: ampForm.enabled,
+      });
+      toast.success(result.message || 'Amp settings updated');
+      mutateAmpBackend();
+    } catch (err) {
+      toast.error(
+        `Failed to update Amp settings: ${
+          err instanceof Error ? err.message : 'Unknown error'
+        }`
+      );
+    } finally {
+      setSavingBackend(false);
+    }
+  };
+
   const handleStartEdit = (provider: AIProvider) => {
     setEditingProvider(provider.id);
     setEditForm({
@@ -458,6 +522,49 @@ export default function SettingsPage() {
       );
     } finally {
       setSavingLibraryRemote(false);
+    }
+  };
+
+  // Backup/restore handlers
+  const handleDownloadBackup = async () => {
+    setDownloadingBackup(true);
+    try {
+      await downloadBackup();
+      toast.success('Backup downloaded successfully');
+    } catch (err) {
+      toast.error(
+        `Failed to download backup: ${err instanceof Error ? err.message : 'Unknown error'}`
+      );
+    } finally {
+      setDownloadingBackup(false);
+    }
+  };
+
+  const handleRestoreBackup = async (file: File) => {
+    setRestoringBackup(true);
+    try {
+      const result = await restoreBackup(file);
+      if (result.success) {
+        toast.success(result.message);
+        // Refresh all data after restore
+        mutateHealth();
+        mutateSettings();
+        mutateProviders();
+        mutateOpenCodeBackend();
+        mutateClaudeBackend();
+        mutateAmpBackend();
+      } else {
+        toast.error(result.message);
+        if (result.errors.length > 0) {
+          result.errors.forEach((error) => toast.error(error));
+        }
+      }
+    } catch (err) {
+      toast.error(
+        `Failed to restore backup: ${err instanceof Error ? err.message : 'Unknown error'}`
+      );
+    } finally {
+      setRestoringBackup(false);
     }
   };
 
@@ -734,7 +841,7 @@ export default function SettingsPage() {
                   key={backend.id}
                   onClick={() =>
                     setActiveBackendTab(
-                      backend.id === 'claudecode' ? 'claudecode' : 'opencode'
+                      backend.id as 'opencode' | 'claudecode' | 'amp'
                     )
                   }
                   className={cn(
@@ -810,10 +917,10 @@ export default function SettingsPage() {
                     )}
                     Save OpenCode
                   </button>
-                  <span className="text-xs text-white/40">Restart required to apply runtime changes</span>
+                  
                 </div>
               </div>
-            ) : (
+            ) : activeBackendTab === 'claudecode' ? (
               <div className="space-y-3">
                 <label className="flex items-center gap-2 text-xs text-white/60 cursor-pointer">
                   <input
@@ -885,10 +992,107 @@ export default function SettingsPage() {
                     )}
                     Save Claude Code
                   </button>
-                  <span className="text-xs text-white/40">Restart required to apply runtime changes</span>
+                  
                 </div>
               </div>
-            )}
+            ) : activeBackendTab === 'amp' ? (
+              <div className="space-y-3">
+                <label className="flex items-center gap-2 text-xs text-white/60 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={ampForm.enabled}
+                    onChange={(e) =>
+                      setAmpForm((prev) => ({ ...prev, enabled: e.target.checked }))
+                    }
+                    className="rounded border-white/20 cursor-pointer"
+                  />
+                  Enabled
+                </label>
+                {/* Amp API Key */}
+                <div>
+                  <label className="block text-xs text-white/60 mb-1.5">
+                    <span className="flex items-center gap-1.5">
+                      <Key className="h-3.5 w-3.5" />
+                      Amp API Key
+                    </span>
+                  </label>
+                  <input
+                    type="password"
+                    value={ampForm.api_key || ''}
+                    onChange={(e) =>
+                      setAmpForm((prev) => ({ ...prev, api_key: e.target.value }))
+                    }
+                    placeholder="Enter your Amp API key from ampcode.com"
+                    className="w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-indigo-500/50"
+                  />
+                  <p className="mt-1.5 text-xs text-white/30">
+                    Get your API key from{' '}
+                    <a
+                      href="https://ampcode.com/settings/tokens"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-indigo-400 hover:text-indigo-300"
+                    >
+                      ampcode.com/settings/tokens
+                    </a>
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-xs text-white/60 mb-1.5">CLI Path</label>
+                  <input
+                    type="text"
+                    value={ampForm.cli_path || ''}
+                    onChange={(e) =>
+                      setAmpForm((prev) => ({ ...prev, cli_path: e.target.value }))
+                    }
+                    placeholder="amp (uses PATH) or /path/to/amp"
+                    className="w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500/50"
+                  />
+                  <p className="mt-1.5 text-xs text-white/30">
+                    Path to the Amp CLI executable. Leave blank to use default from PATH.
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-xs text-white/60 mb-1.5">Default Mode</label>
+                  <select
+                    value={ampForm.default_mode}
+                    onChange={(e) =>
+                      setAmpForm((prev) => ({ ...prev, default_mode: e.target.value }))
+                    }
+                    className="w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500/50"
+                  >
+                    <option value="smart">Smart Mode (full capability)</option>
+                    <option value="rush">Rush Mode (faster, cheaper)</option>
+                  </select>
+                </div>
+                <label className="flex items-center gap-2 text-xs text-white/60 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={ampForm.permissive}
+                    onChange={(e) =>
+                      setAmpForm((prev) => ({ ...prev, permissive: e.target.checked }))
+                    }
+                    className="rounded border-white/20 cursor-pointer"
+                  />
+                  Permissive mode (--dangerously-allow-all)
+                </label>
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    onClick={handleSaveAmpBackend}
+                    disabled={savingBackend}
+                    className="flex items-center gap-2 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs text-white hover:bg-indigo-600 transition-colors disabled:opacity-50"
+                  >
+                    {savingBackend ? (
+                      <Loader className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Save className="h-3.5 w-3.5" />
+                    )}
+                    Save Amp
+                  </button>
+                  
+                </div>
+              </div>
+            ) : null}
           </div>
 
           {/* Library Settings */}
@@ -967,6 +1171,70 @@ export default function SettingsPage() {
               )}
               <p className="mt-1.5 text-xs text-white/30">
                 Git remote URL for skills, tools, agents, and rules. Click to edit.
+              </p>
+            </div>
+          </div>
+
+          {/* Backup & Restore */}
+          <div className="rounded-xl bg-white/[0.02] border border-white/[0.04] p-5">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/10">
+                <Archive className="h-5 w-5 text-amber-400" />
+              </div>
+              <div>
+                <h2 className="text-sm font-medium text-white">Backup & Restore</h2>
+                <p className="text-xs text-white/40">
+                  Export or import your settings, credentials, and provider configurations
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-xs text-white/50">
+                Backup includes: AI provider credentials, backend settings (Amp API key, etc.),
+                workspace definitions, MCP configurations, and encrypted secrets.
+              </p>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleDownloadBackup}
+                  disabled={downloadingBackup}
+                  className="flex items-center gap-2 rounded-lg bg-indigo-500 px-4 py-2 text-sm text-white hover:bg-indigo-600 transition-colors disabled:opacity-50"
+                >
+                  {downloadingBackup ? (
+                    <Loader className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  Download Backup
+                </button>
+
+                <label className="flex items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.02] px-4 py-2 text-sm text-white/70 hover:bg-white/[0.04] transition-colors cursor-pointer">
+                  {restoringBackup ? (
+                    <Loader className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Upload className="h-4 w-4" />
+                  )}
+                  Restore Backup
+                  <input
+                    type="file"
+                    accept=".zip"
+                    className="hidden"
+                    ref={fileInputRef}
+                    disabled={restoringBackup}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        handleRestoreBackup(file);
+                        e.target.value = '';
+                      }
+                    }}
+                  />
+                </label>
+              </div>
+
+              <p className="text-xs text-white/30">
+                After restoring, a server restart may be required to apply credential changes.
               </p>
             </div>
           </div>

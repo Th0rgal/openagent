@@ -120,6 +120,7 @@ impl MissionStore for FileMissionStore {
             interrupted_at: None,
             resumable: false,
             desktop_sessions: Vec::new(),
+            session_id: Some(Uuid::new_v4().to_string()),
         };
         self.missions
             .write()
@@ -184,6 +185,17 @@ impl MissionStore for FileMissionStore {
             .get_mut(&id)
             .ok_or_else(|| format!("Mission {} not found", id))?;
         mission.title = Some(title.to_string());
+        mission.updated_at = now_string();
+        drop(missions);
+        self.persist().await
+    }
+
+    async fn update_mission_session_id(&self, id: Uuid, session_id: &str) -> Result<(), String> {
+        let mut missions = self.missions.write().await;
+        let mission = missions
+            .get_mut(&id)
+            .ok_or_else(|| format!("Mission {} not found", id))?;
+        mission.session_id = Some(session_id.to_string());
         mission.updated_at = now_string();
         drop(missions);
         self.persist().await

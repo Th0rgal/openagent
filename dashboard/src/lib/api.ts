@@ -3006,3 +3006,57 @@ export async function updateBackendConfig(
   if (!res.ok) throw new Error('Failed to update backend config');
   return res.json();
 }
+
+// ============================================
+// Backup & Restore API
+// ============================================
+
+export interface RestoreBackupResponse {
+  success: boolean;
+  message: string;
+  restored_files: string[];
+  errors: string[];
+}
+
+// Download settings backup
+export async function downloadBackup(): Promise<void> {
+  const res = await apiFetch('/api/settings/backup');
+  if (!res.ok) throw new Error('Failed to download backup');
+
+  // Get filename from Content-Disposition header or use default
+  const contentDisposition = res.headers.get('Content-Disposition');
+  let filename = 'openagent-backup.zip';
+  if (contentDisposition) {
+    const match = contentDisposition.match(/filename="([^"]+)"/);
+    if (match) filename = match[1];
+  }
+
+  // Convert response to blob and trigger download
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Restore settings from backup file
+export async function restoreBackup(file: File): Promise<RestoreBackupResponse> {
+  const formData = new FormData();
+  formData.append('backup', file);
+
+  const res = await apiFetch('/api/settings/restore', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || 'Failed to restore backup');
+  }
+
+  return res.json();
+}

@@ -53,6 +53,9 @@ pub struct Mission {
     /// Desktop sessions started during this mission (used for reconnect/stream resume)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub desktop_sessions: Vec<DesktopSessionInfo>,
+    /// Session ID for conversation persistence (used by Claude Code --session-id)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 fn default_backend() -> String {
@@ -149,6 +152,9 @@ pub trait MissionStore: Send + Sync {
     /// Update mission title.
     async fn update_mission_title(&self, id: Uuid, title: &str) -> Result<(), String>;
 
+    /// Update mission session ID (for backends like Amp that generate their own IDs).
+    async fn update_mission_session_id(&self, id: Uuid, session_id: &str) -> Result<(), String>;
+
     /// Update mission agent tree.
     async fn update_mission_tree(&self, id: Uuid, tree: &AgentTreeNode) -> Result<(), String>;
 
@@ -194,6 +200,12 @@ pub trait MissionStore: Send + Sync {
     ) -> Result<Vec<StoredEvent>, String> {
         let _ = (mission_id, event_types, limit, offset);
         Ok(vec![])
+    }
+
+    /// Get total cost in cents across all missions.
+    /// Aggregates cost_cents from all assistant_message events.
+    async fn get_total_cost_cents(&self) -> Result<u64, String> {
+        Ok(0)
     }
 }
 

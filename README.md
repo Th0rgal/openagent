@@ -58,6 +58,7 @@ Open Agent orchestrates multiple AI coding agent runtimes:
 
 - **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)**: Anthropic's official coding agent with native skills support (`.claude/skills/`)
 - **[OpenCode](https://github.com/anomalyco/opencode)**: Open-source alternative via [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode)
+- **[Amp](https://ampcode.com)**: Sourcegraph's frontier coding agent with multi-model support
 
 Each runtime executes inside isolated workspaces, so bash commands and file operations are scoped correctly. Open Agent handles orchestration, workspace isolation, and Library-based configuration management.
 

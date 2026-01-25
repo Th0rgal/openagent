@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 
 interface RelativeTimeProps {
   date: string | Date;
@@ -27,21 +27,30 @@ function getRelativeTime(date: Date): string {
 }
 
 export function RelativeTime({ date, className }: RelativeTimeProps) {
-  const dateObj = typeof date === 'string' ? new Date(date) : date;
+  // Memoize timestamp to avoid recreating Date object on every render
+  const timestamp = useMemo(() => {
+    const d = typeof date === 'string' ? new Date(date) : date;
+    return d.getTime();
+  }, [date]);
+
+  const dateObj = useMemo(() => new Date(timestamp), [timestamp]);
   const [relativeTime, setRelativeTime] = useState(() => getRelativeTime(dateObj));
 
   // Update relative time periodically
   useEffect(() => {
+    // Update immediately in case timestamp changed
+    setRelativeTime(getRelativeTime(dateObj));
+
     const interval = setInterval(() => {
       setRelativeTime(getRelativeTime(dateObj));
     }, 60000); // Update every minute
 
     return () => clearInterval(interval);
-  }, [dateObj]);
+  }, [dateObj, timestamp]);
 
   return (
-    <span 
-      className={className} 
+    <span
+      className={className}
       title={dateObj.toLocaleString()}
     >
       {relativeTime}

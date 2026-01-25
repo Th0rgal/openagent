@@ -23,6 +23,7 @@ interface CombinedAgent {
   backend: string;
   backendName: string;
   agent: string;
+  displayName: string; // User-friendly name for UI display
   value: string; // "backend:agent" format
 }
 
@@ -82,7 +83,7 @@ export function NewMissionDialog({
   const { data: backends } = useSWR<Backend[]>('backends', listBackends, {
     revalidateOnFocus: false,
     dedupingInterval: 30000,
-    fallbackData: [{ id: 'opencode', name: 'OpenCode' }, { id: 'claudecode', name: 'Claude Code' }],
+    fallbackData: [{ id: 'opencode', name: 'OpenCode' }, { id: 'claudecode', name: 'Claude Code' }, { id: 'amp', name: 'Amp' }],
   });
 
   // SWR: fetch backend configs to check enabled status
@@ -94,15 +95,20 @@ export function NewMissionDialog({
     revalidateOnFocus: false,
     dedupingInterval: 30000,
   });
+  const { data: ampConfig } = useSWR('backend-amp-config', () => getBackendConfig('amp'), {
+    revalidateOnFocus: false,
+    dedupingInterval: 30000,
+  });
 
   // Filter to only enabled backends
   const enabledBackends = useMemo(() => {
     return backends?.filter((b) => {
       if (b.id === 'opencode') return opencodeConfig?.enabled !== false;
       if (b.id === 'claudecode') return claudecodeConfig?.enabled !== false;
+      if (b.id === 'amp') return ampConfig?.enabled !== false;
       return true;
     }) || [];
-  }, [backends, opencodeConfig, claudecodeConfig]);
+  }, [backends, opencodeConfig, claudecodeConfig, ampConfig]);
 
   // SWR: fetch agents for each enabled backend
   const { data: opencodeAgents } = useSWR<BackendAgent[]>(
@@ -113,6 +119,11 @@ export function NewMissionDialog({
   const { data: claudecodeAgents } = useSWR<BackendAgent[]>(
     enabledBackends.some(b => b.id === 'claudecode') ? 'backend-claudecode-agents' : null,
     () => listBackendAgents('claudecode'),
+    { revalidateOnFocus: false, dedupingInterval: 30000 }
+  );
+  const { data: ampAgents } = useSWR<BackendAgent[]>(
+    enabledBackends.some(b => b.id === 'amp') ? 'backend-amp-agents' : null,
+    () => listBackendAgents('amp'),
     { revalidateOnFocus: false, dedupingInterval: 30000 }
   );
 
@@ -140,46 +151,59 @@ export function NewMissionDialog({
     const claudeCodeHiddenAgents = claudeCodeLibConfig?.hidden_agents || [];
 
     for (const backend of enabledBackends) {
-      let agentNames: string[] = [];
+      // Use consistent {id, name} format for all backends
+      let agents: { id: string; name: string }[] = [];
 
       if (backend.id === 'opencode') {
-        // Filter out hidden OpenCode agents
-        const backendAgents = opencodeAgents?.map(a => a.name) || [];
-        const visibleBackendAgents = backendAgents.filter(name => !openCodeHiddenAgents.includes(name));
-        if (visibleBackendAgents.length > 0) {
-          agentNames = visibleBackendAgents;
+        // Filter out hidden OpenCode agents by name
+        const backendAgents = opencodeAgents || [];
+        const visibleAgents = backendAgents.filter(a => !openCodeHiddenAgents.includes(a.name));
+        if (visibleAgents.length > 0) {
+          agents = visibleAgents;
         } else if (backendAgents.length > 0) {
           // If all OpenCode agents are hidden, fall back to the raw list so the backend remains usable.
-          agentNames = backendAgents;
+          agents = backendAgents;
         } else {
-          const fallbackAgents = parseAgentNames(agentsPayload);
-          agentNames = fallbackAgents.filter(name => !openCodeHiddenAgents.includes(name));
+          // Fallback to parsing agent names from raw payload
+          const fallbackNames = parseAgentNames(agentsPayload).filter(
+            name => !openCodeHiddenAgents.includes(name)
+          );
+          agents = fallbackNames.map(name => ({ id: name, name }));
         }
 
-        if (agentNames.length === 0) {
+        if (agents.length === 0) {
           const visibleDefaults = DEFAULT_OPENCODE_AGENTS.filter(
             name => !openCodeHiddenAgents.includes(name),
           );
-          agentNames = visibleDefaults.length > 0 ? visibleDefaults : [...DEFAULT_OPENCODE_AGENTS];
+          const defaultNames = visibleDefaults.length > 0 ? visibleDefaults : [...DEFAULT_OPENCODE_AGENTS];
+          agents = defaultNames.map(name => ({ id: name, name }));
         }
       } else if (backend.id === 'claudecode') {
-        // Filter out hidden Claude Code agents
-        const allClaudeAgents = claudecodeAgents?.map(a => a.name) || [];
-        agentNames = allClaudeAgents.filter(name => !claudeCodeHiddenAgents.includes(name));
+        // Filter out hidden Claude Code agents by name
+        const allClaudeAgents = claudecodeAgents || [];
+        agents = allClaudeAgents.filter(a => !claudeCodeHiddenAgents.includes(a.name));
+      } else if (backend.id === 'amp') {
+        // Amp has built-in modes: smart and rush
+        agents = ampAgents || [
+          { id: 'smart', name: 'Smart Mode' },
+          { id: 'rush', name: 'Rush Mode' },
+        ];
       }
 
-      for (const agent of agentNames) {
+      // Use agent.id for CLI value, agent.name for display (consistent across all backends)
+      for (const agent of agents) {
         result.push({
           backend: backend.id,
           backendName: backend.name,
-          agent,
-          value: `${backend.id}:${agent}`,
+          agent: agent.id,
+          displayName: agent.name,
+          value: `${backend.id}:${agent.id}`,
         });
       }
     }
 
     return result;
-  }, [enabledBackends, opencodeAgents, claudecodeAgents, agentsPayload, config, claudeCodeLibConfig]);
+  }, [enabledBackends, opencodeAgents, claudecodeAgents, ampAgents, agentsPayload, config, claudeCodeLibConfig]);
 
   // Group agents by backend for display
   const agentsByBackend = useMemo(() => {
@@ -208,10 +232,10 @@ export function NewMissionDialog({
   }, [selectedAgentValue]);
 
   // Filter providers based on selected backend
-  // Claude Code only supports Anthropic models
+  // Claude Code and Amp only support Anthropic models
   const filteredProviders = useMemo(() => {
-    if (selectedBackend === 'claudecode') {
-      // Only show Anthropic (Claude) models for Claude Code
+    if (selectedBackend === 'claudecode' || selectedBackend === 'amp') {
+      // Only show Anthropic (Claude) models for Claude Code and Amp
       return providers.filter(p => p.id === 'anthropic');
     }
     // Show all providers for OpenCode or when no backend is selected
@@ -221,10 +245,10 @@ export function NewMissionDialog({
   const formatWorkspaceType = (type: Workspace['workspace_type']) =>
     type === 'host' ? 'host' : 'isolated';
 
-  // Reset model override when switching to Claude Code if current model is provider-prefixed
+  // Reset model override when switching to Claude Code or Amp if current model is provider-prefixed
   useEffect(() => {
-    if (selectedBackend === 'claudecode' && newMissionModelOverride) {
-      // Claude Code expects raw model IDs (no provider prefix).
+    if ((selectedBackend === 'claudecode' || selectedBackend === 'amp') && newMissionModelOverride) {
+      // Claude Code and Amp expect raw model IDs (no provider prefix).
       if (newMissionModelOverride.includes('/')) {
         setNewMissionModelOverride('');
       }
@@ -390,7 +414,7 @@ export function NewMissionDialog({
                     <optgroup key={backend.id} label={backend.name} className="bg-[#1a1a1a]">
                       {backendAgentsList.map((agent) => (
                         <option key={agent.value} value={agent.value} className="bg-[#1a1a1a]">
-                          {agent.agent}{agent.backend === 'opencode' && agent.agent === 'Sisyphus' ? ' (recommended)' : ''}
+                          {agent.displayName}{agent.backend === 'opencode' && agent.agent === 'Sisyphus' ? ' (recommended)' : ''}
                         </option>
                       ))}
                     </optgroup>
@@ -425,7 +449,7 @@ export function NewMissionDialog({
                   <optgroup key={provider.id} label={provider.name} className="bg-[#1a1a1a]">
                     {provider.models.map((model) => {
                       const value =
-                        selectedBackend === 'claudecode' ? model.id : `${provider.id}/${model.id}`;
+                        (selectedBackend === 'claudecode' || selectedBackend === 'amp') ? model.id : `${provider.id}/${model.id}`;
                       return (
                         <option
                           key={`${provider.id}/${model.id}`}

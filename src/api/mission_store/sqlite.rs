@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS missions (
 
 CREATE INDEX IF NOT EXISTS idx_missions_updated_at ON missions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_missions_status ON missions(status);
+CREATE INDEX IF NOT EXISTS idx_missions_status_updated ON missions(status, updated_at);
 
 CREATE TABLE IF NOT EXISTS mission_trees (
     mission_id TEXT PRIMARY KEY NOT NULL,
@@ -61,6 +62,7 @@ CREATE TABLE IF NOT EXISTS mission_events (
 CREATE INDEX IF NOT EXISTS idx_events_mission ON mission_events(mission_id, sequence);
 CREATE INDEX IF NOT EXISTS idx_events_type ON mission_events(mission_id, event_type);
 CREATE INDEX IF NOT EXISTS idx_events_tool_call ON mission_events(tool_call_id) WHERE tool_call_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_events_event_type ON mission_events(event_type);
 
 CREATE TABLE IF NOT EXISTS mission_summaries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -179,6 +181,26 @@ impl SqliteMissionStore {
             .map_err(|e| format!("Failed to add backend column: {}", e))?;
         }
 
+        // Check if 'session_id' column exists in missions table
+        let has_session_id_column: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('missions') WHERE name = 'session_id'")
+            .map_err(|e| format!("Failed to check for session_id column: {}", e))?
+            .exists([])
+            .map_err(|e| format!("Failed to query table info: {}", e))?;
+
+        if !has_session_id_column {
+            tracing::info!("Running migration: adding 'session_id' column to missions table");
+            conn.execute("ALTER TABLE missions ADD COLUMN session_id TEXT", [])
+                .map_err(|e| format!("Failed to add session_id column: {}", e))?;
+        }
+
+        // Add performance indexes if they don't exist (idempotent)
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_missions_status_updated ON missions(status, updated_at);
+             CREATE INDEX IF NOT EXISTS idx_events_event_type ON mission_events(event_type);",
+        )
+        .map_err(|e| format!("Failed to create performance indexes: {}", e))?;
+
         Ok(())
     }
 }
@@ -220,7 +242,7 @@ impl MissionStore for SqliteMissionStore {
                 .prepare(
                     "SELECT id, status, title, workspace_id, workspace_name, agent, model_override,
                             created_at, updated_at, interrupted_at, resumable, desktop_sessions,
-                            COALESCE(backend, 'opencode') as backend
+                            COALESCE(backend, 'opencode') as backend, session_id
                      FROM missions
                      ORDER BY updated_at DESC
                      LIMIT ?1 OFFSET ?2",
@@ -234,6 +256,7 @@ impl MissionStore for SqliteMissionStore {
                     let workspace_id_str: String = row.get(3)?;
                     let desktop_sessions_json: Option<String> = row.get(11)?;
                     let backend: String = row.get(12)?;
+                    let session_id: Option<String> = row.get(13)?;
 
                     Ok(Mission {
                         id: Uuid::parse_str(&id_str).unwrap_or_default(),
@@ -253,6 +276,7 @@ impl MissionStore for SqliteMissionStore {
                         desktop_sessions: desktop_sessions_json
                             .and_then(|s| serde_json::from_str(&s).ok())
                             .unwrap_or_default(),
+                        session_id,
                     })
                 })
                 .map_err(|e| e.to_string())?
@@ -277,7 +301,7 @@ impl MissionStore for SqliteMissionStore {
                 .prepare(
                     "SELECT id, status, title, workspace_id, workspace_name, agent, model_override,
                             created_at, updated_at, interrupted_at, resumable, desktop_sessions,
-                            COALESCE(backend, 'opencode') as backend
+                            COALESCE(backend, 'opencode') as backend, session_id
                      FROM missions WHERE id = ?1",
                 )
                 .map_err(|e| e.to_string())?;
@@ -289,6 +313,7 @@ impl MissionStore for SqliteMissionStore {
                     let workspace_id_str: String = row.get(3)?;
                     let desktop_sessions_json: Option<String> = row.get(11)?;
                     let backend: String = row.get(12)?;
+                    let session_id: Option<String> = row.get(13)?;
 
                     Ok(Mission {
                         id: Uuid::parse_str(&id_str).unwrap_or_default(),
@@ -308,19 +333,24 @@ impl MissionStore for SqliteMissionStore {
                         desktop_sessions: desktop_sessions_json
                             .and_then(|s| serde_json::from_str(&s).ok())
                             .unwrap_or_default(),
+                        session_id,
                     })
                 })
                 .optional()
                 .map_err(|e| e.to_string())?;
 
-            // Load history from events
+            // Load history from events (limited to last 200 messages for performance)
+            // Full history can be retrieved via get_events() if needed
             if let Some(mut m) = mission {
                 let mut history_stmt = conn
                     .prepare(
-                        "SELECT event_type, content, content_file
-                         FROM mission_events
-                         WHERE mission_id = ?1 AND event_type IN ('user_message', 'assistant_message')
-                         ORDER BY sequence ASC",
+                        "SELECT event_type, content, content_file FROM (
+                             SELECT event_type, content, content_file, sequence
+                             FROM mission_events
+                             WHERE mission_id = ?1 AND event_type IN ('user_message', 'assistant_message')
+                             ORDER BY sequence DESC
+                             LIMIT 200
+                         ) ORDER BY sequence ASC",
                     )
                     .map_err(|e| e.to_string())?;
 
@@ -367,6 +397,8 @@ impl MissionStore for SqliteMissionStore {
         let id = Uuid::new_v4();
         let workspace_id = workspace_id.unwrap_or(crate::workspace::DEFAULT_WORKSPACE_ID);
         let backend = backend.unwrap_or("opencode").to_string();
+        // Generate session_id for conversation persistence (used by Claude Code --session-id)
+        let session_id = Uuid::new_v4().to_string();
 
         let mission = Mission {
             id,
@@ -383,14 +415,15 @@ impl MissionStore for SqliteMissionStore {
             interrupted_at: None,
             resumable: false,
             desktop_sessions: Vec::new(),
+            session_id: Some(session_id.clone()),
         };
 
         let m = mission.clone();
         tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             conn.execute(
-                "INSERT INTO missions (id, status, title, workspace_id, agent, model_override, backend, created_at, updated_at, resumable)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO missions (id, status, title, workspace_id, agent, model_override, backend, created_at, updated_at, resumable, session_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     m.id.to_string(),
                     status_to_string(m.status),
@@ -402,6 +435,7 @@ impl MissionStore for SqliteMissionStore {
                     m.created_at,
                     m.updated_at,
                     0,
+                    m.session_id,
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -502,6 +536,24 @@ impl MissionStore for SqliteMissionStore {
             conn.execute(
                 "UPDATE missions SET title = ?1, updated_at = ?2 WHERE id = ?3",
                 params![title, now, id.to_string()],
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
+    async fn update_mission_session_id(&self, id: Uuid, session_id: &str) -> Result<(), String> {
+        let conn = self.conn.clone();
+        let now = now_string();
+        let session_id = session_id.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            conn.execute(
+                "UPDATE missions SET session_id = ?1, updated_at = ?2 WHERE id = ?3",
+                params![session_id, now, id.to_string()],
             )
             .map_err(|e| e.to_string())?;
             Ok(())
@@ -659,6 +711,7 @@ impl MissionStore for SqliteMissionStore {
                         desktop_sessions: desktop_sessions_json
                             .and_then(|s| serde_json::from_str(&s).ok())
                             .unwrap_or_default(),
+                        session_id: None, // Not needed for stale mission checks
                     })
                 })
                 .map_err(|e| e.to_string())?
@@ -807,7 +860,9 @@ impl MissionStore for SqliteMissionStore {
             AgentEvent::Status { .. }
             | AgentEvent::AgentPhase { .. }
             | AgentEvent::AgentTree { .. }
-            | AgentEvent::Progress { .. } => return Ok(()),
+            | AgentEvent::Progress { .. }
+            | AgentEvent::SessionIdUpdate { .. }
+            | AgentEvent::TextDelta { .. } => return Ok(()),
         };
 
         let event_type = event_type.to_string();
@@ -937,5 +992,29 @@ impl MissionStore for SqliteMissionStore {
         })
         .await
         .map_err(|e| e.to_string())?
+    }
+
+    async fn get_total_cost_cents(&self) -> Result<u64, String> {
+        let conn = self.conn.lock().await;
+        
+        // Use SQLite JSON1 extension to extract cost_cents from metadata
+        // and sum across all assistant_message events
+        let query = r#"
+            SELECT COALESCE(
+                SUM(
+                    CAST(
+                        COALESCE(json_extract(metadata, '$.cost_cents'), 0) AS INTEGER
+                    )
+                ),
+                0
+            ) as total_cost
+            FROM mission_events
+            WHERE event_type = 'assistant_message'
+        "#;
+        
+        let total: i64 = conn.query_row(query, [], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+        
+        Ok(total as u64)
     }
 }

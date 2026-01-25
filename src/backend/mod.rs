@@ -1,3 +1,4 @@
+pub mod amp;
 pub mod claudecode;
 pub mod events;
 pub mod opencode;

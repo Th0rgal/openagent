@@ -308,6 +308,14 @@ pub enum AgentEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         mission_id: Option<Uuid>,
     },
+    /// Text content delta (streaming assistant response)
+    TextDelta {
+        /// Accumulated text content so far
+        content: String,
+        /// Mission this text belongs to (for parallel execution)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mission_id: Option<Uuid>,
+    },
     ToolCall {
         tool_call_id: String,
         name: String,
@@ -372,6 +380,13 @@ pub enum AgentEvent {
         /// Mission this progress belongs to (for parallel execution)
         #[serde(skip_serializing_if = "Option::is_none")]
         mission_id: Option<Uuid>,
+    },
+    /// Session ID update (for backends like Amp that generate their own session IDs)
+    SessionIdUpdate {
+        /// The new session ID to use for continuation
+        session_id: String,
+        /// Mission this session ID belongs to
+        mission_id: Uuid,
     },
 }
 
@@ -443,6 +458,7 @@ impl AgentEvent {
             AgentEvent::UserMessage { .. } => "user_message",
             AgentEvent::AssistantMessage { .. } => "assistant_message",
             AgentEvent::Thinking { .. } => "thinking",
+            AgentEvent::TextDelta { .. } => "text_delta",
             AgentEvent::ToolCall { .. } => "tool_call",
             AgentEvent::ToolResult { .. } => "tool_result",
             AgentEvent::Error { .. } => "error",
@@ -450,6 +466,7 @@ impl AgentEvent {
             AgentEvent::AgentPhase { .. } => "agent_phase",
             AgentEvent::AgentTree { .. } => "agent_tree",
             AgentEvent::Progress { .. } => "progress",
+            AgentEvent::SessionIdUpdate { .. } => "session_id_update",
         }
     }
 
@@ -459,6 +476,7 @@ impl AgentEvent {
             AgentEvent::UserMessage { mission_id, .. } => *mission_id,
             AgentEvent::AssistantMessage { mission_id, .. } => *mission_id,
             AgentEvent::Thinking { mission_id, .. } => *mission_id,
+            AgentEvent::TextDelta { mission_id, .. } => *mission_id,
             AgentEvent::ToolCall { mission_id, .. } => *mission_id,
             AgentEvent::ToolResult { mission_id, .. } => *mission_id,
             AgentEvent::Error { mission_id, .. } => *mission_id,
@@ -466,6 +484,7 @@ impl AgentEvent {
             AgentEvent::AgentPhase { mission_id, .. } => *mission_id,
             AgentEvent::AgentTree { mission_id, .. } => *mission_id,
             AgentEvent::Progress { mission_id, .. } => *mission_id,
+            AgentEvent::SessionIdUpdate { mission_id, .. } => Some(*mission_id),
         }
     }
 }
@@ -1109,10 +1128,11 @@ pub async fn create_mission(
     }
 
     // Validate agent exists before creating mission (fail fast with clear error)
-    // Skip validation for Claude Code - it has its own built-in agents
+    // Skip validation for Claude Code and Amp - they have their own built-in agents
     if let Some(ref agent_name) = agent {
-        let is_claudecode = backend.as_deref() == Some("claudecode");
-        if !is_claudecode {
+        let backend_id = backend.as_deref();
+        let skip_validation = backend_id == Some("claudecode") || backend_id == Some("amp");
+        if !skip_validation {
             super::library::validate_agent_exists(&state, agent_name)
                 .await
                 .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
@@ -2315,11 +2335,25 @@ async fn control_actor_loop(
                                     // Load mission and start in parallel
                                     match load_mission_record(&mission_store, tid).await {
                                         Ok(mission) => {
+                                            // Auto-resume: if mission is interrupted/blocked, update status to active
+                                            if matches!(mission.status, MissionStatus::Interrupted | MissionStatus::Blocked) {
+                                                tracing::info!("Auto-resuming parallel mission {} (was {})", tid, mission.status);
+                                                if let Err(e) = mission_store.update_mission_status(tid, MissionStatus::Active).await {
+                                                    tracing::warn!("Failed to auto-resume parallel mission {}: {}", tid, e);
+                                                } else {
+                                                    let _ = events_tx.send(AgentEvent::MissionStatusChanged {
+                                                        mission_id: tid,
+                                                        status: MissionStatus::Active,
+                                                        summary: None,
+                                                    });
+                                                }
+                                            }
                                             let mut runner = super::mission_runner::MissionRunner::new(
                                                 tid,
                                                 mission.workspace_id,
                                                 mission.agent.clone(),
                                                 Some(mission.backend.clone()),
+                                                mission.session_id.clone(),
                                             );
                                             // Load existing history
                                             for entry in &mission.history {
@@ -2452,20 +2486,37 @@ async fn control_actor_loop(
                                 let progress_ref = Arc::clone(&progress);
                                 // Capture which mission this task is working on
                                 let mission_id = current_mission.read().await.clone();
-                                let (workspace_id, model_override, mission_agent, backend_id) = if let Some(mid) = mission_id {
+                                let (workspace_id, model_override, mission_agent, backend_id, session_id) = if let Some(mid) = mission_id {
                                     match mission_store.get_mission(mid).await {
-                                        Ok(Some(mission)) => (
-                                            Some(mission.workspace_id),
-                                            mission.model_override.clone(),
-                                            mission.agent.clone(),
-                                            Some(mission.backend.clone()),
-                                        ),
+                                        Ok(Some(mission)) => {
+                                            // Auto-resume: if mission is interrupted/blocked, update status to active
+                                            if matches!(mission.status, MissionStatus::Interrupted | MissionStatus::Blocked) {
+                                                tracing::info!("Auto-resuming mission {} (was {})", mid, mission.status);
+                                                if let Err(e) = mission_store.update_mission_status(mid, MissionStatus::Active).await {
+                                                    tracing::warn!("Failed to auto-resume mission {}: {}", mid, e);
+                                                } else {
+                                                    // Notify frontend of status change
+                                                    let _ = events_tx.send(AgentEvent::MissionStatusChanged {
+                                                        mission_id: mid,
+                                                        status: MissionStatus::Active,
+                                                        summary: None,
+                                                    });
+                                                }
+                                            }
+                                            (
+                                                Some(mission.workspace_id),
+                                                mission.model_override.clone(),
+                                                mission.agent.clone(),
+                                                Some(mission.backend.clone()),
+                                                mission.session_id.clone(),
+                                            )
+                                        }
                                         Ok(None) => {
                                             tracing::warn!(
                                                 "Mission {} not found while resolving workspace",
                                                 mid
                                             );
-                                            (None, None, None, None)
+                                            (None, None, None, None, None)
                                         }
                                         Err(e) => {
                                             tracing::warn!(
@@ -2473,11 +2524,11 @@ async fn control_actor_loop(
                                                 mid,
                                                 e
                                             );
-                                            (None, None, None, None)
+                                            (None, None, None, None, None)
                                         }
                                     }
                                 } else {
-                                    (None, None, None, None)
+                                    (None, None, None, None, None)
                                 };
                                 // Per-message agent overrides mission agent
                                 let agent_override = per_msg_agent.or(mission_agent);
@@ -2506,6 +2557,7 @@ async fn control_actor_loop(
                                         backend_id,
                                         model_override,
                                         agent_override,
+                                        session_id,
                                     )
                                     .await;
                                     (mid, msg, result)
@@ -2686,6 +2738,7 @@ async fn control_actor_loop(
                                 mission.workspace_id,
                                 mission.agent.clone(),
                                 Some(mission.backend.clone()),
+                                mission.session_id.clone(),
                             );
 
                             // Load existing history into runner to preserve conversation context
@@ -2858,6 +2911,7 @@ async fn control_actor_loop(
                                         let model_override = mission.model_override.clone();
                                         // Resume uses mission agent (no per-message override for resumes)
                                         let agent_override = mission.agent.clone();
+                                        let session_id = mission.session_id.clone();
                                         running_cancel = Some(cancel.clone());
                                         // Capture which mission this task is working on (the resumed mission)
                                         running_mission_id = Some(mission_id);
@@ -2882,6 +2936,7 @@ async fn control_actor_loop(
                                                 backend_id,
                                                 model_override,
                                                 agent_override,
+                                                session_id,
                                             )
                                             .await;
                                             (mid, msg, result)
@@ -3312,20 +3367,21 @@ async fn control_actor_loop(
                     running_cancel = Some(cancel.clone());
                     // Capture which mission this task is working on
                     let mission_id = current_mission.read().await.clone();
-                    let (workspace_id, model_override, mission_agent, backend_id) = if let Some(mid) = mission_id {
+                    let (workspace_id, model_override, mission_agent, backend_id, session_id) = if let Some(mid) = mission_id {
                         match mission_store.get_mission(mid).await {
                             Ok(Some(mission)) => (
                                 Some(mission.workspace_id),
                                 mission.model_override.clone(),
                                 mission.agent.clone(),
                                 Some(mission.backend.clone()),
+                                mission.session_id.clone(),
                             ),
                             Ok(None) => {
                                 tracing::warn!(
                                     "Mission {} not found while resolving workspace",
                                     mid
                                 );
-                                (None, None, None, None)
+                                (None, None, None, None, None)
                             }
                             Err(e) => {
                                 tracing::warn!(
@@ -3333,11 +3389,11 @@ async fn control_actor_loop(
                                     mid,
                                     e
                                 );
-                                (None, None, None, None)
+                                (None, None, None, None, None)
                             }
                         }
                     } else {
-                        (None, None, None, None)
+                        (None, None, None, None, None)
                     };
                     // Per-message agent overrides mission agent
                     let agent_override = per_msg_agent.or(mission_agent);
@@ -3365,6 +3421,7 @@ async fn control_actor_loop(
                             backend_id,
                             model_override,
                             agent_override,
+                            session_id,
                         )
                         .await;
                         (mid, msg, result)
@@ -3560,6 +3617,26 @@ async fn control_actor_loop(
                             );
                         }
                     }
+
+                    // Handle session ID updates (for backends like Amp that generate their own IDs)
+                    if let AgentEvent::SessionIdUpdate { mission_id, session_id } = &event {
+                        if let Err(err) = mission_store
+                            .update_mission_session_id(*mission_id, session_id)
+                            .await
+                        {
+                            tracing::warn!(
+                                "Failed to update session ID for mission {}: {}",
+                                mission_id,
+                                err
+                            );
+                        } else {
+                            tracing::debug!(
+                                mission_id = %mission_id,
+                                session_id = %session_id,
+                                "Updated mission session ID from backend"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -3586,6 +3663,7 @@ async fn run_single_control_turn(
     backend_id: Option<String>,
     model_override: Option<String>,
     agent_override: Option<String>,
+    session_id: Option<String>,
 ) -> crate::agents::AgentResult {
     let is_claudecode = backend_id.as_deref() == Some("claudecode");
     if let Some(model) = model_override {
@@ -3698,6 +3776,10 @@ async fn run_single_control_turn(
                     .with_terminal_reason(TerminalReason::LlmError);
                 }
             };
+            // Check if this is a continuation turn (has prior assistant response).
+            // Note: history may include the current user message before the turn runs,
+            // so we check for assistant messages to determine if this is truly a continuation.
+            let is_continuation = history.iter().any(|(role, _)| role == "assistant");
             super::mission_runner::run_claudecode_turn(
                 exec_workspace,
                 &ctx.working_dir,
@@ -3709,6 +3791,41 @@ async fn run_single_control_turn(
                 cancel,
                 None, // secrets - not available in control context
                 &config.working_dir,
+                session_id.as_deref(),
+                is_continuation,
+            )
+            .await
+        }
+        Some("amp") => {
+            let mid = match mission_id {
+                Some(id) => id,
+                None => {
+                    let _ = events_tx.send(AgentEvent::Error {
+                        message: "Amp backend requires a mission ID".to_string(),
+                        mission_id: None,
+                        resumable: false,
+                    });
+                    return crate::agents::AgentResult::failure(
+                        "Amp backend requires a mission ID".to_string(),
+                        0,
+                    )
+                    .with_terminal_reason(TerminalReason::LlmError);
+                }
+            };
+            let is_continuation = history.iter().any(|(role, _)| role == "assistant");
+            let api_key = super::mission_runner::get_amp_api_key_from_config();
+            super::mission_runner::run_amp_turn(
+                exec_workspace,
+                &ctx.working_dir,
+                &user_message,
+                config.opencode_agent.as_deref(), // mode (smart/rush)
+                mid,
+                events_tx.clone(),
+                cancel,
+                &config.working_dir,
+                session_id.as_deref(),
+                is_continuation,
+                api_key.as_deref(),
             )
             .await
         }

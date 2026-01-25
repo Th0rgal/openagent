@@ -57,6 +57,9 @@ struct Mission: Codable, Identifiable, Hashable {
     var status: MissionStatus
     let title: String?
     let workspaceId: String?
+    let workspaceName: String?
+    let agent: String?
+    let backend: String?
     let history: [MissionHistoryEntry]
     let createdAt: String
     let updatedAt: String
@@ -72,8 +75,9 @@ struct Mission: Codable, Identifiable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, status, title, history, resumable
+        case id, status, title, history, resumable, agent, backend
         case workspaceId = "workspace_id"
+        case workspaceName = "workspace_name"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case interruptedAt = "interrupted_at"
@@ -85,6 +89,9 @@ struct Mission: Codable, Identifiable, Hashable {
         status = try container.decode(MissionStatus.self, forKey: .status)
         title = try container.decodeIfPresent(String.self, forKey: .title)
         workspaceId = try container.decodeIfPresent(String.self, forKey: .workspaceId)
+        workspaceName = try container.decodeIfPresent(String.self, forKey: .workspaceName)
+        agent = try container.decodeIfPresent(String.self, forKey: .agent)
+        backend = try container.decodeIfPresent(String.self, forKey: .backend)
         history = try container.decode([MissionHistoryEntry].self, forKey: .history)
         createdAt = try container.decode(String.self, forKey: .createdAt)
         updatedAt = try container.decode(String.self, forKey: .updatedAt)

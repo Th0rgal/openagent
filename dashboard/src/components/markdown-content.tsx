@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo, memo } from "react";
 import { createRoot } from "react-dom/client";
-import Markdown from "react-markdown";
+import Markdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -354,87 +354,91 @@ function CopyCodeButton({ code }: { code: string }) {
   );
 }
 
-export function MarkdownContent({ content, className, basePath }: MarkdownContentProps) {
+// Memoized to prevent re-renders when parent re-renders with same props
+export const MarkdownContent = memo(function MarkdownContent({ content, className, basePath }: MarkdownContentProps) {
+  // Memoize components object to prevent react-markdown from re-creating DOM on every render
+  const components: Components = useMemo(() => ({
+    a({ href, children, ...props }) {
+      return (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2 transition-colors"
+          {...props}
+        >
+          {children}
+        </a>
+      );
+    },
+    code({ className: codeClassName, children, ...props }) {
+      const match = /language-(\w+)/.exec(codeClassName || "");
+      const codeString = String(children).replace(/\n$/, "");
+      const isInline = !match && !codeString.includes("\n");
+
+      if (isInline) {
+        if (isFilePath(codeString)) {
+          return (
+            <code
+              className={cn(
+                "px-1.5 py-0.5 rounded bg-white/[0.06] text-indigo-300 text-xs font-mono",
+                "cursor-pointer hover:bg-white/[0.1] hover:text-indigo-200 transition-colors"
+              )}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                showFilePreviewModal(codeString, resolvePath(codeString, basePath));
+              }}
+              title="Click to preview"
+            >
+              {children}
+            </code>
+          );
+        }
+        return (
+          <code className="px-1.5 py-0.5 rounded bg-white/[0.06] text-indigo-300 text-xs font-mono" {...props}>
+            {children}
+          </code>
+        );
+      }
+
+      return (
+        <div className="relative group my-3 rounded-lg overflow-hidden">
+          <CopyCodeButton code={codeString} />
+          {match ? (
+            <SyntaxHighlighter
+              style={oneDark}
+              language={match[1]}
+              PreTag="div"
+              customStyle={{ margin: 0, padding: "1rem", fontSize: "0.75rem", borderRadius: "0.5rem", background: "rgba(0, 0, 0, 0.3)" }}
+              codeTagProps={{ style: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace' } }}
+            >
+              {codeString}
+            </SyntaxHighlighter>
+          ) : (
+            <pre className="p-4 bg-black/30 rounded-lg overflow-x-auto">
+              <code className="text-xs font-mono text-white/80">{codeString}</code>
+            </pre>
+          )}
+          {match && (
+            <div className="absolute left-3 top-2 text-[10px] text-white/30 uppercase tracking-wider">{match[1]}</div>
+          )}
+        </div>
+      );
+    },
+    pre({ children }) {
+      return <>{children}</>;
+    },
+  }), [basePath]);
+
+  // Memoize remarkPlugins array to prevent recreation
+  const plugins = useMemo(() => [remarkGfm], []);
+
   return (
     <div className={cn("prose-glass text-sm [&_p]:my-2", className)}>
-      <Markdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a({ href, children, ...props }) {
-            return (
-              <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2 transition-colors"
-                {...props}
-              >
-                {children}
-              </a>
-            );
-          },
-          code({ className, children, ...props }) {
-            const match = /language-(\w+)/.exec(className || "");
-            const codeString = String(children).replace(/\n$/, "");
-            const isInline = !match && !codeString.includes("\n");
-
-            if (isInline) {
-              if (isFilePath(codeString)) {
-                return (
-                  <code
-                    className={cn(
-                      "px-1.5 py-0.5 rounded bg-white/[0.06] text-indigo-300 text-xs font-mono",
-                      "cursor-pointer hover:bg-white/[0.1] hover:text-indigo-200 transition-colors"
-                    )}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      showFilePreviewModal(codeString, resolvePath(codeString, basePath));
-                    }}
-                    title="Click to preview"
-                  >
-                    {children}
-                  </code>
-                );
-              }
-              return (
-                <code className="px-1.5 py-0.5 rounded bg-white/[0.06] text-indigo-300 text-xs font-mono" {...props}>
-                  {children}
-                </code>
-              );
-            }
-
-            return (
-              <div className="relative group my-3 rounded-lg overflow-hidden">
-                <CopyCodeButton code={codeString} />
-                {match ? (
-                  <SyntaxHighlighter
-                    style={oneDark}
-                    language={match[1]}
-                    PreTag="div"
-                    customStyle={{ margin: 0, padding: "1rem", fontSize: "0.75rem", borderRadius: "0.5rem", background: "rgba(0, 0, 0, 0.3)" }}
-                    codeTagProps={{ style: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace' } }}
-                  >
-                    {codeString}
-                  </SyntaxHighlighter>
-                ) : (
-                  <pre className="p-4 bg-black/30 rounded-lg overflow-x-auto">
-                    <code className="text-xs font-mono text-white/80">{codeString}</code>
-                  </pre>
-                )}
-                {match && (
-                  <div className="absolute left-3 top-2 text-[10px] text-white/30 uppercase tracking-wider">{match[1]}</div>
-                )}
-              </div>
-            );
-          },
-          pre({ children }) {
-            return <>{children}</>;
-          },
-        }}
-      >
+      <Markdown remarkPlugins={plugins} components={components}>
         {content}
       </Markdown>
     </div>
   );
-}
+});

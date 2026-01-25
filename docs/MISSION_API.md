@@ -19,7 +19,7 @@ POST /api/control/missions
 }
 ```
 
-`backend` can be `"opencode"` or `"claudecode"`. Defaults to `"opencode"` if omitted.
+`backend` can be `"opencode"`, `"claudecode"`, or `"amp"`. Defaults to `"opencode"` if omitted.
 
 **Response**: `Mission` object (see below).
 

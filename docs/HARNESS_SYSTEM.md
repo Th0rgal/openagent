@@ -16,6 +16,7 @@ missions. Open Agent currently supports:
 |---------|-------------|---------------------|
 | **OpenCode** | OpenCode CLI executed inside each workspace | Per-workspace (`opencode.json`, `.opencode/`) |
 | **Claude Code** | Claude CLI executed inside each workspace | Per-workspace (`CLAUDE.md`, `.claude/settings.local.json`) |
+| **Amp** | Amp CLI executed inside each workspace | Per-workspace (`AGENTS.md`, `.agents/skills/`, `settings.json`) |
 
 ## Architecture (per-workspace)
 
@@ -90,8 +91,67 @@ OpenCode agents are defined in `oh-my-opencode.json`:
 Claude Code is executed **per workspace** using the CLI:
 
 - `.claude/settings.local.json` defines MCP servers and tool permissions.
-- `CLAUDE.md` provides per-workspace context (generated from Library skills).
+- `.claude/skills/<name>/SKILL.md` provides native skill support.
+- `CLAUDE.md` provides per-workspace context.
 - Built-in `Bash` is enabled in the permissions allowlist.
+
+### OAuth credentials for long-running missions
+
+For container workspaces using OAuth authentication, Open Agent writes Claude Code's
+credentials file to enable automatic token refresh during long-running missions:
+
+- **Container workspaces**: `/root/.claude/.credentials.json` inside the container
+- **Host workspaces**: `$HOME/.claude/.credentials.json` on the host
+
+This allows Claude Code to refresh expired access tokens automatically instead of
+failing mid-mission. The credentials file includes the refresh token and expiry time.
+
+## Amp harness
+
+Amp (by Sourcegraph) is executed **per workspace** using the CLI:
+
+- `AGENTS.md` provides per-workspace context (like `CLAUDE.md` for Claude Code).
+- `.agents/skills/<name>/SKILL.md` provides native skill support.
+- `settings.json` defines MCP servers and tool permissions.
+- Built-in `Bash` is enabled via `--dangerously-allow-all`.
+
+### Amp modes
+
+Amp supports two execution modes (passed as `agent` override):
+
+- **smart**: Uses state-of-the-art models without constraints for maximum capability
+- **rush**: Faster, cheaper, suitable for small, well-defined tasks
+
+### CLI protocol (NDJSON)
+
+Amp uses the same NDJSON streaming format as Claude Code:
+
+```bash
+amp --execute "prompt" --stream-json --dangerously-allow-all
+```
+
+For multi-turn conversations:
+
+```bash
+amp threads continue T-<uuid> --execute "prompt" --stream-json
+```
+
+### Authentication
+
+Amp uses `AMP_API_KEY` for authentication. Set this environment variable with
+your access token from [ampcode.com/settings](https://ampcode.com/settings).
+
+### Using CLIProxyAPI (Optional)
+
+You can route Amp requests through [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
+to use your own OAuth credentials instead of Amp credits:
+
+```bash
+# Set the provider URL to your proxy
+export AMP_PROVIDER_URL="http://localhost:8317"
+```
+
+See [AMP_PROXY_SETUP.md](./AMP_PROXY_SETUP.md) for detailed configuration.
 
 ### Harness bootstrap (auto-install)
 
@@ -101,26 +161,24 @@ CLIs during container build (best-effort):
 - `OPEN_AGENT_BOOTSTRAP_CLAUDECODE=true` (default)
 - `OPEN_AGENT_BOOTSTRAP_OPENCODE=true` (default)
 
-At runtime, Claude Code can also self-install on first use if missing:
+At runtime, harnesses can self-install on first use if missing:
 
 - `OPEN_AGENT_AUTO_INSTALL_CLAUDECODE=true` (default)
-
-OpenCode can also self-install on first use if missing:
-
 - `OPEN_AGENT_AUTO_INSTALL_OPENCODE=true` (default)
+- `OPEN_AGENT_AUTO_INSTALL_AMP=true` (default)
 
 OpenCode installation uses the official installer (`https://opencode.ai/install`)
 and copies the binary to `/usr/local/bin/opencode`. This requires `curl` inside
 the workspace. If `curl` is unavailable, the mission fails with a clear error
 message instructing you to add it to the workspace template.
 
-Claude Code/oh-my-opencode installation uses `npm` in the workspace. If `npm`
-is unavailable, the mission fails with a clear error message instructing you to
-add Node/npm to the workspace template.
+Claude Code, Amp, and oh-my-opencode installation uses `npm` in the workspace. If
+`npm` is unavailable, the mission fails with a clear error message instructing you
+to add Node/npm to the workspace template.
 
 ### CLI protocol (NDJSON)
 
-Claude Code communicates via NDJSON streaming:
+Claude Code and Amp communicate via compatible NDJSON streaming:
 
 ```bash
 echo "prompt" | claude \
@@ -145,6 +203,7 @@ Default per-workspace tool settings:
 
 - **OpenCode**: built-in `bash` enabled; `workspace_*` disabled by default.
 - **Claude Code**: built-in `Bash` enabled via permissions.
+- **Amp**: built-in `Bash` enabled via `--dangerously-allow-all`.
 
 MCP tools (desktop/playwright/workspace) can be enabled when needed.
 

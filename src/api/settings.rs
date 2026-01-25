@@ -1,12 +1,14 @@
 //! API endpoints for global settings management.
 
+use std::io::{Read as IoRead, Write as IoWrite};
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
-    http::StatusCode,
-    response::Json,
-    routing::{get, put},
+    body::Body,
+    extract::{Multipart, State},
+    http::{header, StatusCode},
+    response::{IntoResponse, Json},
+    routing::{get, post, put},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -21,6 +23,8 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(get_settings).put(update_settings))
         .route("/library-remote", put(update_library_remote))
+        .route("/backup", get(download_backup))
+        .route("/restore", post(restore_backup))
 }
 
 /// Response for settings endpoints.
@@ -181,4 +185,312 @@ async fn reinitialize_library(state: &Arc<AppState>, remote: &str) -> Result<(),
             Err(e.to_string())
         }
     }
+}
+
+// ============================================
+// Backup & Restore
+// ============================================
+
+/// Files included in the backup (relative to .openagent/)
+const BACKUP_FILES: &[&str] = &[
+    "settings.json",
+    "ai_providers.json",
+    "backend_config.json",
+    "workspaces.json",
+    "mcp/config.json",
+];
+
+/// Directories included in the backup (relative to .openagent/)
+const BACKUP_DIRS: &[&str] = &["secrets"];
+
+/// Find Claude credentials file from various possible locations.
+/// Returns the path and archive name if found.
+fn find_claude_credentials() -> Option<(std::path::PathBuf, &'static str)> {
+    // Check locations in order of preference
+    let locations = [
+        // OpenCode isolated home (used when OPENCODE_CONFIG_DIR is set)
+        ("/var/lib/opencode/.claude/.credentials.json", ".claude/.credentials.json"),
+        // Standard root home
+        ("/root/.claude/.credentials.json", ".claude/.credentials.json"),
+    ];
+
+    for (path, archive_name) in locations {
+        let path = std::path::PathBuf::from(path);
+        if path.exists() {
+            return Some((path, archive_name));
+        }
+    }
+
+    // Check HOME environment variable
+    if let Ok(home) = std::env::var("HOME") {
+        let path = std::path::PathBuf::from(home).join(".claude/.credentials.json");
+        if path.exists() {
+            return Some((path, ".claude/.credentials.json"));
+        }
+    }
+
+    None
+}
+
+/// GET /api/settings/backup
+/// Download a backup archive of all settings files.
+async fn download_backup(
+    State(state): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let openagent_dir = state.config.working_dir.join(".openagent");
+
+    // Create a zip archive in memory
+    let mut zip_buffer = Vec::new();
+    {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buffer));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        // Add individual files from .openagent/
+        for file in BACKUP_FILES {
+            let file_path = openagent_dir.join(file);
+            if file_path.exists() {
+                if let Ok(contents) = std::fs::read_to_string(&file_path) {
+                    if let Err(e) = zip.start_file(format!(".openagent/{}", file), options) {
+                        tracing::warn!("Failed to add {} to backup: {}", file, e);
+                        continue;
+                    }
+                    if let Err(e) = zip.write_all(contents.as_bytes()) {
+                        tracing::warn!("Failed to write {} to backup: {}", file, e);
+                    }
+                }
+            }
+        }
+
+        // Add directories recursively
+        for dir in BACKUP_DIRS {
+            let dir_path = openagent_dir.join(dir);
+            if dir_path.exists() && dir_path.is_dir() {
+                add_directory_to_zip(&mut zip, &dir_path, &format!(".openagent/{}", dir), options)
+                    .map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to add directory {} to backup: {}", dir, e),
+                        )
+                    })?;
+            }
+        }
+
+        // Add Claude credentials file if it exists
+        if let Some((creds_path, archive_name)) = find_claude_credentials() {
+            if let Ok(contents) = std::fs::read_to_string(&creds_path) {
+                if let Err(e) = zip.start_file(archive_name, options) {
+                    tracing::warn!("Failed to add Claude credentials to backup: {}", e);
+                } else if let Err(e) = zip.write_all(contents.as_bytes()) {
+                    tracing::warn!("Failed to write Claude credentials to backup: {}", e);
+                } else {
+                    tracing::info!("Added Claude credentials to backup from {}", creds_path.display());
+                }
+            }
+        }
+
+        zip.finish().map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to finalize backup archive: {}", e),
+            )
+        })?;
+    }
+
+    // Generate filename with timestamp
+    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let filename = format!("openagent-backup-{}.zip", timestamp);
+    let content_disposition = format!("attachment; filename=\"{}\"", filename);
+
+    let body = Body::from(zip_buffer);
+    let headers = [
+        (header::CONTENT_TYPE, "application/zip".to_string()),
+        (header::CONTENT_DISPOSITION, content_disposition),
+    ];
+
+    Ok((headers, body))
+}
+
+/// Recursively add a directory to a zip archive.
+fn add_directory_to_zip<W: IoWrite + std::io::Seek>(
+    zip: &mut zip::ZipWriter<W>,
+    dir_path: &std::path::Path,
+    archive_prefix: &str,
+    options: zip::write::SimpleFileOptions,
+) -> Result<(), std::io::Error> {
+    for entry in std::fs::read_dir(dir_path)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let archive_path = format!("{}/{}", archive_prefix, name.to_string_lossy());
+
+        if path.is_dir() {
+            add_directory_to_zip(zip, &path, &archive_path, options)?;
+        } else if path.is_file() {
+            let mut file = std::fs::File::open(&path)?;
+            let mut contents = Vec::new();
+            file.read_to_end(&mut contents)?;
+
+            zip.start_file(&archive_path, options)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            zip.write_all(&contents)?;
+        }
+    }
+    Ok(())
+}
+
+/// Response after restoring backup.
+#[derive(Debug, Serialize)]
+pub struct RestoreBackupResponse {
+    pub success: bool,
+    pub message: String,
+    pub restored_files: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+/// POST /api/settings/restore
+/// Restore settings from an uploaded backup archive.
+async fn restore_backup(
+    State(state): State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> Result<Json<RestoreBackupResponse>, (StatusCode, String)> {
+    let openagent_dir = state.config.working_dir.join(".openagent");
+
+    // Extract the uploaded file
+    let mut archive_data: Option<Vec<u8>> = None;
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Failed to read multipart field: {}", e),
+        )
+    })? {
+        if field.name() == Some("backup") || field.name() == Some("file") {
+            let data = field.bytes().await.map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Failed to read file data: {}", e),
+                )
+            })?;
+            archive_data = Some(data.to_vec());
+            break;
+        }
+    }
+
+    let archive_data = archive_data.ok_or((
+        StatusCode::BAD_REQUEST,
+        "No backup file provided. Expected field 'backup' or 'file'.".to_string(),
+    ))?;
+
+    // Open the zip archive
+    let cursor = std::io::Cursor::new(archive_data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid zip archive: {}", e),
+        )
+    })?;
+
+    let mut restored_files = Vec::new();
+    let mut errors = Vec::new();
+
+    // Determine Claude credentials restore path
+    // Prefer /var/lib/opencode/.claude if it exists (for isolated OpenCode home), else use /root/.claude
+    let claude_creds_dir = if std::path::Path::new("/var/lib/opencode/.claude").exists() {
+        std::path::PathBuf::from("/var/lib/opencode/.claude")
+    } else {
+        std::path::PathBuf::from("/root/.claude")
+    };
+
+    // Extract files
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read archive entry: {}", e),
+            )
+        })?;
+
+        let name = file.name().to_string();
+
+        // Determine target path based on archive name
+        let (target_path, display_name) = if name.starts_with(".openagent/") {
+            // Standard .openagent files
+            let relative_path = name.strip_prefix(".openagent/").unwrap_or(&name);
+            if relative_path.is_empty() {
+                continue;
+            }
+            (openagent_dir.join(relative_path), relative_path.to_string())
+        } else if name == ".claude/.credentials.json" {
+            // Claude credentials file - restore to the appropriate .claude directory
+            (claude_creds_dir.join(".credentials.json"), name.clone())
+        } else {
+            // Skip unknown files
+            continue;
+        };
+
+        // Ensure parent directory exists
+        if let Some(parent) = target_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                errors.push(format!("Failed to create directory for {}: {}", name, e));
+                continue;
+            }
+        }
+
+        // Skip directories (they're created automatically)
+        if file.is_dir() {
+            continue;
+        }
+
+        // Read and write the file
+        let mut contents = Vec::new();
+        if let Err(e) = file.read_to_end(&mut contents) {
+            errors.push(format!("Failed to read {}: {}", name, e));
+            continue;
+        }
+
+        match std::fs::write(&target_path, &contents) {
+            Ok(()) => {
+                restored_files.push(display_name);
+                tracing::info!("Restored: {} -> {}", name, target_path.display());
+            }
+            Err(e) => {
+                errors.push(format!("Failed to write {}: {}", name, e));
+            }
+        }
+    }
+
+    // Reload settings stores after restore
+    if restored_files.iter().any(|f| f == "settings.json") {
+        if let Err(e) = state.settings.reload().await {
+            errors.push(format!("Failed to reload settings: {}", e));
+        }
+    }
+
+    // Note: Other stores (ai_providers, backend_configs, etc.) would need similar reload
+    // methods to be implemented for a complete hot-reload. For now, a server restart
+    // may be needed to pick up restored credentials.
+
+    let success = !restored_files.is_empty() && errors.is_empty();
+    let message = if success {
+        format!(
+            "Successfully restored {} files. A server restart may be required to apply credential changes.",
+            restored_files.len()
+        )
+    } else if restored_files.is_empty() {
+        "No files were restored. The backup may be empty or invalid.".to_string()
+    } else {
+        format!(
+            "Restored {} files with {} errors. A server restart may be required.",
+            restored_files.len(),
+            errors.len()
+        )
+    };
+
+    Ok(Json(RestoreBackupResponse {
+        success,
+        message,
+        restored_files,
+        errors,
+    }))
 }

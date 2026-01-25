@@ -128,6 +128,19 @@ impl SettingsStore {
         drop(settings);
         self.save_to_disk().await
     }
+
+    /// Reload settings from disk.
+    ///
+    /// Used after restoring a backup to pick up the restored settings.
+    pub async fn reload(&self) -> Result<(), std::io::Error> {
+        if self.storage_path.exists() {
+            let loaded = Self::load_from_path(&self.storage_path)?;
+            let mut settings = self.settings.write().await;
+            *settings = loaded;
+            tracing::info!("Reloaded settings from {}", self.storage_path.display());
+        }
+        Ok(())
+    }
 }
 
 /// Shared settings store wrapped in Arc for concurrent access.

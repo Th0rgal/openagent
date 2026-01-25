@@ -365,14 +365,32 @@ private struct FilterPill: View {
 private struct MissionRow: View {
     let mission: Mission
     
+    private var backendColor: Color {
+        switch mission.backend {
+        case "opencode": return Theme.success
+        case "claudecode": return Theme.accent
+        case "amp": return .orange
+        default: return Theme.accent
+        }
+    }
+    
+    private var backendIcon: String {
+        switch mission.backend {
+        case "opencode": return "terminal"
+        case "claudecode": return "brain"
+        case "amp": return "bolt.fill"
+        default: return "target"
+        }
+    }
+    
     var body: some View {
         HStack(spacing: 14) {
-            // Icon
-            Image(systemName: mission.canResume ? "play.circle" : "target")
+            // Icon based on backend
+            Image(systemName: mission.canResume ? "play.circle" : backendIcon)
                 .font(.title3)
-                .foregroundStyle(mission.canResume ? Theme.warning : Theme.accent)
+                .foregroundStyle(mission.canResume ? Theme.warning : backendColor)
                 .frame(width: 40, height: 40)
-                .background((mission.canResume ? Theme.warning : Theme.accent).opacity(0.15))
+                .background((mission.canResume ? Theme.warning : backendColor).opacity(0.15))
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             
             // Content
@@ -382,8 +400,19 @@ private struct MissionRow: View {
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                 
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     StatusBadge(status: mission.status.statusType, compact: true)
+                    
+                    // Show agent if available
+                    if let agent = mission.agent, !agent.isEmpty {
+                        Text(agent)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(backendColor)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(backendColor.opacity(0.15))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
 
                     Text("\(mission.history.count) msg")
                         .font(.caption)

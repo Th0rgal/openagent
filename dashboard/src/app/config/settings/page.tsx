@@ -19,7 +19,7 @@ import {
   listBackendAgents,
   listProviders,
 } from '@/lib/api';
-import { Save, Loader, AlertCircle, Check, RefreshCw, RotateCcw, Eye, EyeOff, AlertTriangle, X, GitBranch, Upload, Info } from 'lucide-react';
+import { Save, Loader, AlertCircle, Check, RefreshCw, RotateCcw, Eye, EyeOff, AlertTriangle, X, GitBranch, Upload, Info, Download } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ConfigCodeEditor } from '@/components/config-code-editor';
 import { useLibrary } from '@/contexts/library-context';
@@ -48,7 +48,7 @@ export default function SettingsPage() {
   } = useLibrary();
 
   // Harness tab state
-  const [activeHarness, setActiveHarness] = useState<'opencode' | 'claudecode'>('opencode');
+  const [activeHarness, setActiveHarness] = useState<'opencode' | 'claudecode' | 'amp'>('opencode');
 
   // Fetch backends and their config to show enabled harnesses
   const { data: backends = [] } = useSWR('backends', listBackends, {
@@ -56,12 +56,16 @@ export default function SettingsPage() {
     fallbackData: [
       { id: 'opencode', name: 'OpenCode' },
       { id: 'claudecode', name: 'Claude Code' },
+      { id: 'amp', name: 'Amp' },
     ],
   });
   const { data: opencodeConfig } = useSWR('backend-opencode-config', () => getBackendConfig('opencode'), {
     revalidateOnFocus: false,
   });
   const { data: claudecodeConfig } = useSWR('backend-claudecode-config', () => getBackendConfig('claudecode'), {
+    revalidateOnFocus: false,
+  });
+  const { data: ampConfig } = useSWR('backend-amp-config', () => getBackendConfig('amp'), {
     revalidateOnFocus: false,
   });
 
@@ -79,6 +83,7 @@ export default function SettingsPage() {
   const enabledBackends = backends.filter((b) => {
     if (b.id === 'opencode') return opencodeConfig?.enabled !== false;
     if (b.id === 'claudecode') return claudecodeConfig?.enabled !== false;
+    if (b.id === 'amp') return ampConfig?.enabled !== false;
     return true;
   });
 
@@ -458,8 +463,19 @@ export default function SettingsPage() {
             <p className="text-sm text-amber-400/80 mt-1">
               The Library settings differ from what OpenCode is currently using.
               This can happen if settings were changed outside the Library.
-              Save your current settings to sync them to OpenCode.
             </p>
+            <div className="flex items-center gap-3 mt-3">
+              <button
+                onClick={() => {
+                  setSettings(systemSettings);
+                }}
+                className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg transition-colors"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Import from OpenCode
+              </button>
+              <span className="text-xs text-amber-400/60">or edit and save to overwrite</span>
+            </div>
           </div>
         </div>
       )}
@@ -520,7 +536,7 @@ export default function SettingsPage() {
         {enabledBackends.map((backend) => (
           <button
             key={backend.id}
-            onClick={() => setActiveHarness(backend.id === 'claudecode' ? 'claudecode' : 'opencode')}
+            onClick={() => setActiveHarness(backend.id as 'opencode' | 'claudecode' | 'amp')}
             className={cn(
               'px-4 py-2 rounded-lg text-sm font-medium border transition-colors',
               activeHarness === backend.id
@@ -816,7 +832,7 @@ export default function SettingsPage() {
         </div>
       </div>
         </>
-      ) : (
+      ) : activeHarness === 'claudecode' ? (
         /* Claude Code Section */
         <div className="space-y-4">
           {/* Claude Code Settings Header */}
@@ -975,7 +991,48 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
-      )}
+      ) : activeHarness === 'amp' ? (
+        /* Amp Section */
+        <div className="space-y-4">
+          {/* Amp Settings Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-medium text-white">Amp Settings</h2>
+              <p className="text-sm text-white/50">Configure default mode and agent for Amp missions</p>
+            </div>
+          </div>
+
+          {/* Amp Info */}
+          <div className="p-4 rounded-xl bg-indigo-500/5 border border-indigo-500/20">
+            <div className="flex items-start gap-3">
+              <Info className="h-5 w-5 text-indigo-400 flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-indigo-400/80">
+                <p className="font-medium text-indigo-400">Amp Configuration</p>
+                <p className="mt-1">
+                  Amp uses built-in modes (Smart/Rush) and doesn't require agent configuration in the Library.
+                  Configure CLI path and mode in the{' '}
+                  <a href="/settings" className="underline hover:text-indigo-300">Settings page</a> → Backends → Amp.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Amp Modes */}
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium text-white/80">Available Modes</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 rounded-lg border border-white/[0.06] bg-white/[0.02]">
+                <div className="font-medium text-white/80">Smart Mode</div>
+                <p className="text-xs text-white/50 mt-1">Full capability mode with comprehensive tool access.</p>
+              </div>
+              <div className="p-3 rounded-lg border border-white/[0.06] bg-white/[0.02]">
+                <div className="font-medium text-white/80">Rush Mode</div>
+                <p className="text-xs text-white/50 mt-1">Faster, cheaper mode for simpler tasks.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Commit Dialog */}
       {showCommitDialog && (

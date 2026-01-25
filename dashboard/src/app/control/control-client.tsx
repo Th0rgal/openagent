@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback, memo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { toast } from "@/components/toast";
 import { MarkdownContent } from "@/components/markdown-content";
+import { StreamingMarkdown } from "@/components/streaming-markdown";
 import { EnhancedInput, type SubmitPayload, type EnhancedInputHandle } from "@/components/enhanced-input";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -40,6 +41,7 @@ import {
   cleanupOrphanedDesktopSessions,
   removeFromQueue,
   clearQueue,
+  getQueue,
   type StreamDiagnosticUpdate,
   type ControlRunState,
   type Mission,
@@ -788,8 +790,10 @@ function ThinkingGroupItem({
                 {idx > 0 && (
                   <div className="border-t border-white/[0.06] my-2" />
                 )}
-                <MarkdownContent
+                {/* Use StreamingMarkdown for efficient incremental rendering */}
+                <StreamingMarkdown
                   content={item.content}
+                  isStreaming={!item.done}
                   className="text-xs text-white/60 [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1"
                   basePath={basePath}
                 />
@@ -806,6 +810,9 @@ function ThinkingGroupItem({
 }
 
 // Thinking panel item - simplified version for side panel
+// Threshold for collapsing long thoughts (in characters)
+const THOUGHT_COLLAPSE_THRESHOLD = 800;
+
 function ThinkingPanelItem({
   item,
   isActive,
@@ -816,6 +823,7 @@ function ThinkingPanelItem({
   basePath?: string;
 }) {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   useEffect(() => {
     if (item.done) return;
@@ -837,17 +845,27 @@ function ThinkingPanelItem({
     ? formatDuration(Math.floor((item.endTime - item.startTime) / 1000))
     : formatDuration(elapsedSeconds);
 
+  // For completed items, check if content is long enough to collapse
+  const isLongContent = !isActive && item.content.length > THOUGHT_COLLAPSE_THRESHOLD;
+  const shouldTruncate = isLongContent && !isExpanded;
+  
+  // Get truncated content for display
+  const displayContent = shouldTruncate
+    ? item.content.slice(0, THOUGHT_COLLAPSE_THRESHOLD) + "..."
+    : item.content;
+
   return (
     <div className={cn(
-      "rounded-lg border p-3 transition-all",
+      "rounded-lg border p-3",
+      // Unified styling - subtle border highlight for active, same base appearance
       isActive
-        ? "border-indigo-500/30 bg-indigo-500/5"
+        ? "border-indigo-500/30 bg-white/[0.02]"
         : "border-white/[0.06] bg-white/[0.02]"
     )}>
       <div className="flex items-center gap-2 mb-2">
         <Brain
           className={cn(
-            "h-3.5 w-3.5",
+            "h-3.5 w-3.5 shrink-0",
             isActive ? "animate-pulse text-indigo-400" : "text-white/40"
           )}
         />
@@ -858,17 +876,36 @@ function ThinkingPanelItem({
           {isActive ? `Thinking for ${duration}` : `Thought for ${duration}`}
         </span>
       </div>
-      <div className={cn(
-        "text-xs leading-relaxed",
-        isActive ? "text-white/70" : "text-white/40",
-        "max-h-[50vh] overflow-y-auto"
-      )}>
+      {/* Content area - no internal scroll, unified text color */}
+      <div className="text-xs leading-relaxed text-white/60">
         {item.content ? (
-          <MarkdownContent
-            content={item.content}
-            className="text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1"
-            basePath={basePath}
-          />
+          <>
+            <StreamingMarkdown
+              content={displayContent}
+              isStreaming={isActive}
+              className="text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1"
+              basePath={basePath}
+            />
+            {/* Expand/collapse button for long content */}
+            {isLongContent && (
+              <button
+                onClick={() => setIsExpanded(!isExpanded)}
+                className="mt-2 text-[10px] text-indigo-400/70 hover:text-indigo-400 transition-colors flex items-center gap-1"
+              >
+                {isExpanded ? (
+                  <>
+                    <ChevronUp className="h-3 w-3" />
+                    Show less
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="h-3 w-3" />
+                    Show more ({Math.round((item.content.length - THOUGHT_COLLAPSE_THRESHOLD) / 100) * 100}+ chars)
+                  </>
+                )}
+              </button>
+            )}
+          </>
         ) : (
           <span className="italic text-white/30">Processing...</span>
         )}
@@ -883,11 +920,13 @@ function ThinkingPanel({
   onClose,
   className,
   basePath,
+  missionId,
 }: {
   items: Extract<ChatItem, { kind: "thinking" }>[];
   onClose: () => void;
   className?: string;
   basePath?: string;
+  missionId?: string | null;
 }) {
   const activeItem = items.find(t => !t.done);
 
@@ -904,6 +943,16 @@ function ThinkingPanel({
       return true;
     });
   }, [items]);
+
+  // Performance: limit visible thoughts, load more on demand
+  const INITIAL_VISIBLE_THOUGHTS = 10;
+  const LOAD_MORE_THOUGHTS = 10;
+  const [visibleThoughtsLimit, setVisibleThoughtsLimit] = useState(INITIAL_VISIBLE_THOUGHTS);
+
+  // Reset limit when mission changes (not during streaming updates)
+  useEffect(() => {
+    setVisibleThoughtsLimit(INITIAL_VISIBLE_THOUGHTS);
+  }, [missionId]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -967,7 +1016,20 @@ function ThinkingPanel({
             {/* Completed thoughts (history - scroll up to see) */}
             {completedItems.length > 0 && (
               <>
-                {completedItems.map((item) => (
+                {/* Load more button if there are hidden thoughts */}
+                {completedItems.length > visibleThoughtsLimit && (
+                  <button
+                    onClick={() => setVisibleThoughtsLimit(prev => prev + LOAD_MORE_THOUGHTS)}
+                    className="w-full py-1.5 px-3 text-[10px] text-white/40 hover:text-white/60 hover:bg-white/5 rounded-lg transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <ChevronUp className="w-3 h-3" />
+                    Load {Math.min(LOAD_MORE_THOUGHTS, completedItems.length - visibleThoughtsLimit)} older
+                    <span className="text-white/25">
+                      ({completedItems.length - visibleThoughtsLimit} hidden)
+                    </span>
+                  </button>
+                )}
+                {completedItems.slice(-visibleThoughtsLimit).map((item) => (
                   <ThinkingPanelItem key={item.id} item={item} isActive={false} basePath={basePath} />
                 ))}
                 {activeItem && (
@@ -1797,6 +1859,11 @@ export default function ControlClient() {
   );
   const [queueLen, setQueueLen] = useState(0);
 
+  // Performance optimization: limit rendered items for large conversations
+  const INITIAL_VISIBLE_ITEMS = 30;
+  const LOAD_MORE_INCREMENT = 30;
+  const [visibleItemsLimit, setVisibleItemsLimit] = useState(INITIAL_VISIBLE_ITEMS);
+
   // Connection state for SSE stream - starts as disconnected until first event received
   const [connectionState, setConnectionState] = useState<
     "connected" | "disconnected" | "reconnecting"
@@ -1835,10 +1902,13 @@ export default function ControlClient() {
 
   // Library context for agents
 
+  // Only tick when stream is active to avoid unnecessary re-renders
+  const streamIsActive = streamDiagnostics.phase === "open" || streamDiagnostics.phase === "streaming" || streamDiagnostics.phase === "connecting";
   useEffect(() => {
+    if (!streamIsActive) return;
     const interval = setInterval(() => setDiagTick((prev) => prev + 1), 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [streamIsActive]);
 
   // Parallel missions state
   const [runningMissions, setRunningMissions] = useState<RunningMissionInfo[]>(
@@ -1851,9 +1921,25 @@ export default function ControlClient() {
   const [viewingMissionId, setViewingMissionId] = useState<string | null>(null);
 
   // Store items per mission to preserve context when switching
+  // Limited to MAX_CACHED_MISSIONS to prevent memory bloat
+  const MAX_CACHED_MISSIONS = 5;
   const [missionItems, setMissionItems] = useState<Record<string, ChatItem[]>>(
     {}
   );
+
+  // Helper to update missionItems with LRU-style cleanup
+  const updateMissionItems = useCallback((missionId: string, items: ChatItem[]) => {
+    setMissionItems((prev) => {
+      const updated = { ...prev, [missionId]: items };
+      const keys = Object.keys(updated);
+      // If over limit, remove oldest entries (first in object)
+      if (keys.length > MAX_CACHED_MISSIONS) {
+        const toRemove = keys.slice(0, keys.length - MAX_CACHED_MISSIONS);
+        toRemove.forEach(k => delete updated[k]);
+      }
+      return updated;
+    });
+  }, []);
 
   // Attachment state
   const [attachments, setAttachments] = useState<
@@ -2559,6 +2645,8 @@ export default function ControlClient() {
   const eventsToItems = useCallback((events: StoredEvent[]): ChatItem[] => {
     const items: ChatItem[] = [];
     const toolCallMap = new Map<string, number>(); // tool_call_id -> index in items
+    // Track seen event IDs to prevent duplicate items (backend may store duplicates)
+    const seenEventIds = new Set<string>();
     // Track current in-progress thinking item index for consolidation
     // Multiple thinking events (deltas) are streamed and stored; we consolidate them here
     let currentThinkingIdx: number | null = null;
@@ -2582,16 +2670,23 @@ export default function ControlClient() {
       const timestamp = new Date(event.timestamp).getTime();
 
       switch (event.event_type) {
-        case "user_message":
+        case "user_message": {
           // Finalize any pending thinking before user message
           finalizePendingThinking(timestamp);
+          // Use event_id (UUID) if available for deduplication with SSE events,
+          // fall back to row id for older events without event_id
+          const itemId = event.event_id ?? `event-${event.id}`;
+          // Skip duplicate events (backend may store the same event multiple times)
+          if (seenEventIds.has(itemId)) break;
+          seenEventIds.add(itemId);
           items.push({
             kind: "user" as const,
-            id: `event-${event.id}`,
+            id: itemId,
             content: event.content,
             timestamp,
           });
           break;
+        }
 
         case "assistant_message": {
           // Finalize any pending thinking before assistant message
@@ -2615,9 +2710,14 @@ export default function ControlClient() {
             }
           }
 
+          // Use event_id (UUID) if available for deduplication with SSE events
+          const assistantId = event.event_id ?? `event-${event.id}`;
+          // Skip duplicate events
+          if (seenEventIds.has(assistantId)) break;
+          seenEventIds.add(assistantId);
           items.push({
             kind: "assistant" as const,
-            id: `event-${event.id}`,
+            id: assistantId,
             content: event.content,
             success: !isFailure,
             costCents: typeof meta.cost_cents === "number" ? meta.cost_cents : 0,
@@ -2791,11 +2891,13 @@ export default function ControlClient() {
           setViewingMissionId(fallbackMission.id);
           setViewingMission(fallbackMission);
           setItems(missionHistoryToItems(fallbackMission));
+          setVisibleItemsLimit(INITIAL_VISIBLE_ITEMS);
           applyDesktopSessionState(fallbackMission);
         } else {
           setViewingMissionId(null);
           setViewingMission(null);
           setItems([]);
+          setVisibleItemsLimit(INITIAL_VISIBLE_ITEMS);
           setHasDesktopSession(false);
         }
       } finally {
@@ -3135,6 +3237,13 @@ export default function ControlClient() {
       const previousViewingId = viewingMissionIdRef.current;
       const previousViewingMission = viewingMissionRef.current;
 
+      // Clear pending thinking state to prevent stale content from appearing in new mission
+      if (thinkingFlushTimeoutRef.current) {
+        clearTimeout(thinkingFlushTimeoutRef.current);
+        thinkingFlushTimeoutRef.current = null;
+      }
+      pendingThinkingRef.current = null;
+
       setViewingMissionId(missionId);
       fetchingMissionIdRef.current = missionId;
 
@@ -3144,10 +3253,11 @@ export default function ControlClient() {
       // Always load fresh history from API when switching missions
       // This ensures we don't show stale cached events
       try {
-        // Load mission and events in parallel for faster load
-        const [mission, events] = await Promise.all([
+        // Load mission, events, and queue in parallel for faster load
+        const [mission, events, queuedMessages] = await Promise.all([
           getMission(missionId),
           getMissionEvents(missionId).catch(() => null), // Don't fail if events unavailable
+          getQueue().catch(() => []), // Don't fail if queue unavailable
         ]);
 
         // Race condition guard: only update if this is still the mission we want
@@ -3156,7 +3266,25 @@ export default function ControlClient() {
         }
 
         // Use events if available, otherwise fall back to basic history
-        const historyItems = events ? eventsToItems(events) : missionHistoryToItems(mission);
+        let historyItems = events ? eventsToItems(events) : missionHistoryToItems(mission);
+
+        // Merge queued messages if this is the running mission
+        // Queue is global and applies to whatever mission is currently active
+        if (queuedMessages.length > 0) {
+          const queuedChatItems: ChatItem[] = queuedMessages.map((qm) => ({
+            kind: "user" as const,
+            id: qm.id,
+            content: qm.content,
+            timestamp: Date.now(),
+            agent: qm.agent ?? undefined,
+            queued: true,
+          }));
+          // Filter out any queued messages that already exist in history (by ID)
+          const existingIds = new Set(historyItems.map((item) => item.id));
+          const newQueuedItems = queuedChatItems.filter((item) => !existingIds.has(item.id));
+          historyItems = [...historyItems, ...newQueuedItems];
+        }
+
         setItems(historyItems);
         // Check if mission has an active desktop session (stored metadata or fallback to history)
         applyDesktopSessionState(mission);
@@ -3164,8 +3292,8 @@ export default function ControlClient() {
         if (events) {
           applyDesktopSessionFromEvents(events);
         }
-        // Update cache with fresh data
-        setMissionItems((prev) => ({ ...prev, [missionId]: historyItems }));
+        // Update cache with fresh data (with LRU cleanup)
+        updateMissionItems(missionId, historyItems);
         setViewingMission(mission);
         if (currentMissionRef.current?.id === mission.id) {
           setCurrentMission(mission);
@@ -3184,17 +3312,20 @@ export default function ControlClient() {
           setViewingMissionId(fallbackMission.id);
           setViewingMission(fallbackMission);
           setItems(missionHistoryToItems(fallbackMission));
+          setVisibleItemsLimit(INITIAL_VISIBLE_ITEMS);
           applyDesktopSessionState(fallbackMission);
           router.replace(`/control?mission=${fallbackMission.id}`, { scroll: false });
         } else if (previousViewingId && missionItems[previousViewingId]) {
           setViewingMissionId(previousViewingId);
           setViewingMission(null);
           setItems(missionItems[previousViewingId]);
+          setVisibleItemsLimit(INITIAL_VISIBLE_ITEMS);
           router.replace(`/control?mission=${previousViewingId}`, { scroll: false });
         } else {
           setViewingMissionId(null);
           setViewingMission(null);
           setItems([]);
+          setVisibleItemsLimit(INITIAL_VISIBLE_ITEMS);
           setHasDesktopSession(false);
           router.replace(`/control`, { scroll: false });
         }
@@ -3285,7 +3416,7 @@ export default function ControlClient() {
       // Show basic history immediately
       const basicItems = missionHistoryToItems(resumed);
       setItems(basicItems);
-      setMissionItems((prev) => ({ ...prev, [resumed.id]: basicItems }));
+      updateMissionItems(resumed.id, basicItems);
       refreshRecentMissions();
       toast.success(
         cleanWorkspace
@@ -3297,7 +3428,7 @@ export default function ControlClient() {
         .then((events) => {
           const fullItems = eventsToItems(events);
           setItems(fullItems);
-          setMissionItems((prev) => ({ ...prev, [resumed.id]: fullItems }));
+          updateMissionItems(resumed.id, fullItems);
           // Also check events for desktop sessions
           applyDesktopSessionFromEvents(events);
         })
@@ -3309,6 +3440,16 @@ export default function ControlClient() {
       setMissionLoading(false);
     }
   };
+
+  // Debouncing for thinking updates to reduce re-renders during streaming
+  const pendingThinkingRef = useRef<{
+    content: string;
+    done: boolean;
+    id: string;
+    startTime: number;
+  } | null>(null);
+  const thinkingFlushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const thinkingIdCounterRef = useRef(0);
 
   // Auto-reconnecting stream with exponential backoff
   useEffect(() => {
@@ -3400,12 +3541,26 @@ export default function ControlClient() {
 
         // If we just reconnected, refresh the viewed mission's history to catch missed events
         if (wasReconnecting && viewingId) {
-          Promise.all([getMission(viewingId), getMissionEvents(viewingId)])
-            .then(([mission, events]) => {
+          Promise.all([getMission(viewingId), getMissionEvents(viewingId), getQueue().catch(() => [])])
+            .then(([mission, events, queuedMessages]) => {
               if (!mounted) return;
-              const historyItems = eventsToItems(events);
+              let historyItems = eventsToItems(events);
+              // Merge queued messages
+              if (queuedMessages.length > 0) {
+                const queuedChatItems: ChatItem[] = queuedMessages.map((qm) => ({
+                  kind: "user" as const,
+                  id: qm.id,
+                  content: qm.content,
+                  timestamp: Date.now(),
+                  agent: qm.agent ?? undefined,
+                  queued: true,
+                }));
+                const existingIds = new Set(historyItems.map((item) => item.id));
+                const newQueuedItems = queuedChatItems.filter((item) => !existingIds.has(item.id));
+                historyItems = [...historyItems, ...newQueuedItems];
+              }
               setItems(historyItems);
-              setMissionItems((prev) => ({ ...prev, [viewingId]: historyItems }));
+              updateMissionItems(viewingId, historyItems);
               // Also check events for desktop sessions
               applyDesktopSessionFromEvents(events);
             })
@@ -3416,7 +3571,7 @@ export default function ControlClient() {
                   if (!mounted) return;
                   const historyItems = missionHistoryToItems(mission);
                   setItems(historyItems);
-                  setMissionItems((prev) => ({ ...prev, [viewingId]: historyItems }));
+                  updateMissionItems(viewingId, historyItems);
                 })
                 .catch(() => {}); // Ignore errors - we'll get updates via stream
             });
@@ -3601,64 +3756,102 @@ export default function ControlClient() {
         const done = Boolean(data["done"]);
         const now = Date.now();
 
-        setItems((prev) => {
-          // Remove phase items when thinking starts
-          const filtered = prev.filter((it) => it.kind !== "phase");
-          const existingIdx = filtered.findIndex(
-            (it) => it.kind === "thinking" && !it.done
-          );
-          if (existingIdx >= 0) {
-            const updated = [...filtered];
-            const existing = updated[existingIdx] as Extract<
-              ChatItem,
-              { kind: "thinking" }
-            >;
+        // Debounced thinking updates to reduce re-renders during streaming
+        const flushThinking = () => {
+          const pending = pendingThinkingRef.current;
+          if (!pending) return;
 
-            // If this is a done marker or content update for the same thought, update in place
-            if (done || !content || existing.content.startsWith(content) || content.startsWith(existing.content)) {
+          setItems((prev) => {
+            // Remove phase items when thinking starts
+            const filtered = prev.filter((it) => it.kind !== "phase");
+            const existingIdx = filtered.findIndex(
+              (it) => it.kind === "thinking" && !it.done
+            );
+            if (existingIdx >= 0) {
+              const updated = [...filtered];
+              const existing = updated[existingIdx] as Extract<
+                ChatItem,
+                { kind: "thinking" }
+              >;
+
+              // Update existing item in place with buffered content
+              if (pending.done || !pending.content || existing.id === pending.id) {
+                updated[existingIdx] = {
+                  ...existing,
+                  content: pending.content || existing.content,
+                  done: pending.done,
+                  endTime: pending.done ? now : existing.endTime,
+                };
+                if (pending.done) {
+                  pendingThinkingRef.current = null;
+                }
+                return updated;
+              }
+
+              // New thought - mark existing as done and create new
               updated[existingIdx] = {
                 ...existing,
-                // When done marker arrives with empty content, preserve existing content
-                // Backend sends cumulative content normally, but final done marker may be empty
-                content: content || existing.content,
-                done,
-                // Set endTime when marking as done
-                ...(done && { endTime: now }),
+                done: true,
+                endTime: now,
               };
-              return updated;
+              if (pending.done) {
+                pendingThinkingRef.current = null;
+              }
+              return [
+                ...updated,
+                {
+                  kind: "thinking" as const,
+                  id: pending.id,
+                  content: pending.content,
+                  done: pending.done,
+                  startTime: pending.startTime,
+                  endTime: pending.done ? now : undefined,
+                },
+              ];
+            } else {
+              if (pending.done) {
+                pendingThinkingRef.current = null;
+              }
+              return [
+                ...filtered,
+                {
+                  kind: "thinking" as const,
+                  id: pending.id,
+                  content: pending.content,
+                  done: pending.done,
+                  startTime: pending.startTime,
+                  endTime: pending.done ? now : undefined,
+                },
+              ];
             }
+          });
+        };
 
-            // New thought content that doesn't match existing - mark existing as done and create new
-            updated[existingIdx] = {
-              ...existing,
-              done: true,
-              endTime: now,
-            };
-            return [
-              ...updated,
-              {
-                kind: "thinking" as const,
-                id: `thinking-${now}`,
-                content,
-                done: false,
-                startTime: now,
-              },
-            ];
-          } else {
-            return [
-              ...filtered,
-              {
-                kind: "thinking" as const,
-                id: `thinking-${now}`,
-                content,
-                done,
-                startTime: now,
-                // Set endTime if creating a pre-done item (unlikely but handle it)
-                ...(done && { endTime: now }),
-              },
-            ];
-          }
-        });
+        // Get or create stable ID for current thinking session
+        const existingPending = pendingThinkingRef.current;
+        const thinkingId = existingPending?.id ?? `thinking-${thinkingIdCounterRef.current++}`;
+        const startTime = existingPending?.startTime ?? now;
+
+        // Buffer the content update
+        pendingThinkingRef.current = {
+          content: content || existingPending?.content || "",
+          done,
+          id: thinkingId,
+          startTime,
+        };
+
+        // Clear any pending flush timeout
+        if (thinkingFlushTimeoutRef.current) {
+          clearTimeout(thinkingFlushTimeoutRef.current);
+          thinkingFlushTimeoutRef.current = null;
+        }
+
+        // Flush immediately if done, otherwise debounce (100ms)
+        if (done) {
+          flushThinking();
+        } else {
+          thinkingFlushTimeoutRef.current = setTimeout(flushThinking, 100);
+        }
         return;
       }
 
@@ -3811,10 +4004,24 @@ export default function ControlClient() {
         }
       }
 
-      // Handle mission status changes - mark pending tools as cancelled when mission ends
+      // Handle mission status changes
       if (event.type === "mission_status_changed" && isRecord(data)) {
         const newStatus = String(data["status"] ?? "");
         const missionId = typeof data["mission_id"] === "string" ? data["mission_id"] : undefined;
+
+        // Always update mission status in state when it changes
+        if (missionId) {
+          if (currentMissionRef.current?.id === missionId) {
+            setCurrentMission((prev) =>
+              prev ? { ...prev, status: newStatus as MissionStatus } : prev
+            );
+          }
+          if (viewingMissionRef.current?.id === missionId) {
+            setViewingMission((prev) =>
+              prev ? { ...prev, status: newStatus as MissionStatus } : prev
+            );
+          }
+        }
 
         // When mission is no longer active, mark all pending tool calls as cancelled
         if (newStatus !== "active") {
@@ -3831,13 +4038,6 @@ export default function ControlClient() {
               return item;
             })
           );
-
-          // Also update the current mission if it matches
-          if (missionId && currentMissionRef.current?.id === missionId) {
-            setCurrentMission((prev) =>
-              prev ? { ...prev, status: newStatus as MissionStatus } : prev
-            );
-          }
 
           // Reset stream phase to idle when mission completes
           // (The SSE connection stays open for the control session, but the mission is done)
@@ -3901,6 +4101,11 @@ export default function ControlClient() {
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       cleanup?.();
       streamCleanupRef.current = null;
+      // Clean up thinking debounce timeout
+      if (thinkingFlushTimeoutRef.current) {
+        clearTimeout(thinkingFlushTimeoutRef.current);
+        thinkingFlushTimeoutRef.current = null;
+      }
     };
   }, []);
 
@@ -3988,8 +4193,9 @@ export default function ControlClient() {
         }
         applyDesktopSessionState(mission);
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         console.error("Failed to sync mission before sending:", err);
-        toast.error("Failed to sync mission before sending");
+        toast.error(`Failed to sync mission: ${errMsg}. Check API connection in Settings.`);
         return;
       }
     }
@@ -4076,8 +4282,9 @@ export default function ControlClient() {
         }
         applyDesktopSessionState(mission);
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         console.error("Failed to sync mission before sending:", err);
-        toast.error("Failed to sync mission before sending");
+        toast.error(`Failed to sync mission: ${errMsg}. Check API connection in Settings.`);
         submittingRef.current = false;
         return;
       }
@@ -4194,6 +4401,20 @@ export default function ControlClient() {
     ? missionStatusLabel(activeMission.status)
     : null;
 
+  // Determine if we should show the resume UI for interrupted/blocked missions
+  // Don't show resume UI if:
+  // - Mission is running
+  // - Last turn completed (assistant message at end - ready for user input)
+  // - User just sent a message (waiting for assistant response)
+  const lastItem = items[items.length - 1];
+  const lastTurnCompleted = lastItem?.kind === 'assistant';
+  const waitingForResponse = lastItem?.kind === 'user';
+  const showResumeUI = activeMission &&
+    !viewingMissionIsRunning &&
+    !lastTurnCompleted &&
+    !waitingForResponse &&
+    (activeMission.status === 'interrupted' || activeMission.status === 'blocked');
+
   return (
     <div className="flex h-screen flex-col p-6">
       {/* Hidden file input */}
@@ -4213,9 +4434,7 @@ export default function ControlClient() {
         runningMissions={runningMissions}
         currentMissionId={currentMission?.id}
         viewingMissionId={viewingMissionId}
-        onSelectMission={(missionId) => {
-          handleViewMission(missionId);
-        }}
+        onSelectMission={handleViewMission}
         onCancelMission={handleCancelMission}
         onRefresh={refreshRecentMissions}
       />
@@ -4743,7 +4962,20 @@ export default function ControlClient() {
             </div>
           ) : (
             <div className="mx-auto max-w-3xl space-y-6">
-              {groupedItems.map((item) => {
+              {/* Performance: only render recent items, with option to load more */}
+              {groupedItems.length > visibleItemsLimit && (
+                <button
+                  onClick={() => setVisibleItemsLimit(prev => prev + LOAD_MORE_INCREMENT)}
+                  className="w-full py-2 px-4 text-sm text-white/50 hover:text-white/80 hover:bg-white/5 rounded-lg transition-colors flex items-center justify-center gap-2"
+                >
+                  <ChevronUp className="w-4 h-4" />
+                  Load {Math.min(LOAD_MORE_INCREMENT, groupedItems.length - visibleItemsLimit)} older messages
+                  <span className="text-white/30">
+                    ({groupedItems.length - visibleItemsLimit} hidden)
+                  </span>
+                </button>
+              )}
+              {groupedItems.slice(-visibleItemsLimit).map((item) => {
                 // Handle tool groups (multiple consecutive tools collapsed)
                 if (item.kind === "tool_group") {
                   const isExpanded = expandedToolGroups.has(item.groupId);
@@ -5357,7 +5589,8 @@ export default function ControlClient() {
           )}
 
           {/* Show resume buttons for interrupted/blocked missions, otherwise show normal input */}
-          {activeMission && (activeMission.status === 'interrupted' || activeMission.status === 'blocked') ? (
+          {/* Note: showResumeUI checks viewingMissionIsRunning and if the last turn completed */}
+          {showResumeUI ? (
             <div className="mx-auto flex max-w-3xl gap-3 items-center justify-center py-2">
               <div className="flex items-center gap-2 text-sm text-white/50 mr-4">
                 <AlertTriangle className="h-4 w-4 text-amber-400" />
@@ -5473,6 +5706,7 @@ export default function ControlClient() {
                 onClose={() => setShowThinkingPanel(false)}
                 className={showDesktopStream ? "flex-shrink-0 max-h-[40%]" : "flex-1"}
                 basePath={missionWorkingDirectory}
+                missionId={viewingMissionId}
               />
             )}
 

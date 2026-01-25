@@ -90,7 +90,8 @@ export function SystemComponentsCard() {
           `${componentNames[component.name] || component.name} updated successfully!`
         );
         setUpdatingComponent(null);
-        loadComponents(); // Refresh to get new version
+        // Small delay to ensure backend has updated its cache/state
+        setTimeout(() => loadComponents(), 500);
       },
       (error: string) => {
         toast.error(`Update failed: ${error}`);

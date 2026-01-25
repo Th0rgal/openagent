@@ -489,6 +489,9 @@ pub struct MissionRunner {
     /// Backend ID used for this mission
     pub backend_id: String,
 
+    /// Session ID for conversation persistence (used by Claude Code --session-id)
+    pub session_id: Option<String>,
+
     /// Current state
     pub state: MissionRunState,
 
@@ -530,11 +533,13 @@ impl MissionRunner {
         workspace_id: Uuid,
         agent_override: Option<String>,
         backend_id: Option<String>,
+        session_id: Option<String>,
     ) -> Self {
         Self {
             mission_id,
             workspace_id,
             backend_id: backend_id.unwrap_or_else(|| "opencode".to_string()),
+            session_id,
             state: MissionRunState::Queued,
             agent_override,
             queue: VecDeque::new(),
@@ -661,6 +666,7 @@ impl MissionRunner {
         let workspace_id = self.workspace_id;
         let agent_override = self.agent_override.clone();
         let backend_id = self.backend_id.clone();
+        let session_id = self.session_id.clone();
         let user_message = msg.content.clone();
         let msg_id = msg.id;
         tracing::info!(
@@ -707,6 +713,7 @@ impl MissionRunner {
                 backend_id,
                 agent_override,
                 secrets,
+                session_id,
             )
             .await;
             (msg_id, user_message, result)
@@ -831,6 +838,7 @@ async fn run_mission_turn(
     backend_id: String,
     agent_override: Option<String>,
     secrets: Option<Arc<SecretsStore>>,
+    session_id: Option<String>,
 ) -> AgentResult {
     let mut config = config;
     let effective_agent = agent_override.clone();
@@ -934,6 +942,10 @@ async fn run_mission_turn(
     };
 
     // Execute based on backend
+    // For Claude Code, check if this is a continuation turn (has prior assistant response).
+    // Note: history may include the current user message before the turn runs,
+    // so we check for assistant messages to determine if this is truly a continuation.
+    let is_continuation = history.iter().any(|(role, _)| role == "assistant");
     let result = match backend_id.as_str() {
         "claudecode" => {
             run_claudecode_turn(
@@ -947,6 +959,8 @@ async fn run_mission_turn(
                 cancel,
                 secrets,
                 &config.working_dir,
+                session_id.as_deref(),
+                is_continuation,
             )
             .await
         }
@@ -963,6 +977,23 @@ async fn run_mission_turn(
                 events_tx.clone(),
                 cancel,
                 &config.working_dir,
+            )
+            .await
+        }
+        "amp" => {
+            let api_key = get_amp_api_key_from_config();
+            run_amp_turn(
+                &workspace,
+                &mission_work_dir,
+                &user_message,
+                effective_agent.as_deref(), // Used as mode (smart/rush)
+                mission_id,
+                events_tx.clone(),
+                cancel,
+                &config.working_dir,
+                session_id.as_deref(),
+                is_continuation,
+                api_key.as_deref(),
             )
             .await
         }
@@ -987,15 +1018,49 @@ async fn run_mission_turn(
 
 fn read_backend_configs() -> Option<Vec<serde_json::Value>> {
     let home = std::env::var("HOME").ok()?;
-    let candidates = [
+
+    // Check WORKING_DIR first (for custom deployment paths), then HOME
+    let working_dir = std::env::var("WORKING_DIR").ok();
+
+    let mut candidates = vec![];
+
+    // Add WORKING_DIR paths if set
+    if let Some(ref wd) = working_dir {
+        candidates.push(
+            std::path::PathBuf::from(wd)
+                .join(".openagent")
+                .join("backend_config.json"),
+        );
+    }
+
+    // Add HOME paths
+    candidates.push(
         std::path::PathBuf::from(&home)
             .join(".openagent")
             .join("backend_config.json"),
+    );
+    candidates.push(
         std::path::PathBuf::from(&home)
             .join(".openagent")
             .join("data")
             .join("backend_configs.json"),
-    ];
+    );
+
+    // Always check /root/.openagent as fallback since the dashboard saves config there
+    // and Open Agent service may run with a different HOME (e.g., /var/lib/opencode)
+    if home != "/root" {
+        candidates.push(
+            std::path::PathBuf::from("/root")
+                .join(".openagent")
+                .join("backend_config.json"),
+        );
+        candidates.push(
+            std::path::PathBuf::from("/root")
+                .join(".openagent")
+                .join("data")
+                .join("backend_configs.json"),
+        );
+    }
 
     for path in candidates {
         let contents = match std::fs::read_to_string(&path) {
@@ -1031,6 +1096,46 @@ fn get_claudecode_cli_path_from_config(_app_working_dir: &std::path::Path) -> Op
     None
 }
 
+/// Read API key from Amp backend config file if available.
+pub fn get_amp_api_key_from_config() -> Option<String> {
+    let configs = read_backend_configs()?;
+
+    for config in configs {
+        if config.get("id")?.as_str()? == "amp" {
+            if let Some(settings) = config.get("settings") {
+                if let Some(api_key) = settings.get("api_key").and_then(|v| v.as_str()) {
+                    if !api_key.is_empty()
+                        && !api_key.starts_with("[REDACTED")
+                        && api_key != "********"
+                    {
+                        tracing::debug!("Using Amp API key from backend config");
+                        return Some(api_key.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Read amp.url from Amp CLI settings file (~/.config/amp/settings.json)
+fn get_amp_url_from_settings() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let settings_path = std::path::PathBuf::from(&home)
+        .join(".config")
+        .join("amp")
+        .join("settings.json");
+
+    let contents = std::fs::read_to_string(&settings_path).ok()?;
+    let settings: serde_json::Value = serde_json::from_str(&contents).ok()?;
+
+    settings
+        .get("amp.url")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
 /// Execute a turn using Claude Code CLI backend.
 ///
 /// For Host workspaces: spawns the CLI directly on the host.
@@ -1046,11 +1151,14 @@ pub async fn run_claudecode_turn(
     cancel: CancellationToken,
     secrets: Option<Arc<SecretsStore>>,
     app_working_dir: &std::path::Path,
+    session_id: Option<&str>,
+    is_continuation: bool,
 ) -> AgentResult {
     use super::ai_providers::{
         get_anthropic_auth_from_workspace, get_anthropic_auth_from_host_with_expiry,
         get_workspace_auth_path, ClaudeCodeAuth, ensure_anthropic_oauth_token_valid,
         get_anthropic_auth_for_claudecode, refresh_workspace_anthropic_auth,
+        write_claudecode_credentials_for_workspace,
     };
     use std::collections::HashMap;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -1237,12 +1345,56 @@ pub async fn run_claudecode_turn(
             .with_terminal_reason(TerminalReason::LlmError);
     }
 
+    // Write Claude Code credentials file with refresh token for long-running missions.
+    // This allows Claude Code to refresh tokens automatically during execution.
+    let is_oauth = matches!(api_auth, Some(ClaudeCodeAuth::OAuthToken(_)));
+    tracing::debug!(
+        mission_id = %mission_id,
+        is_oauth = is_oauth,
+        workspace_path = %workspace.path.display(),
+        workspace_type = ?workspace.workspace_type,
+        "Checking if should write Claude Code credentials"
+    );
+    if is_oauth {
+        match write_claudecode_credentials_for_workspace(&workspace) {
+            Ok(()) => {
+                tracing::info!(
+                    mission_id = %mission_id,
+                    workspace_type = ?workspace.workspace_type,
+                    "Wrote Claude Code credentials with refresh token for automatic token refresh"
+                );
+            }
+            Err(e) => {
+                // Non-fatal: we still have the access token in env var as fallback
+                tracing::warn!(
+                    mission_id = %mission_id,
+                    error = %e,
+                    "Failed to write Claude Code credentials file (token refresh during mission may fail)"
+                );
+            }
+        }
+    }
+
     // Determine CLI path: prefer backend config, then env var, then default
     let cli_path = get_claudecode_cli_path_from_config(app_working_dir)
         .or_else(|| std::env::var("CLAUDE_CLI_PATH").ok())
         .unwrap_or_else(|| "claude".to_string());
 
-    let session_id = Uuid::new_v4().to_string();
+    // Use stored session_id for conversation persistence.
+    // If session_id is None (legacy mission), generate a new one but warn that continuation
+    // won't work correctly since the generated ID isn't persisted back to the mission store.
+    let session_id = match session_id {
+        Some(id) => id.to_string(),
+        None => {
+            let generated = Uuid::new_v4().to_string();
+            tracing::warn!(
+                mission_id = %mission_id,
+                generated_session_id = %generated,
+                "Mission has no stored session_id (legacy mission). Generated temporary ID, but conversation continuation will not work correctly. Consider recreating the mission."
+            );
+            generated
+        }
+    };
 
     let workspace_exec = WorkspaceExec::new(workspace.clone());
     let cli_path = match ensure_claudecode_cli_available(&workspace_exec, work_dir, &cli_path).await
@@ -1264,6 +1416,26 @@ pub async fn run_claudecode_turn(
         "Starting Claude Code execution via WorkspaceExec"
     );
 
+    // Check for Claude Code builtin slash commands that need special handling
+    let trimmed_message = message.trim();
+    let (effective_message, permission_mode) = if trimmed_message == "/plan"
+        || trimmed_message.starts_with("/plan ")
+    {
+        // /plan triggers plan mode via --permission-mode plan
+        let rest = trimmed_message
+            .strip_prefix("/plan")
+            .unwrap_or("")
+            .trim();
+        let msg = if rest.is_empty() {
+            "Please analyze the codebase and create a plan for the task.".to_string()
+        } else {
+            rest.to_string()
+        };
+        (msg, Some("plan"))
+    } else {
+        (message.to_string(), None)
+    };
+
     // Build CLI arguments
     let mut args = vec![
         "--print".to_string(),
@@ -1272,6 +1444,12 @@ pub async fn run_claudecode_turn(
         "--verbose".to_string(),
         "--include-partial-messages".to_string(),
     ];
+
+    // Add permission mode if a slash command triggered a special mode
+    if let Some(mode) = permission_mode {
+        args.push("--permission-mode".to_string());
+        args.push(mode.to_string());
+    }
 
     // NOTE: --dangerously-skip-permissions cannot be used when running as root.
     // The container runs as root, so we rely on the permissions in settings.local.json instead.
@@ -1292,8 +1470,25 @@ pub async fn run_claudecode_turn(
         args.push(m.to_string());
     }
 
-    args.push("--session-id".to_string());
-    args.push(session_id.clone());
+    // For continuation turns, use --resume to resume existing session
+    // For first turn, use --session-id to create new session with that ID
+    if is_continuation {
+        args.push("--resume".to_string());
+        args.push(session_id.clone());
+        tracing::debug!(
+            mission_id = %mission_id,
+            session_id = %session_id,
+            "Resuming existing Claude Code session"
+        );
+    } else {
+        args.push("--session-id".to_string());
+        args.push(session_id.clone());
+        tracing::debug!(
+            mission_id = %mission_id,
+            session_id = %session_id,
+            "Starting new Claude Code session"
+        );
+    }
 
     if let Some(a) = agent {
         args.push("--agent".to_string());
@@ -1348,9 +1543,9 @@ pub async fn run_claudecode_turn(
         }
     };
 
-    // Write message to stdin
+    // Write message to stdin (use effective_message which may have been transformed from slash commands)
     if let Some(mut stdin) = child.stdin.take() {
-        let msg = message.to_string();
+        let msg = effective_message.clone();
         tokio::spawn(async move {
             if let Err(e) = stdin.write_all(msg.as_bytes()).await {
                 tracing::error!("Failed to write to Claude stdin: {}", e);
@@ -1369,6 +1564,31 @@ pub async fn run_claudecode_turn(
             return AgentResult::failure(err_msg.to_string(), 0)
                 .with_terminal_reason(TerminalReason::LlmError);
         }
+    };
+
+    // Capture stderr for debugging
+    let stderr = child.stderr.take();
+    let stderr_capture = std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
+    let stderr_capture_clone = stderr_capture.clone();
+    let mission_id_for_stderr = mission_id;
+    let stderr_handle = if let Some(stderr) = stderr {
+        Some(tokio::spawn(async move {
+            let stderr_reader = BufReader::new(stderr);
+            let mut stderr_lines = stderr_reader.lines();
+            while let Ok(Some(line)) = stderr_lines.next_line().await {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    tracing::debug!(mission_id = %mission_id_for_stderr, stderr = %trimmed, "Claude Code stderr");
+                    let mut captured = stderr_capture_clone.lock().await;
+                    if !captured.is_empty() {
+                        captured.push('\n');
+                    }
+                    captured.push_str(trimmed);
+                }
+            }
+        }))
+    } else {
+        None
     };
 
     // Track tool calls for result mapping
@@ -1400,6 +1620,9 @@ pub async fn run_claudecode_turn(
                 tracing::info!(mission_id = %mission_id, "Claude Code execution cancelled, killing process");
                 // Kill the process to stop consuming API resources
                 let _ = child.kill().await;
+                if let Some(handle) = stderr_handle {
+                    handle.abort();
+                }
                 return AgentResult::failure("Cancelled".to_string(), 0)
                     .with_terminal_reason(TerminalReason::Cancelled);
             }
@@ -1407,6 +1630,9 @@ pub async fn run_claudecode_turn(
                 let err_msg = "Claude Code produced no output. No Anthropic credentials detected; please authenticate in Settings → AI Providers or set CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY.";
                 tracing::warn!(mission_id = %mission_id, "{}", err_msg);
                 let _ = child.kill().await;
+                if let Some(handle) = stderr_handle {
+                    handle.abort();
+                }
                 return AgentResult::failure(err_msg.to_string(), 0)
                     .with_terminal_reason(TerminalReason::LlmError);
             }
@@ -1600,15 +1826,54 @@ pub async fn run_claudecode_turn(
     }
 
     // Wait for child process to finish and clean up
-    let _ = child.wait().await;
+    let exit_status = child.wait().await;
+
+    // Wait for stderr capture to complete
+    if let Some(handle) = stderr_handle {
+        let _ = handle.await;
+    }
 
     // Convert cost from USD to cents
     let cost_cents = (total_cost_usd * 100.0) as u64;
 
+    // If no final result from Assistant or Result events, use accumulated text buffer
+    // This handles plan mode and other cases where text is streamed incrementally
+    if final_result.trim().is_empty() && !text_buffer.is_empty() {
+        // Sort by content block index to ensure correct ordering (HashMap iteration is non-deterministic)
+        let mut sorted_entries: Vec<_> = text_buffer.iter().collect();
+        sorted_entries.sort_by_key(|(idx, _)| *idx);
+        final_result = sorted_entries.into_iter().map(|(_, text)| text.clone()).collect::<Vec<_>>().join("");
+        tracing::debug!(
+            mission_id = %mission_id,
+            "Using accumulated text buffer as final result ({} chars)",
+            final_result.len()
+        );
+    }
+
     if final_result.trim().is_empty() && !had_error {
         had_error = true;
-        final_result =
-            "Claude Code produced no output. Check CLI installation or authentication.".to_string();
+        // Include stderr in error message if available
+        let stderr_content = stderr_capture.lock().await;
+        if !stderr_content.is_empty() {
+            tracing::warn!(
+                mission_id = %mission_id,
+                stderr = %stderr_content,
+                exit_status = ?exit_status,
+                "Claude Code produced no output but had stderr"
+            );
+            final_result = format!(
+                "Claude Code error: {}",
+                stderr_content.lines().take(5).collect::<Vec<_>>().join(" | ")
+            );
+        } else {
+            tracing::warn!(
+                mission_id = %mission_id,
+                exit_status = ?exit_status,
+                "Claude Code produced no output and no stderr"
+            );
+            final_result =
+                "Claude Code produced no output. Check CLI installation or authentication.".to_string();
+        }
     }
 
     if had_error {
@@ -2125,15 +2390,16 @@ async fn ensure_oh_my_opencode_config(
     // No config found; run oh-my-opencode install in non-interactive mode to generate defaults.
     let mut args: Vec<String> = Vec::new();
     let claude_flag = if has_anthropic { "yes" } else { "no" };
-    let chatgpt_flag = if has_openai { "yes" } else { "no" };
+    let openai_flag = if has_openai { "yes" } else { "no" };
     let gemini_flag = if has_google { "yes" } else { "no" };
     if runner_is_direct {
         args.extend([
             "install".to_string(),
             "--no-tui".to_string(),
             format!("--claude={}", claude_flag),
-            format!("--chatgpt={}", chatgpt_flag),
+            format!("--openai={}", openai_flag),
             format!("--gemini={}", gemini_flag),
+            "--copilot=no".to_string(),
             "--skip-auth".to_string(),
         ]);
     } else {
@@ -2142,8 +2408,9 @@ async fn ensure_oh_my_opencode_config(
             "install".to_string(),
             "--no-tui".to_string(),
             format!("--claude={}", claude_flag),
-            format!("--chatgpt={}", chatgpt_flag),
+            format!("--openai={}", openai_flag),
             format!("--gemini={}", gemini_flag),
+            "--copilot=no".to_string(),
             "--skip-auth".to_string(),
         ]);
     }
@@ -4500,6 +4767,536 @@ pub async fn run_opencode_turn(
     if let Some(model) = model_used {
         result = result.with_model(model);
     }
+    result
+}
+
+/// Execute a turn using Amp CLI backend.
+///
+/// For Host workspaces: spawns the CLI directly on the host.
+/// For Container workspaces: spawns the CLI inside the container using systemd-nspawn.
+pub async fn run_amp_turn(
+    workspace: &Workspace,
+    work_dir: &std::path::Path,
+    message: &str,
+    mode: Option<&str>,
+    mission_id: Uuid,
+    events_tx: broadcast::Sender<AgentEvent>,
+    cancel: CancellationToken,
+    app_working_dir: &std::path::Path,
+    session_id: Option<&str>,
+    is_continuation: bool,
+    api_key: Option<&str>,
+) -> AgentResult {
+    use crate::backend::amp::client::{AmpEvent, ContentBlock, StreamEvent};
+    use std::collections::HashMap;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let workspace_exec = WorkspaceExec::new(workspace.clone());
+
+    // Check if amp CLI is available
+    if !command_available(&workspace_exec, work_dir, "amp").await {
+        let auto_install = env_var_bool("OPEN_AGENT_AUTO_INSTALL_AMP", true);
+        if auto_install {
+            // Try to install via bun first (preferred for container templates), then npm
+            let has_bun = command_available(&workspace_exec, work_dir, "bun").await;
+            let has_npm = command_available(&workspace_exec, work_dir, "npm").await;
+            
+            if has_bun {
+                tracing::info!(mission_id = %mission_id, "Auto-installing Amp CLI via bun");
+                let install_result = workspace_exec
+                    .output(
+                        work_dir,
+                        "/bin/sh",
+                        &["-lc".to_string(), "bun install -g @sourcegraph/amp 2>&1".to_string()],
+                        HashMap::new(),
+                    )
+                    .await;
+                match &install_result {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        if output.status.success() {
+                            tracing::info!(mission_id = %mission_id, stdout = %stdout, "Amp CLI installed via bun");
+                        } else {
+                            tracing::warn!(mission_id = %mission_id, stdout = %stdout, stderr = %stderr, exit_code = ?output.status.code(), "bun install for Amp CLI failed");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(mission_id = %mission_id, error = %e, "Failed to run bun install for Amp CLI");
+                    }
+                }
+            } else if has_npm {
+                tracing::info!(mission_id = %mission_id, "Auto-installing Amp CLI via npm");
+                let install_result = workspace_exec
+                    .output(
+                        work_dir,
+                        "/bin/sh",
+                        &["-lc".to_string(), "npm install -g @sourcegraph/amp".to_string()],
+                        HashMap::new(),
+                    )
+                    .await;
+                if let Err(e) = &install_result {
+                    tracing::warn!(mission_id = %mission_id, error = %e, "Failed to auto-install Amp CLI via npm");
+                }
+            } else {
+                tracing::warn!(mission_id = %mission_id, "Neither bun nor npm available for Amp CLI auto-install");
+            }
+        }
+
+    }
+
+    // Find the amp binary - check standard PATH first, then bun's global bin paths
+    let amp_binary = if command_available(&workspace_exec, work_dir, "amp").await {
+        "amp".to_string()
+    } else if command_available(&workspace_exec, work_dir, "/root/.bun/bin/amp").await {
+        "/root/.bun/bin/amp".to_string()
+    } else if command_available(&workspace_exec, work_dir, "/root/.cache/.bun/bin/amp").await {
+        "/root/.cache/.bun/bin/amp".to_string()
+    } else {
+        let err_msg = "Amp CLI not found. Install it with: bun install -g @sourcegraph/amp (or npm install -g @sourcegraph/amp)";
+        tracing::error!(mission_id = %mission_id, "{}", err_msg);
+        return AgentResult::failure(err_msg.to_string(), 0)
+            .with_terminal_reason(TerminalReason::LlmError);
+    };
+
+    tracing::info!(
+        mission_id = %mission_id,
+        work_dir = %work_dir.display(),
+        workspace_type = ?workspace.workspace_type,
+        mode = ?mode,
+        is_continuation = is_continuation,
+        amp_binary = %amp_binary,
+        "Starting Amp execution via WorkspaceExec"
+    );
+
+    // Build CLI arguments
+    // Amp CLI format: amp [subcommand] --execute "message" [flags]
+    // For continuation: amp threads continue <session_id> --execute "message" [flags]
+    let mut args = vec![];
+
+    // For continuation, use threads continue subcommand
+    if is_continuation {
+        if let Some(sid) = session_id {
+            args.push("threads".to_string());
+            args.push("continue".to_string());
+            args.push(sid.to_string());
+        }
+    }
+
+    // --execute with message as its argument (must come before other flags)
+    args.push("--execute".to_string());
+    args.push(message.to_string());
+
+    // Remaining flags
+    args.push("--stream-json".to_string());
+    args.push("--dangerously-allow-all".to_string());
+
+    // Mode (smart/rush)
+    if let Some(m) = mode {
+        args.push("--mode".to_string());
+        args.push(m.to_string());
+    }
+
+    // Build environment
+    let mut env = HashMap::new();
+    
+    // Use API key from config, or fall back to environment variable
+    if let Some(key) = api_key {
+        env.insert("AMP_API_KEY".to_string(), key.to_string());
+    } else if let Ok(key) = std::env::var("AMP_API_KEY") {
+        env.insert("AMP_API_KEY".to_string(), key);
+    }
+    
+    // Pass through AMP_URL for CLIProxyAPI integration
+    // This allows routing Amp requests through a local proxy (e.g., CLIProxyAPI)
+    // AMP_URL sets the Amp service URL (default: https://ampcode.com/)
+    if let Ok(amp_url) = std::env::var("AMP_URL") {
+        env.insert("AMP_URL".to_string(), amp_url);
+    }
+    
+    // Also support legacy AMP_PROVIDER_URL as an alias
+    if !env.contains_key("AMP_URL") {
+        if let Ok(provider_url) = std::env::var("AMP_PROVIDER_URL") {
+            env.insert("AMP_URL".to_string(), provider_url);
+        }
+    }
+    
+    // Fall back to reading amp.url from Amp CLI settings file if no env var set
+    if !env.contains_key("AMP_URL") {
+        if let Some(amp_url) = get_amp_url_from_settings() {
+            tracing::debug!(mission_id = %mission_id, amp_url = %amp_url, "Using amp.url from Amp CLI settings");
+            env.insert("AMP_URL".to_string(), amp_url);
+        }
+    }
+
+    // Log the environment for debugging
+    tracing::debug!(
+        mission_id = %mission_id,
+        env_vars = ?env.keys().collect::<Vec<_>>(),
+        amp_url = ?env.get("AMP_URL"),
+        amp_api_key_present = env.contains_key("AMP_API_KEY"),
+        "Spawning Amp CLI with environment"
+    );
+
+    // Use WorkspaceExec to spawn the CLI
+    let mut child = match workspace_exec
+        .spawn_streaming(work_dir, &amp_binary, &args, env)
+        .await
+    {
+        Ok(child) => child,
+        Err(e) => {
+            let err_msg = format!("Failed to start Amp CLI: {}", e);
+            tracing::error!("{}", err_msg);
+            return AgentResult::failure(err_msg, 0).with_terminal_reason(TerminalReason::LlmError);
+        }
+    };
+
+    // Close stdin immediately - Amp uses --execute with args, not stdin
+    // Leaving the pipe open can cause issues with Node.js process lifecycle
+    drop(child.stdin.take());
+
+    // Get stdout for reading events
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let err_msg = "Failed to capture Amp stdout";
+            tracing::error!("{}", err_msg);
+            return AgentResult::failure(err_msg.to_string(), 0)
+                .with_terminal_reason(TerminalReason::LlmError);
+        }
+    };
+
+    // Capture stderr for debugging
+    let stderr = child.stderr.take();
+    let stderr_capture = std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
+    let stderr_capture_clone = stderr_capture.clone();
+    let mission_id_for_stderr = mission_id;
+    let stderr_handle = if let Some(stderr) = stderr {
+        Some(tokio::spawn(async move {
+            let stderr_reader = BufReader::new(stderr);
+            let mut stderr_lines = stderr_reader.lines();
+            while let Ok(Some(line)) = stderr_lines.next_line().await {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    tracing::debug!(mission_id = %mission_id_for_stderr, stderr = %trimmed, "Amp CLI stderr");
+                    let mut captured = stderr_capture_clone.lock().await;
+                    if !captured.is_empty() {
+                        captured.push('\n');
+                    }
+                    captured.push_str(trimmed);
+                }
+            }
+        }))
+    } else {
+        None
+    };
+
+    // Track tool calls for result mapping
+    let mut pending_tools: HashMap<String, String> = HashMap::new();
+    let mut final_result = String::new();
+    let mut had_error = false;
+    let mut model_used: Option<String> = None;
+    
+    // Track token usage for cost calculation
+    let mut total_input_tokens: u64 = 0;
+    let mut total_output_tokens: u64 = 0;
+    let mut total_cache_creation_tokens: u64 = 0;
+    let mut total_cache_read_tokens: u64 = 0;
+
+    // Track content blocks for streaming
+    let mut block_types: HashMap<u32, String> = HashMap::new();
+    let mut thinking_buffer: HashMap<u32, String> = HashMap::new();
+    let mut text_buffer: HashMap<u32, String> = HashMap::new();
+    let mut last_thinking_len: usize = 0;
+    let mut last_text_len: usize = 0;
+    let mut thinking_streamed = false; // Track if thinking was already streamed
+
+    let reader = BufReader::new(stdout);
+    let mut lines = reader.lines();
+
+    // Process events until completion or cancellation
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                tracing::info!(mission_id = %mission_id, "Amp execution cancelled, killing process");
+                let _ = child.kill().await;
+                if let Some(handle) = stderr_handle {
+                    handle.abort();
+                }
+                return AgentResult::failure("Cancelled".to_string(), 0)
+                    .with_terminal_reason(TerminalReason::Cancelled);
+            }
+            line_result = lines.next_line() => {
+                match line_result {
+                    Ok(Some(line)) => {
+                        if line.is_empty() {
+                            continue;
+                        }
+
+                        let amp_event: AmpEvent = match serde_json::from_str(&line) {
+                            Ok(event) => event,
+                            Err(e) => {
+                                tracing::warn!(
+                                    mission_id = %mission_id,
+                                    error = %e,
+                                    line = %if line.len() > 200 { format!("{}...", &line[..200]) } else { line.clone() },
+                                    "Failed to parse Amp event"
+                                );
+                                continue;
+                            }
+                        };
+
+                        match amp_event {
+                            AmpEvent::System(sys) => {
+                                tracing::debug!(
+                                    mission_id = %mission_id,
+                                    session_id = %sys.session_id,
+                                    model = ?sys.model,
+                                    "Amp session init"
+                                );
+                                if sys.model.is_some() {
+                                    model_used = sys.model;
+                                }
+                                // Amp generates its own session/thread ID; emit an update so the
+                                // mission's session_id gets updated for continuation.
+                                let _ = events_tx.send(AgentEvent::SessionIdUpdate {
+                                    session_id: sys.session_id.clone(),
+                                    mission_id,
+                                });
+                            }
+                            AmpEvent::StreamEvent(wrapper) => {
+                                match wrapper.event {
+                                    StreamEvent::ContentBlockDelta { index, delta } => {
+                                        if delta.delta_type == "thinking_delta" {
+                                            if let Some(thinking_text) = delta.thinking {
+                                                if !thinking_text.is_empty() {
+                                                    let buffer = thinking_buffer.entry(index).or_default();
+                                                    buffer.push_str(&thinking_text);
+
+                                                    let total_len = thinking_buffer.values().map(|s| s.len()).sum::<usize>();
+                                                    if total_len > last_thinking_len {
+                                                        let accumulated: String = thinking_buffer.values().cloned().collect::<Vec<_>>().join("");
+                                                        last_thinking_len = total_len;
+                                                        thinking_streamed = true;
+
+                                                        let _ = events_tx.send(AgentEvent::Thinking {
+                                                            content: accumulated,
+                                                            done: false,
+                                                            mission_id: Some(mission_id),
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        } else if delta.delta_type == "text_delta" {
+                                            if let Some(text) = delta.text {
+                                                if !text.is_empty() {
+                                                    let buffer = text_buffer.entry(index).or_default();
+                                                    buffer.push_str(&text);
+
+                                                    // Stream text deltas similar to thinking
+                                                    let total_len = text_buffer.values().map(|s| s.len()).sum::<usize>();
+                                                    if total_len > last_text_len {
+                                                        let accumulated: String = text_buffer.values().cloned().collect::<Vec<_>>().join("");
+                                                        last_text_len = total_len;
+
+                                                        let _ = events_tx.send(AgentEvent::TextDelta {
+                                                            content: accumulated,
+                                                            mission_id: Some(mission_id),
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    StreamEvent::ContentBlockStart { index, content_block } => {
+                                        block_types.insert(index, content_block.block_type.clone());
+
+                                        if content_block.block_type == "tool_use" {
+                                            if let (Some(id), Some(name)) = (content_block.id, content_block.name) {
+                                                pending_tools.insert(id, name);
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            AmpEvent::Assistant(evt) => {
+                                // Track model from assistant message
+                                if evt.message.model.is_some() {
+                                    model_used = evt.message.model.clone();
+                                }
+                                
+                                // Accumulate token usage for cost calculation
+                                if let Some(usage) = &evt.message.usage {
+                                    total_input_tokens += usage.input_tokens.unwrap_or(0);
+                                    total_output_tokens += usage.output_tokens.unwrap_or(0);
+                                    total_cache_creation_tokens += usage.cache_creation_input_tokens.unwrap_or(0);
+                                    total_cache_read_tokens += usage.cache_read_input_tokens.unwrap_or(0);
+                                }
+                                
+                                for block in evt.message.content {
+                                    match block {
+                                        ContentBlock::Text { text } => {
+                                            if !text.is_empty() {
+                                                final_result = text;
+                                            }
+                                        }
+                                        ContentBlock::ToolUse { id, name, input } => {
+                                            pending_tools.insert(id.clone(), name.clone());
+                                            let _ = events_tx.send(AgentEvent::ToolCall {
+                                                tool_call_id: id.clone(),
+                                                name: name.clone(),
+                                                args: input,
+                                                mission_id: Some(mission_id),
+                                            });
+                                        }
+                                        ContentBlock::Thinking { thinking } => {
+                                            // Only emit thinking from Assistant event if it wasn't already streamed
+                                            // via ContentBlockDelta events. This prevents duplicate thinking content.
+                                            if !thinking.is_empty() && !thinking_streamed {
+                                                let _ = events_tx.send(AgentEvent::Thinking {
+                                                    content: thinking,
+                                                    done: true,
+                                                    mission_id: Some(mission_id),
+                                                });
+                                            } else if thinking_streamed {
+                                                // Send done=true signal without content to indicate thinking is complete
+                                                let _ = events_tx.send(AgentEvent::Thinking {
+                                                    content: String::new(),
+                                                    done: true,
+                                                    mission_id: Some(mission_id),
+                                                });
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            AmpEvent::User(evt) => {
+                                for block in evt.message.content {
+                                    if let ContentBlock::ToolResult { tool_use_id, content, is_error } = block {
+                                        let name = pending_tools
+                                            .get(&tool_use_id)
+                                            .cloned()
+                                            .unwrap_or_else(|| "unknown".to_string());
+
+                                        let content_str = content.to_string_lossy();
+
+                                        let result_value = if let Some(ref extra) = evt.tool_use_result {
+                                            serde_json::json!({
+                                                "content": content_str,
+                                                "stdout": extra.stdout,
+                                                "stderr": extra.stderr,
+                                                "is_error": is_error,
+                                                "interrupted": extra.interrupted,
+                                            })
+                                        } else {
+                                            serde_json::json!(content_str)
+                                        };
+
+                                        let _ = events_tx.send(AgentEvent::ToolResult {
+                                            tool_call_id: tool_use_id,
+                                            name,
+                                            result: result_value,
+                                            mission_id: Some(mission_id),
+                                        });
+                                    }
+                                }
+                            }
+                            AmpEvent::Result(res) => {
+                                if res.is_error || res.subtype == "error" {
+                                    had_error = true;
+                                    let err_msg = res.result.clone().unwrap_or_else(|| "Unknown error".to_string());
+                                    let _ = events_tx.send(AgentEvent::Error {
+                                        message: err_msg.clone(),
+                                        mission_id: Some(mission_id),
+                                        resumable: true,
+                                    });
+                                    final_result = err_msg;
+                                } else {
+                                    if let Some(result) = res.result {
+                                        final_result = result;
+                                    }
+                                }
+                                
+                                tracing::debug!(
+                                    mission_id = %mission_id,
+                                    subtype = %res.subtype,
+                                    duration_ms = ?res.duration_ms,
+                                    num_turns = ?res.num_turns,
+                                    "Amp result received"
+                                );
+                                
+                                // Result event means we're done
+                                break;
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        // EOF
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::error!(mission_id = %mission_id, error = %e, "Error reading Amp stdout");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Wait for process to finish
+    let exit_status = child.wait().await;
+    if let Some(handle) = stderr_handle {
+        handle.abort();
+    }
+
+    // Check exit status
+    let success = match exit_status {
+        Ok(status) => status.success() && !had_error,
+        Err(e) => {
+            tracing::error!(mission_id = %mission_id, error = %e, "Failed to wait for Amp process");
+            false
+        }
+    };
+
+    // Compute cost from accumulated token usage
+    let usage = crate::cost::TokenUsage {
+        input_tokens: total_input_tokens,
+        output_tokens: total_output_tokens,
+        cache_creation_input_tokens: if total_cache_creation_tokens > 0 { Some(total_cache_creation_tokens) } else { None },
+        cache_read_input_tokens: if total_cache_read_tokens > 0 { Some(total_cache_read_tokens) } else { None },
+    };
+    let cost_cents = model_used
+        .as_deref()
+        .map(|m| crate::cost::cost_cents_from_usage(m, &usage))
+        .unwrap_or(0);
+    
+    tracing::debug!(
+        mission_id = %mission_id,
+        model = ?model_used,
+        input_tokens = total_input_tokens,
+        output_tokens = total_output_tokens,
+        cache_creation_tokens = total_cache_creation_tokens,
+        cache_read_tokens = total_cache_read_tokens,
+        cost_cents = cost_cents,
+        "Amp cost computed from token usage"
+    );
+
+    // Note: Do NOT emit AssistantMessage here - control.rs emits it based on AgentResult.
+    // Emitting here would cause duplicate messages in the UI.
+
+    let mut result = if success {
+        AgentResult::success(final_result, cost_cents)
+    } else {
+        AgentResult::failure(final_result, cost_cents)
+            .with_terminal_reason(TerminalReason::LlmError)
+    };
+
+    if let Some(model) = model_used {
+        result = result.with_model(model);
+    }
+
     result
 }
 

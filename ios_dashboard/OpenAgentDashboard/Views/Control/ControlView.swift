@@ -96,6 +96,21 @@ struct ControlView: View {
                                 .font(.caption2)
                                 .foregroundStyle(Theme.warning)
                         } else {
+                            // Show backend/agent info if available
+                            if let mission = viewingMission {
+                                let backendColor = missionBackendColor(mission)
+                                if let agent = mission.agent, !agent.isEmpty {
+                                    Image(systemName: missionBackendIcon(mission))
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(backendColor)
+                                    Text(agent)
+                                        .font(.caption2)
+                                        .foregroundStyle(backendColor)
+                                    Text("•")
+                                        .foregroundStyle(Theme.textMuted)
+                                }
+                            }
+                            
                             // Connected - show normal run state
                             StatusDot(status: runState.statusType, size: 5)
                             Text(runState.label)
@@ -322,9 +337,9 @@ struct ControlView: View {
                     get: { workspaceState.selectedWorkspace?.id },
                     set: { if let id = $0 { workspaceState.selectWorkspace(id: id) } }
                 ),
-                onCreate: { workspaceId in
+                onCreate: { options in
                     showNewMissionSheet = false
-                    Task { await createNewMission(workspaceId: workspaceId) }
+                    Task { await createNewMission(options: options) }
                 },
                 onCancel: {
                     showNewMissionSheet = false
@@ -768,9 +783,15 @@ struct ControlView: View {
         }
     }
     
-    private func createNewMission(workspaceId: String? = nil) async {
+    private func createNewMission(options: NewMissionOptions? = nil) async {
         do {
-            let mission = try await api.createMission(workspaceId: workspaceId)
+            let mission = try await api.createMission(
+                workspaceId: options?.workspaceId,
+                title: nil,
+                agent: options?.agent,
+                modelOverride: options?.modelOverride,
+                backend: options?.backend
+            )
             currentMission = mission
             applyViewingMission(mission, scrollToBottom: false)
 
@@ -828,6 +849,26 @@ struct ControlView: View {
         } catch {
             print("Failed to resume mission: \(error)")
             HapticService.error()
+        }
+    }
+    
+    // MARK: - Backend Helpers
+    
+    private func missionBackendColor(_ mission: Mission) -> Color {
+        switch mission.backend {
+        case "opencode": return Theme.success
+        case "claudecode": return Theme.accent
+        case "amp": return .orange
+        default: return Theme.accent
+        }
+    }
+    
+    private func missionBackendIcon(_ mission: Mission) -> String {
+        switch mission.backend {
+        case "opencode": return "terminal"
+        case "claudecode": return "brain"
+        case "amp": return "bolt.fill"
+        default: return "cpu"
         }
     }
     
