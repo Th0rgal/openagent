@@ -2861,16 +2861,32 @@ export default function ControlClient() {
       setViewingMissionId(id); // Set viewing ID immediately to prevent "Agent is working..." flash
       fetchingMissionIdRef.current = id; // Track which mission we're loading
       try {
-        // Load mission and events in parallel for faster load
-        const [mission, events] = await Promise.all([
+        // Load mission, events, and queue in parallel for faster load
+        const [mission, events, queuedMessages] = await Promise.all([
           loadMission(id),
           getMissionEvents(id).catch(() => null), // Don't fail if events unavailable
+          getQueue().catch(() => []), // Don't fail if queue unavailable
         ]);
         if (cancelled || fetchingMissionIdRef.current !== id) return;
         setCurrentMission(mission);
         setViewingMission(mission);
         // Use events if available, otherwise fall back to basic history
-        setItems(events ? eventsToItems(events) : missionHistoryToItems(mission));
+        let historyItems = events ? eventsToItems(events) : missionHistoryToItems(mission);
+        // Merge queued messages
+        if (queuedMessages.length > 0) {
+          const queuedChatItems: ChatItem[] = queuedMessages.map((qm) => ({
+            kind: "user" as const,
+            id: qm.id,
+            content: qm.content,
+            timestamp: Date.now(),
+            agent: qm.agent ?? undefined,
+            queued: true,
+          }));
+          const existingIds = new Set(historyItems.map((item) => item.id));
+          const newQueuedItems = queuedChatItems.filter((item) => !existingIds.has(item.id));
+          historyItems = [...historyItems, ...newQueuedItems];
+        }
+        setItems(historyItems);
         applyDesktopSessionState(mission);
         // Also check events for desktop sessions (in case mission.desktop_sessions isn't populated yet)
         if (events) {
@@ -2916,11 +2932,26 @@ export default function ControlClient() {
           setItems(missionHistoryToItems(mission));
           applyDesktopSessionState(mission);
           router.replace(`/control?mission=${mission.id}`, { scroll: false });
-          // Load full events in background (including tool calls)
-          getMissionEvents(mission.id)
-            .then((events) => {
+          // Load full events and queue in background (including tool calls)
+          Promise.all([getMissionEvents(mission.id), getQueue().catch(() => [])])
+            .then(([events, queuedMessages]) => {
               if (cancelled) return;
-              setItems(eventsToItems(events));
+              let historyItems = eventsToItems(events);
+              // Merge queued messages
+              if (queuedMessages.length > 0) {
+                const queuedChatItems: ChatItem[] = queuedMessages.map((qm) => ({
+                  kind: "user" as const,
+                  id: qm.id,
+                  content: qm.content,
+                  timestamp: Date.now(),
+                  agent: qm.agent ?? undefined,
+                  queued: true,
+                }));
+                const existingIds = new Set(historyItems.map((item) => item.id));
+                const newQueuedItems = queuedChatItems.filter((item) => !existingIds.has(item.id));
+                historyItems = [...historyItems, ...newQueuedItems];
+              }
+              setItems(historyItems);
               // Also check events for desktop sessions
               applyDesktopSessionFromEvents(events);
             })
