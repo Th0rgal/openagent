@@ -5541,7 +5541,16 @@ pub async fn run_amp_turn(
                             AmpEvent::Result(res) => {
                                 if res.is_error || res.subtype == "error" {
                                     had_error = true;
-                                    let err_msg = res.result.clone().unwrap_or_else(|| "Unknown error".to_string());
+                                    let err_msg = res.error_message();
+                                    tracing::warn!(
+                                        mission_id = %mission_id,
+                                        subtype = %res.subtype,
+                                        result = ?res.result,
+                                        error = ?res.error,
+                                        message = ?res.message,
+                                        raw_line = %if line.len() > 500 { let end = safe_truncate_index(&line, 500); format!("{}...", &line[..end]) } else { line.clone() },
+                                        "Amp error result event"
+                                    );
                                     // Don't send an Error event here - let the failure propagate
                                     // through the AgentResult. control.rs will emit an AssistantMessage
                                     // with success=false which the UI displays as a failure message.

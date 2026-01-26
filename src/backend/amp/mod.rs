@@ -257,7 +257,7 @@ fn convert_amp_event(
         AmpEvent::Result(res) => {
             if res.is_error || res.subtype == "error" {
                 results.push(ExecutionEvent::Error {
-                    message: res.result.unwrap_or_else(|| "Unknown error".to_string()),
+                    message: res.error_message(),
                 });
             } else {
                 debug!(

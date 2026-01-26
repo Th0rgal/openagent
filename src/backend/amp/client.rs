@@ -245,6 +245,53 @@ pub struct ResultEvent {
     pub num_turns: Option<u32>,
     #[serde(default)]
     pub result: Option<String>,
+    /// Error message (some Amp CLI versions put the error here instead of `result`)
+    #[serde(default)]
+    pub error: Option<String>,
+    /// Additional error context from Amp CLI
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+impl ResultEvent {
+    /// Extract the best available error/result message from the event.
+    /// Checks `result`, `error`, and `message` fields in order.
+    /// Parses Amp's JSON error format (e.g. `402 {"type":"error","error":{...,"message":"..."}}`)
+    /// to extract a human-readable message.
+    pub fn error_message(&self) -> String {
+        let raw = self
+            .result
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or(self.error.as_deref().filter(|s| !s.is_empty()))
+            .or(self.message.as_deref().filter(|s| !s.is_empty()))
+            .unwrap_or("Unknown error");
+
+        // Try to parse Amp's error format: "STATUS_CODE {json}"
+        // e.g. `402 {"type":"error","error":{"type":"unknown_error","message":"..."}}`
+        Self::parse_amp_error(raw).unwrap_or_else(|| raw.to_string())
+    }
+
+    /// Parse Amp CLI error strings that contain embedded JSON.
+    /// Returns a clean, user-friendly message if possible.
+    fn parse_amp_error(raw: &str) -> Option<String> {
+        // Strip optional HTTP status code prefix (e.g. "402 {...")
+        let json_str = raw
+            .find('{')
+            .map(|idx| &raw[idx..])
+            .unwrap_or(raw);
+
+        let parsed: serde_json::Value = serde_json::from_str(json_str).ok()?;
+
+        // Extract nested error.message
+        let message = parsed
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .or_else(|| parsed.get("message").and_then(|m| m.as_str()))?;
+
+        Some(message.to_string())
+    }
 }
 
 /// Configuration for the Amp CLI client.
