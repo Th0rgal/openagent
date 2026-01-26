@@ -2117,6 +2117,95 @@ fn parse_opencode_session_token(value: &str) -> Option<String> {
     }
 }
 
+/// Install a lightweight `opencode` wrapper script that intercepts `opencode serve` commands
+/// and overrides the `--port` argument using the `OPENCODE_SERVER_PORT` environment variable.
+///
+/// oh-my-opencode v3 is a compiled binary that always calls `opencode serve --port=4096`.
+/// Patching the JS source files has no effect on the binary. This wrapper sits at a higher
+/// PATH priority and intercepts the `serve` call to use the allocated port instead.
+fn install_opencode_serve_port_wrapper(
+    env: &mut HashMap<String, String>,
+    workspace: &Workspace,
+    port: &str,
+) -> bool {
+    // Only needed when a non-default port override is required
+    if port == "4096" || port == "0" || port.is_empty() {
+        return false;
+    }
+
+    // Determine the wrapper directory.
+    // For containers: use /root/.openagent-bin (NOT /tmp) because nspawn mounts
+    // a fresh tmpfs over /tmp, hiding anything we write to the container rootfs.
+    let (wrapper_dir_host, wrapper_dir_env) =
+        if workspace.workspace_type == WorkspaceType::Container
+            && workspace::use_nspawn_for_workspace(workspace)
+        {
+            (
+                workspace.path.join("root").join(".openagent-bin"),
+                "/root/.openagent-bin".to_string(),
+            )
+        } else {
+            (
+                std::path::PathBuf::from("/tmp/.openagent-bin"),
+                "/tmp/.openagent-bin".to_string(),
+            )
+        };
+
+    if let Err(e) = std::fs::create_dir_all(&wrapper_dir_host) {
+        tracing::warn!("Failed to create opencode wrapper dir: {}", e);
+        return false;
+    }
+
+    // The wrapper script: intercepts `opencode serve` and overrides --port
+    let wrapper_script = r#"#!/bin/sh
+# opencode serve port override wrapper (installed by Open Agent)
+if [ -n "$OPENCODE_SERVER_PORT" ] && [ "$1" = "serve" ]; then
+  shift
+  new_args=""
+  for arg in "$@"; do
+    case "$arg" in
+      --port=*) ;;
+      *) new_args="$new_args $arg" ;;
+    esac
+  done
+  exec /usr/local/bin/opencode serve --port="$OPENCODE_SERVER_PORT" $new_args
+fi
+exec /usr/local/bin/opencode "$@"
+"#;
+
+    let wrapper_path = wrapper_dir_host.join("opencode");
+    if let Err(e) = std::fs::write(&wrapper_path, wrapper_script) {
+        tracing::warn!("Failed to write opencode wrapper: {}", e);
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&wrapper_path, std::fs::Permissions::from_mode(0o755));
+    }
+
+    // Prepend the wrapper directory to PATH so it takes priority over the real binary
+    let current = env
+        .get("PATH")
+        .cloned()
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
+    let new_path = if current.is_empty() {
+        wrapper_dir_env.clone()
+    } else {
+        format!("{}:{}", wrapper_dir_env, current)
+    };
+    env.insert("PATH".to_string(), new_path);
+
+    tracing::debug!(
+        "Installed opencode serve port wrapper at {} (port={})",
+        wrapper_dir_env,
+        port
+    );
+    true
+}
+
 fn prepend_opencode_bin_to_path(env: &mut HashMap<String, String>, workspace: &Workspace) {
     let home = if workspace.workspace_type == WorkspaceType::Container
         && workspace::use_nspawn_for_workspace(workspace)
@@ -3072,7 +3161,13 @@ fn find_oh_my_opencode_cli_js(workspace: &Workspace) -> Option<std::path::PathBu
 
     // Search bun cache for oh-my-opencode (used when installed via bunx)
     // Pattern: ~/.cache/.bun/install/cache/oh-my-opencode@<version>@@@1/dist/cli/index.js
-    let bun_cache_bases = ["/root/.cache/.bun/install/cache", "/home/*/.cache/.bun/install/cache"];
+    // Some bun versions use ~/.bun/install/cache instead of ~/.cache/.bun/install/cache
+    let bun_cache_bases = [
+        "/root/.cache/.bun/install/cache",
+        "/root/.bun/install/cache",
+        "/home/*/.cache/.bun/install/cache",
+        "/home/*/.bun/install/cache",
+    ];
     for base in bun_cache_bases {
         let base_path = workspace_abs_path(workspace, std::path::Path::new(base));
         if let Ok(entries) = std::fs::read_dir(&base_path) {
@@ -4349,7 +4444,24 @@ pub async fn run_opencode_turn(
         )
         .await;
     }
-    let port_override_supported = patch_oh_my_opencode_port_override(workspace);
+    // Pre-cache oh-my-opencode via bunx/npx so the port override patch can find the CLI JS.
+    // When the runner is bunx/npx, the package isn't cached until the actual run command.
+    // Without pre-caching, the patch fails and the port falls back to 4096, which may
+    // conflict with a standalone opencode.service on the host (shared network namespace).
+    if !runner_is_direct && find_oh_my_opencode_cli_js(workspace).is_none() {
+        tracing::debug!(
+            mission_id = %mission_id,
+            cli_runner = %cli_runner,
+            "Pre-caching oh-my-opencode for port override patch"
+        );
+        let precache_args = vec!["oh-my-opencode".to_string(), "--version".to_string()];
+        let _ = workspace_exec
+            .output(work_dir, &cli_runner, &precache_args, HashMap::new())
+            .await;
+    }
+    // Patch JS source for older (pre-v3) JS-based oh-my-opencode versions.
+    // For v3+ compiled binaries, the wrapper script handles port override instead.
+    let _ = patch_oh_my_opencode_port_override(workspace);
 
     // Build CLI arguments for oh-my-opencode run
     // The 'run' command takes a prompt and executes it with completion detection
@@ -4399,15 +4511,6 @@ pub async fn run_opencode_turn(
         opencode_port = "4096".to_string();
     }
 
-    if !port_override_supported {
-        if requested_port.is_some() {
-            tracing::warn!(
-                mission_id = %mission_id,
-                "Requested OPENCODE_SERVER_PORT override but oh-my-opencode could not be patched; falling back to port 4096"
-            );
-        }
-        opencode_port = "4096".to_string();
-    }
     env.insert("OPENCODE_SERVER_PORT".to_string(), opencode_port.clone());
     if let Ok(host) = std::env::var("OPEN_AGENT_OPENCODE_SERVER_HOSTNAME") {
         if !host.trim().is_empty() {
@@ -4480,6 +4583,15 @@ pub async fn run_opencode_turn(
     }
 
     prepend_opencode_bin_to_path(&mut env, workspace);
+
+    // Install the opencode serve wrapper AFTER prepend_opencode_bin_to_path so the
+    // wrapper dir (/tmp/.openagent-bin) is prepended last and takes priority over
+    // the real binary at ~/.opencode/bin/opencode.
+    // oh-my-opencode v3+ is a compiled binary that spawns `opencode serve --port=4096`;
+    // the wrapper intercepts this and overrides the port.
+    if opencode_port != "4096" {
+        install_opencode_serve_port_wrapper(&mut env, workspace, &opencode_port);
+    }
 
     cleanup_opencode_listeners(&workspace_exec, work_dir, Some(&opencode_port)).await;
 
@@ -5348,11 +5460,10 @@ pub async fn run_amp_turn(
                                 if res.is_error || res.subtype == "error" {
                                     had_error = true;
                                     let err_msg = res.result.clone().unwrap_or_else(|| "Unknown error".to_string());
-                                    let _ = events_tx.send(AgentEvent::Error {
-                                        message: err_msg.clone(),
-                                        mission_id: Some(mission_id),
-                                        resumable: true,
-                                    });
+                                    // Don't send an Error event here - let the failure propagate
+                                    // through the AgentResult. control.rs will emit an AssistantMessage
+                                    // with success=false which the UI displays as a failure message.
+                                    // Sending Error here would cause duplicate messages.
                                     final_result = err_msg;
                                 } else {
                                     if let Some(result) = res.result {
@@ -5388,18 +5499,11 @@ pub async fn run_amp_turn(
 
     // Wait for process to finish
     let exit_status = child.wait().await;
-    if let Some(handle) = stderr_handle {
-        handle.abort();
-    }
 
-    // Check exit status
-    let success = match exit_status {
-        Ok(status) => status.success() && !had_error,
-        Err(e) => {
-            tracing::error!(mission_id = %mission_id, error = %e, "Failed to wait for Amp process");
-            false
-        }
-    };
+    // Wait for stderr capture to complete (don't abort - we need the content)
+    if let Some(handle) = stderr_handle {
+        let _ = handle.await;
+    }
 
     // Compute cost from accumulated token usage
     let usage = crate::cost::TokenUsage {
@@ -5412,7 +5516,7 @@ pub async fn run_amp_turn(
         .as_deref()
         .map(|m| crate::cost::cost_cents_from_usage(m, &usage))
         .unwrap_or(0);
-    
+
     tracing::debug!(
         mission_id = %mission_id,
         model = ?model_used,
@@ -5423,6 +5527,69 @@ pub async fn run_amp_turn(
         cost_cents = cost_cents,
         "Amp cost computed from token usage"
     );
+
+    // If no final result from Assistant or Result events, use accumulated text buffer
+    if final_result.trim().is_empty() && !text_buffer.is_empty() {
+        let mut sorted_entries: Vec<_> = text_buffer.iter().collect();
+        sorted_entries.sort_by_key(|(idx, _)| *idx);
+        final_result = sorted_entries.into_iter().map(|(_, text)| text.clone()).collect::<Vec<_>>().join("");
+        tracing::debug!(
+            mission_id = %mission_id,
+            "Using accumulated text buffer as final result ({} chars)",
+            final_result.len()
+        );
+    }
+
+    // If result is still empty/generic, include stderr for a useful error message
+    if (final_result.trim().is_empty() || final_result == "Unknown error") && !had_error {
+        had_error = true;
+        let stderr_content = stderr_capture.lock().await;
+        if !stderr_content.is_empty() {
+            tracing::warn!(
+                mission_id = %mission_id,
+                stderr = %stderr_content,
+                exit_status = ?exit_status,
+                "Amp CLI produced no useful output but had stderr"
+            );
+            final_result = format!(
+                "Amp error: {}",
+                stderr_content.lines().take(5).collect::<Vec<_>>().join(" | ")
+            );
+        } else {
+            tracing::warn!(
+                mission_id = %mission_id,
+                exit_status = ?exit_status,
+                "Amp CLI produced no output and no stderr"
+            );
+            final_result =
+                "Amp CLI produced no output. Check CLI installation or API key.".to_string();
+        }
+    } else if had_error && (final_result.trim().is_empty() || final_result == "Unknown error") {
+        // Error was flagged by Result event but message is empty/generic - enrich with stderr
+        let stderr_content = stderr_capture.lock().await;
+        if !stderr_content.is_empty() {
+            tracing::warn!(
+                mission_id = %mission_id,
+                stderr = %stderr_content,
+                "Amp error with no result text, using stderr"
+            );
+            final_result = format!(
+                "Amp error: {}",
+                stderr_content.lines().take(5).collect::<Vec<_>>().join(" | ")
+            );
+        } else {
+            final_result = "Amp CLI returned an error with no details. Check API key and network connectivity.".to_string();
+        }
+    }
+
+    // Check exit status
+    let success = match exit_status {
+        Ok(status) => status.success() && !had_error,
+        Err(e) => {
+            tracing::error!(mission_id = %mission_id, error = %e, "Failed to wait for Amp process");
+            false
+        }
+    };
 
     // Note: Do NOT emit AssistantMessage here - control.rs emits it based on AgentResult.
     // Emitting here would cause duplicate messages in the UI.
