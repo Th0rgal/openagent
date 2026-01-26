@@ -4534,7 +4534,7 @@ export default function ControlClient() {
       />
 
       {/* Header */}
-      <div className="mb-6 flex items-center justify-between gap-4">
+      <div className="relative z-10 mb-6 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           {/* Unified Mission Selector */}
           <div className="relative">
