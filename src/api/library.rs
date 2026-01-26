@@ -308,6 +308,9 @@ pub struct SaveWorkspaceTemplateRequest {
     /// Whether to share the host network (default: true).
     /// Set to false for isolated networking (e.g., Tailscale).
     pub shared_network: Option<bool>,
+    /// MCP server names to enable for workspaces created from this template.
+    #[serde(default)]
+    pub mcps: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1115,6 +1118,7 @@ async fn save_workspace_template(
         encrypted_keys: req.encrypted_keys.unwrap_or_default(),
         init_script: req.init_script.unwrap_or_default(),
         shared_network: req.shared_network,
+        mcps: req.mcps.unwrap_or_default(),
     };
 
     library

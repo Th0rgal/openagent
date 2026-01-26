@@ -143,6 +143,11 @@ pub struct Workspace {
     /// Set to false for isolated networking (e.g., Tailscale).
     #[serde(default)]
     pub shared_network: Option<bool>,
+    /// MCP server names to enable for this workspace.
+    /// Empty = use all MCPs with `default_enabled = true`.
+    /// Non-empty = allowlist of MCP names.
+    #[serde(default)]
+    pub mcps: Vec<String>,
 }
 
 impl Workspace {
@@ -165,6 +170,7 @@ impl Workspace {
             tools: Vec::new(),
             plugins: Vec::new(),
             shared_network: None,
+            mcps: Vec::new(),
         }
     }
 
@@ -187,6 +193,7 @@ impl Workspace {
             tools: Vec::new(),
             plugins: Vec::new(),
             shared_network: None,
+            mcps: Vec::new(),
         }
     }
 }
@@ -375,6 +382,7 @@ impl WorkspaceStore {
                     tools: Vec::new(),
                     plugins: Vec::new(),
                     shared_network: None, // Default to shared network
+                    mcps: Vec::new(),
                 };
 
                 orphaned.push(workspace);
@@ -714,6 +722,32 @@ fn opencode_entry_from_mcp(
                 cmd.extend(args.clone());
                 entry.insert("command".to_string(), json!(cmd));
             } else {
+                // When per_workspace_runner is true and workspace is a container,
+                // the harness (Claude Code / OpenCode) runs inside the container
+                // and spawns MCP servers as subprocesses. Env vars must use
+                // container-relative paths, not host paths.
+                if workspace_type == WorkspaceType::Container
+                    && per_workspace_runner
+                    && !container_fallback
+                {
+                    let rel = workspace_dir
+                        .strip_prefix(workspace_root)
+                        .unwrap_or_else(|_| Path::new(""));
+                    let rel_str = if rel.as_os_str().is_empty() {
+                        "/".to_string()
+                    } else {
+                        format!("/{}", rel.to_string_lossy())
+                    };
+                    merged_env
+                        .insert("OPEN_AGENT_WORKSPACE".to_string(), rel_str.clone());
+                    merged_env.insert(
+                        "OPEN_AGENT_WORKSPACE_ROOT".to_string(),
+                        "/".to_string(),
+                    );
+                    merged_env
+                        .insert("WORKING_DIR".to_string(), rel_str);
+                }
+
                 let mut cmd = vec![resolve_command_path(command)];
                 cmd.extend(args.clone());
                 entry.insert("command".to_string(), json!(cmd));
@@ -2255,6 +2289,31 @@ async fn prepare_workspace_dir(path: &Path) -> anyhow::Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
+/// Filter MCP configs based on a workspace's MCP allowlist.
+///
+/// - Empty `workspace_mcps` → include only MCPs with `default_enabled = true`
+/// - Non-empty `workspace_mcps` → include only MCPs whose name is in the list
+///
+/// In both cases, globally disabled MCPs are excluded.
+fn filter_mcp_configs_for_workspace(
+    configs: Vec<McpServerConfig>,
+    workspace_mcps: &[String],
+) -> Vec<McpServerConfig> {
+    configs
+        .into_iter()
+        .filter(|c| {
+            if !c.enabled {
+                return false;
+            }
+            if workspace_mcps.is_empty() {
+                c.default_enabled
+            } else {
+                workspace_mcps.iter().any(|name| name == &c.name)
+            }
+        })
+        .collect()
+}
+
 /// Prepare a custom workspace directory and write `opencode.json`.
 pub async fn prepare_custom_workspace(
     _config: &Config,
@@ -2296,7 +2355,7 @@ pub async fn prepare_mission_workspace_in(
 ) -> anyhow::Result<PathBuf> {
     let dir = mission_workspace_dir_for_root(&workspace.path, mission_id);
     prepare_workspace_dir(&dir).await?;
-    let mcp_configs = mcp.list_configs().await;
+    let mcp_configs = filter_mcp_configs_for_workspace(mcp.list_configs().await, &workspace.mcps);
     let skill_allowlist = if workspace.skills.is_empty() {
         None
     } else {
@@ -2338,7 +2397,8 @@ pub async fn prepare_mission_workspace_with_skills_backend(
 ) -> anyhow::Result<PathBuf> {
     let dir = mission_workspace_dir_for_root(&workspace.path, mission_id);
     prepare_workspace_dir(&dir).await?;
-    let mcp_configs = mcp.list_configs().await;
+    let mcp_configs =
+        filter_mcp_configs_for_workspace(mcp.list_configs().await, &workspace.mcps);
     let skill_allowlist = if workspace.skills.is_empty() {
         None
     } else {

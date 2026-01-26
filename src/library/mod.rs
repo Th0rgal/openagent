@@ -45,6 +45,9 @@ struct WorkspaceTemplateConfig {
     /// Whether to share the host network (default: true).
     #[serde(default)]
     shared_network: Option<bool>,
+    /// MCP server names to enable for workspaces created from this template.
+    #[serde(default)]
+    mcps: Vec<String>,
 }
 
 // Directory constants (OpenCode-aligned structure)
@@ -1284,6 +1287,7 @@ impl LibraryStore {
             encrypted_keys,
             init_script: config.init_script,
             shared_network: config.shared_network,
+            mcps: config.mcps,
         })
     }
 
@@ -1339,6 +1343,7 @@ impl LibraryStore {
             encrypted_keys: template.encrypted_keys.clone(),
             init_script: template.init_script.clone(),
             shared_network: template.shared_network,
+            mcps: template.mcps.clone(),
         };
 
         let content = serde_json::to_string_pretty(&config)?;
