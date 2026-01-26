@@ -524,18 +524,41 @@ async fn get_oh_my_opencode_info() -> ComponentInfo {
     }
 }
 
-/// Get the installed version of oh-my-opencode from bun cache.
-/// Uses $HOME/.bun/install/cache which matches the service's HOME directory.
+/// Get the installed version of oh-my-opencode.
+/// Tries `bunx oh-my-opencode --version` first (most reliable), then falls back
+/// to scanning the bun cache for platform-specific package directories.
 async fn get_oh_my_opencode_version() -> Option<String> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    // Primary: ask bunx directly (works regardless of cache layout)
+    if let Ok(Ok(output)) = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        Command::new("bunx")
+            .args(["oh-my-opencode", "--version"])
+            .output(),
+    )
+    .await
+    {
+        if output.status.success() {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !version.is_empty()
+                && version
+                    .chars()
+                    .next()
+                    .map_or(false, |c| c.is_ascii_digit())
+            {
+                return Some(version);
+            }
+        }
+    }
 
-    // Find oh-my-opencode versions in bun cache and return the highest
+    // Fallback: scan bun cache for platform-specific packages
+    // (e.g. oh-my-opencode-linux-x64@3.0.1@@@1)
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let output = Command::new("bash")
         .args([
             "-c",
             &format!(
-                r#"find {}/.bun/install/cache -maxdepth 1 -type d -name 'oh-my-opencode@*' 2>/dev/null | \
-                   grep -oP 'oh-my-opencode@\K[0-9]+\.[0-9]+\.[0-9]+' | \
+                r#"find {}/.bun/install/cache -maxdepth 1 -type d -name 'oh-my-opencode*@*' 2>/dev/null | \
+                   grep -oP 'oh-my-opencode[^@]*@\K[0-9]+\.[0-9]+\.[0-9]+' | \
                    sort -V | tail -1"#,
                 home
             ),
