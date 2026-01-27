@@ -31,7 +31,6 @@ use crate::library::{
     OpenAgentConfig, Plugin, Rule, RuleSummary, Skill, SkillSummary, WorkspaceTemplate,
     WorkspaceTemplateSummary,
 };
-use crate::opencode_agents;
 use crate::nspawn::NspawnDistro;
 use crate::workspace::{self, WorkspaceType, DEFAULT_WORKSPACE_ID};
 
@@ -1306,14 +1305,7 @@ fn filter_visible_agents_with_fallback(
     agents: serde_json::Value,
     config: &OpenAgentConfig,
 ) -> serde_json::Value {
-    let visible = filter_agents_by_config(agents, config);
-    if extract_agent_names(&visible).is_empty() {
-        let fallback = filter_agents_by_config(opencode_agents::default_agent_payload(), config);
-        if !extract_agent_names(&fallback).is_empty() {
-            return fallback;
-        }
-    }
-    visible
+    filter_agents_by_config(agents, config)
 }
 
 /// Filter agents based on OpenAgent config hidden_agents list.
