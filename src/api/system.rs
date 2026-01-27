@@ -19,7 +19,6 @@ use axum::{
 use futures::stream::Stream;
 use serde::Serialize;
 use tokio::process::Command;
-use libc;
 
 use super::routes::AppState;
 
@@ -225,21 +224,10 @@ async fn get_claude_code_info() -> ComponentInfo {
     }
 }
 
-/// Find the path to the Claude Code binary.
-async fn which_claude_code() -> Option<String> {
-    let output = Command::new("which").arg("claude").output().await.ok()?;
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
-    }
-}
-
-/// Find the path to the OpenCode binary.
-/// Checks multiple locations: PATH, user-local install, and system-wide.
-async fn which_opencode() -> Option<String> {
-    // First try 'which' to find in PATH (handles ~/.bun/bin, ~/.local/bin, etc.)
-    if let Ok(output) = Command::new("which").arg("opencode").output().await {
+/// Find the path to a CLI binary.
+/// Checks `which` first (respects the user's PATH), then explicit fallback paths.
+async fn which_binary(name: &str, fallback_paths: &[&str]) -> Option<String> {
+    if let Ok(output) = Command::new("which").arg(name).output().await {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !path.is_empty() {
@@ -247,22 +235,25 @@ async fn which_opencode() -> Option<String> {
             }
         }
     }
-    
-    // Check user-local OpenCode install location
-    if let Ok(home) = std::env::var("HOME") {
-        let user_path = format!("{}/.opencode/bin/opencode", home);
-        if std::path::Path::new(&user_path).exists() {
-            return Some(user_path);
+    for path in fallback_paths {
+        if std::path::Path::new(path).exists() {
+            return Some((*path).to_string());
         }
     }
-    
-    // Fall back to system-wide location
-    let system_path = "/usr/local/bin/opencode";
-    if std::path::Path::new(system_path).exists() {
-        return Some(system_path.to_string());
-    }
-    
     None
+}
+
+/// Find the path to the Claude Code binary.
+async fn which_claude_code() -> Option<String> {
+    which_binary("claude", &[]).await
+}
+
+/// Find the path to the OpenCode binary.
+/// Checks PATH first, then user-local install, then system-wide.
+async fn which_opencode() -> Option<String> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let user_local = format!("{}/.opencode/bin/opencode", home);
+    which_binary("opencode", &[&user_local, "/usr/local/bin/opencode"]).await
 }
 
 /// Get Amp version and status.
@@ -310,12 +301,7 @@ async fn get_amp_info() -> ComponentInfo {
 
 /// Find the path to the Amp binary.
 async fn which_amp() -> Option<String> {
-    let output = Command::new("which").arg("amp").output().await.ok()?;
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
-    }
+    which_binary("amp", &[]).await
 }
 
 /// Check if there's a newer version of Amp available.
@@ -907,151 +893,104 @@ fn stream_open_agent_update() -> impl Stream<Item = Result<Event, std::convert::
 }
 
 /// Stream the OpenCode update process.
+///
+/// Permission-aware: root installs to `/usr/local/bin` and restarts the
+/// systemd service; non-root keeps the binary at `~/.opencode/bin` and
+/// skips the service restart (non-root users typically lack systemd access).
 fn stream_opencode_update() -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
-    async_stream::stream! {
-        // Send initial progress
-        yield Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
-            event_type: "log".to_string(),
-            message: "Starting OpenCode update...".to_string(),
-            progress: Some(0),
-        }).unwrap()));
+    // Helper to build an SSE event from an UpdateProgressEvent.
+    fn sse(event_type: &str, message: impl Into<String>, progress: Option<u8>) -> Result<Event, std::convert::Infallible> {
+        Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
+            event_type: event_type.to_string(),
+            message: message.into(),
+            progress,
+        }).unwrap()))
+    }
 
-        // Download and install OpenCode
-        yield Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
-            event_type: "log".to_string(),
-            message: "Downloading latest OpenCode release...".to_string(),
-            progress: Some(10),
-        }).unwrap()));
+    async_stream::stream! {
+        yield sse("log", "Starting OpenCode update...", Some(0));
+        yield sse("log", "Downloading latest OpenCode release...", Some(10));
 
         // Run the install script
-        let install_result = Command::new("bash")
+        let download = Command::new("bash")
             .args(["-c", "curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path"])
             .output()
             .await;
 
-        match install_result {
-            Ok(output) if output.status.success() => {
-                yield Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
-                    event_type: "log".to_string(),
-                    message: "Download complete, installing...".to_string(),
-                    progress: Some(50),
-                }).unwrap()));
-
-                // Copy to /usr/local/bin or verify user-local install
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-                let source_path = format!("{}/.opencode/bin/opencode", home);
-                
-                // Check if running as root for system-wide installation
-                let is_root = unsafe { libc::geteuid() } == 0;
-                
-                if is_root {
-                    // Root user: install to system-wide location
-                    let install_result = Command::new("install")
-                        .args(["-m", "0755", &source_path, "/usr/local/bin/opencode"])
-                        .output()
-                        .await;
-                    
-                    match install_result {
-                        Ok(output) if output.status.success() => {
-                            yield Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
-                                event_type: "log".to_string(),
-                                message: "Binary installed, restarting service...".to_string(),
-                                progress: Some(80),
-                            }).unwrap()));
-
-                            // Restart the opencode service
-                            let restart_result = Command::new("systemctl")
-                                .args(["restart", "opencode.service"])
-                                .output()
-                                .await;
-
-                            match restart_result {
-                                Ok(output) if output.status.success() => {
-                                    // Wait a moment for the service to start
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-                                    yield Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
-                                        event_type: "complete".to_string(),
-                                        message: "OpenCode updated successfully!".to_string(),
-                                        progress: Some(100),
-                                    }).unwrap()));
-                                }
-                                Ok(output) => {
-                                    let stderr = String::from_utf8_lossy(&output.stderr);
-                                    yield Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
-                                        event_type: "error".to_string(),
-                                        message: format!("Failed to restart service: {}", stderr),
-                                        progress: None,
-                                    }).unwrap()));
-                                }
-                                Err(e) => {
-                                    yield Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
-                                        event_type: "error".to_string(),
-                                        message: format!("Failed to restart service: {}", e),
-                                        progress: None,
-                                    }).unwrap()));
-                                }
-                            }
-                        }
-                        Ok(output) => {
-                            let stderr = String::from_utf8_lossy(&output.stderr);
-                            yield Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
-                                event_type: "error".to_string(),
-                                message: format!("Failed to install binary: {}", stderr),
-                                progress: None,
-                            }).unwrap()));
-                        }
-                        Err(e) => {
-                            yield Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
-                                event_type: "error".to_string(),
-                                message: format!("Failed to install binary: {}", e),
-                                progress: None,
-                            }).unwrap()));
-                        }
-                    }
-                } else {
-                    // Non-root user: verify binary is accessible, skip system-wide install
-                    if std::path::Path::new(&source_path).exists() {
-                        yield Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
-                            event_type: "log".to_string(),
-                            message: format!("Binary installed to {}. Ensure this directory is in your PATH.", source_path),
-                            progress: Some(80),
-                        }).unwrap()));
-                        
-                        // Skip service restart for non-root (they likely don't have systemd access)
-                        yield Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
-                            event_type: "complete".to_string(),
-                            message: format!("OpenCode updated successfully! Binary location: {}", source_path),
-                            progress: Some(100),
-                        }).unwrap()));
-                    } else {
-                        yield Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
-                            event_type: "error".to_string(),
-                            message: format!(
-                                "Update downloaded but binary not found at {}. \
-                                The installer may have placed it elsewhere. \
-                                Try running 'which opencode' to find it.",
-                                source_path
-                            ),
-                            progress: None,
-                        }).unwrap()));
-                    }
-                }
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                yield Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
-                    event_type: "error".to_string(),
-                    message: format!("Failed to download OpenCode: {}", stderr),
-                    progress: None,
-                }).unwrap()));
+        let output = match download {
+            Ok(o) if o.status.success() => o,
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                yield sse("error", format!("Failed to download OpenCode: {}", stderr), None);
+                return;
             }
             Err(e) => {
-                yield Ok(Event::default().data(serde_json::to_string(&UpdateProgressEvent {
-                    event_type: "error".to_string(),
-                    message: format!("Failed to run install script: {}", e),
-                    progress: None,
-                }).unwrap()));
+                yield sse("error", format!("Failed to run install script: {}", e), None);
+                return;
+            }
+        };
+        let _ = output; // consumed above; kept for clarity
+
+        yield sse("log", "Download complete, installing...", Some(50));
+
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        let source_path = format!("{}/.opencode/bin/opencode", home);
+        let is_root = unsafe { libc::geteuid() } == 0;
+
+        if is_root {
+            // Root: copy to system-wide location
+            match Command::new("install")
+                .args(["-m", "0755", &source_path, "/usr/local/bin/opencode"])
+                .output()
+                .await
+            {
+                Ok(o) if o.status.success() => {}
+                Ok(o) => {
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    yield sse("error", format!("Failed to install binary: {}", stderr), None);
+                    return;
+                }
+                Err(e) => {
+                    yield sse("error", format!("Failed to install binary: {}", e), None);
+                    return;
+                }
+            }
+
+            yield sse("log", "Binary installed, restarting service...", Some(80));
+
+            // Restart the opencode service
+            match Command::new("systemctl")
+                .args(["restart", "opencode.service"])
+                .output()
+                .await
+            {
+                Ok(o) if o.status.success() => {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    yield sse("complete", "OpenCode updated successfully!", Some(100));
+                }
+                Ok(o) => {
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    yield sse("error", format!("Failed to restart service: {}", stderr), None);
+                }
+                Err(e) => {
+                    yield sse("error", format!("Failed to restart service: {}", e), None);
+                }
+            }
+        } else {
+            // Non-root: keep binary at user-local path, skip systemd restart
+            if std::path::Path::new(&source_path).exists() {
+                yield sse("log", format!("Binary installed to {source_path}. Ensure this directory is in your PATH."), Some(80));
+                yield sse("complete", format!("OpenCode updated successfully! Binary location: {source_path}"), Some(100));
+            } else {
+                yield sse(
+                    "error",
+                    format!(
+                        "Update downloaded but binary not found at {source_path}. \
+                         The installer may have placed it elsewhere. \
+                         Try running 'which opencode' to find it."
+                    ),
+                    None,
+                );
             }
         }
     }
