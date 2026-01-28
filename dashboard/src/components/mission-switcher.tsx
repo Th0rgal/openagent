@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { Search, XCircle, Check, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { type Mission, type MissionStatus, type RunningMissionInfo } from '@/lib/api';
+import { STATUS_DOT_COLORS, STATUS_LABELS, getMissionDotColor } from '@/lib/mission-status';
 
 interface MissionSwitcherProps {
   open: boolean;
@@ -15,40 +16,6 @@ interface MissionSwitcherProps {
   onSelectMission: (missionId: string) => Promise<void> | void;
   onCancelMission: (missionId: string) => void;
   onRefresh?: () => void;
-}
-
-function missionStatusDotClass(status: MissionStatus): string {
-  switch (status) {
-    case 'active':
-      return 'bg-emerald-400';
-    case 'completed':
-      return 'bg-emerald-400';
-    case 'failed':
-      return 'bg-red-400';
-    case 'interrupted':
-      return 'bg-amber-400';
-    case 'blocked':
-      return 'bg-orange-400';
-    case 'not_feasible':
-      return 'bg-rose-400';
-  }
-}
-
-function missionStatusLabel(status: MissionStatus): string {
-  switch (status) {
-    case 'active':
-      return 'Active';
-    case 'completed':
-      return 'Completed';
-    case 'failed':
-      return 'Failed';
-    case 'interrupted':
-      return 'Interrupted';
-    case 'blocked':
-      return 'Blocked';
-    case 'not_feasible':
-      return 'Not Feasible';
-  }
 }
 
 function getMissionDisplayName(mission: Mission): string {
@@ -366,9 +333,7 @@ export function MissionSwitcher({
                           className={cn(
                             'h-2 w-2 rounded-full shrink-0',
                             mission
-                              ? missionStatusDotClass(mission.status)
-                              : isRunning
-                              ? 'bg-emerald-400'
+                              ? getMissionDotColor(mission.status, isRunning)
                               : 'bg-gray-400',
                             isRunning &&
                               runningInfo?.state === 'running' &&
@@ -405,7 +370,7 @@ export function MissionSwitcher({
                           : isRunning
                           ? runningInfo?.state || 'running'
                           : mission
-                          ? missionStatusLabel(mission.status)
+                          ? STATUS_LABELS[mission.status]
                           : ''}
                       </span>
 

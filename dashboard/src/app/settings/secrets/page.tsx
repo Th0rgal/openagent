@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import useSWR from 'swr';
 import {
   getSecretsStatus,
+  getEncryptionStatus,
   initializeSecrets,
   unlockSecrets,
   lockSecrets,
@@ -11,8 +13,8 @@ import {
   deleteSecret,
   revealSecret,
   type SecretsStatus,
+  type EncryptionStatus,
   type SecretInfo,
-  type RegistryInfo,
 } from '@/lib/api';
 import {
   Key,
@@ -26,15 +28,30 @@ import {
   Shield,
   Copy,
   Check,
-  X,
+  FileKey,
+  Server,
+  CheckCircle,
+  AlertCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/components/toast';
 
 export default function SecretsPage() {
-  const [status, setStatus] = useState<SecretsStatus | null>(null);
-  const [loading, setLoading] = useState(true);
   const { showError } = useToast();
+
+  // Fetch encryption status (skill content encryption)
+  const { data: encryptionStatus, isLoading: encryptionLoading } = useSWR(
+    'encryption-status',
+    getEncryptionStatus,
+    { revalidateOnFocus: false }
+  );
+
+  // Fetch secrets store status
+  const { data: secretsStatus, isLoading: secretsLoading, mutate: mutateSecrets } = useSWR(
+    'secrets-status',
+    getSecretsStatus,
+    { revalidateOnFocus: false }
+  );
 
   // Unlock dialog
   const [showUnlockDialog, setShowUnlockDialog] = useState(false);
@@ -65,17 +82,19 @@ export default function SecretsPage() {
   // Copy feedback
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  // Load status on mount
-  useEffect(() => {
-    loadStatus();
-  }, []);
-
   // Load secrets when registry changes
   useEffect(() => {
-    if (selectedRegistry && status?.can_decrypt) {
+    if (selectedRegistry && secretsStatus?.can_decrypt) {
       loadSecrets(selectedRegistry);
     }
-  }, [selectedRegistry, status?.can_decrypt]);
+  }, [selectedRegistry, secretsStatus?.can_decrypt]);
+
+  // Auto-select first registry
+  useEffect(() => {
+    if (secretsStatus?.registries.length && !selectedRegistry) {
+      setSelectedRegistry(secretsStatus.registries[0].name);
+    }
+  }, [secretsStatus?.registries, selectedRegistry]);
 
   // Handle ESC key to close modals
   useEffect(() => {
@@ -89,21 +108,6 @@ export default function SecretsPage() {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [showInitDialog, showUnlockDialog, showAddDialog]);
-
-  const loadStatus = async () => {
-    try {
-      setLoading(true);
-      const s = await getSecretsStatus();
-      setStatus(s);
-      if (s.registries.length > 0 && !selectedRegistry) {
-        setSelectedRegistry(s.registries[0].name);
-      }
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Failed to load secrets status');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const loadSecrets = async (registry: string) => {
     try {
@@ -124,8 +128,7 @@ export default function SecretsPage() {
       setInitializing(true);
       const result = await initializeSecrets('default');
       setShowInitDialog(false);
-      await loadStatus();
-      // Show message about setting passphrase
+      await mutateSecrets();
       alert(result.message);
     } catch (err) {
       showError(err instanceof Error ? err.message : 'Failed to initialize');
@@ -140,7 +143,7 @@ export default function SecretsPage() {
       await unlockSecrets(passphrase);
       setShowUnlockDialog(false);
       setPassphrase('');
-      await loadStatus();
+      await mutateSecrets();
     } catch (err) {
       showError(err instanceof Error ? err.message : 'Invalid passphrase');
     } finally {
@@ -152,7 +155,7 @@ export default function SecretsPage() {
     try {
       await lockSecrets();
       setRevealedSecrets({});
-      await loadStatus();
+      await mutateSecrets();
     } catch (err) {
       showError(err instanceof Error ? err.message : 'Failed to lock');
     }
@@ -170,7 +173,7 @@ export default function SecretsPage() {
       setNewSecretValue('');
       setNewSecretRegistry('');
       setNewSecretType('generic');
-      await loadStatus();
+      await mutateSecrets();
       if (selectedRegistry === newSecretRegistry) {
         await loadSecrets(selectedRegistry);
       } else {
@@ -187,7 +190,7 @@ export default function SecretsPage() {
     if (!confirm(`Delete secret "${key}"?`)) return;
     try {
       await deleteSecret(registry, key);
-      await loadStatus();
+      await mutateSecrets();
       if (selectedRegistry === registry) {
         await loadSecrets(registry);
       }
@@ -199,7 +202,6 @@ export default function SecretsPage() {
   const handleReveal = async (registry: string, key: string) => {
     const fullKey = `${registry}/${key}`;
     if (revealedSecrets[fullKey]) {
-      // Hide it
       setRevealedSecrets((prev) => {
         const next = { ...prev };
         delete next[fullKey];
@@ -239,6 +241,8 @@ export default function SecretsPage() {
     return type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   };
 
+  const loading = encryptionLoading || secretsLoading;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[calc(100vh-4rem)]">
@@ -247,32 +251,107 @@ export default function SecretsPage() {
     );
   }
 
+  const hasSecrets = (secretsStatus?.registries ?? []).some(r => r.secret_count > 0);
+
   return (
-    <div className="p-6 max-w-4xl mx-auto">
-      <div className="mb-8">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold text-white mb-2">Secrets</h1>
-            <p className="text-white/50">
-              Encrypted storage for OAuth tokens, API keys, and credentials.
-            </p>
+    <div className="flex-1 p-6 overflow-auto">
+      <div className="max-w-4xl mx-auto space-y-8">
+      {/* Header */}
+      <div>
+        <h1 className="text-2xl font-semibold text-white mb-2">Encryption & Secrets</h1>
+        <p className="text-white/50">
+          Manage encryption for skill content and optional secret storage.
+        </p>
+      </div>
+
+      {/* Encryption Status Card */}
+      <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-6">
+        <div className="flex items-start gap-4">
+          <div className={cn(
+            'w-12 h-12 rounded-xl flex items-center justify-center',
+            encryptionStatus?.key_available ? 'bg-emerald-500/10' : 'bg-amber-500/10'
+          )}>
+            <FileKey className={cn(
+              'h-6 w-6',
+              encryptionStatus?.key_available ? 'text-emerald-400' : 'text-amber-400'
+            )} />
           </div>
-          {status?.initialized && (
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-1">
+              <h2 className="text-lg font-medium text-white">Skill Content Encryption</h2>
+              {encryptionStatus?.key_available ? (
+                <span className="flex items-center gap-1 text-xs text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+                  <CheckCircle className="h-3 w-3" />
+                  Active
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-xs text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full">
+                  <AlertCircle className="h-3 w-3" />
+                  Not Configured
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-white/50 mb-3">
+              Encrypts <code className="text-xs bg-white/[0.06] px-1 py-0.5 rounded">&lt;encrypted&gt;...&lt;/encrypted&gt;</code> tags in skill markdown files.
+            </p>
+            {encryptionStatus?.key_available ? (
+              <div className="flex items-center gap-4 text-sm">
+                <div className="flex items-center gap-2 text-white/60">
+                  {encryptionStatus.key_source === 'environment' ? (
+                    <>
+                      <Server className="h-4 w-4" />
+                      <span>Key from environment variable</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileKey className="h-4 w-4" />
+                      <span>Key from file</span>
+                    </>
+                  )}
+                </div>
+                {encryptionStatus.key_file_path && encryptionStatus.key_source === 'file' && (
+                  <code className="text-xs text-white/40 bg-white/[0.04] px-2 py-1 rounded">
+                    {encryptionStatus.key_file_path}
+                  </code>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-white/40">
+                Set <code className="text-xs bg-white/[0.06] px-1 py-0.5 rounded">PRIVATE_KEY</code> environment variable or the key will be auto-generated on first use.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Secrets Store Section */}
+      <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] overflow-hidden">
+        <div className="p-4 border-b border-white/[0.06] flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-white/[0.04] flex items-center justify-center">
+              <Shield className="h-5 w-5 text-white/60" />
+            </div>
+            <div>
+              <h2 className="text-base font-medium text-white">Secrets Store</h2>
+              <p className="text-xs text-white/40">Optional key-value storage for credentials</p>
+            </div>
+          </div>
+          {secretsStatus?.initialized && (
             <div className="flex items-center gap-2">
-              {status.can_decrypt ? (
+              {secretsStatus.can_decrypt ? (
                 <button
                   onClick={handleLock}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 rounded-lg transition-colors"
+                  className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 rounded-lg transition-colors"
                 >
-                  <Lock className="h-4 w-4" />
+                  <Lock className="h-3.5 w-3.5" />
                   Lock
                 </button>
               ) : (
                 <button
                   onClick={() => setShowUnlockDialog(true)}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 rounded-lg transition-colors"
+                  className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 rounded-lg transition-colors"
                 >
-                  <Unlock className="h-4 w-4" />
+                  <Unlock className="h-3.5 w-3.5" />
                   Unlock
                 </button>
               )}
@@ -281,99 +360,75 @@ export default function SecretsPage() {
                   setNewSecretRegistry(selectedRegistry || 'mcp-tokens');
                   setShowAddDialog(true);
                 }}
-                disabled={!status.can_decrypt}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={!secretsStatus.can_decrypt}
+                className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Plus className="h-4 w-4" />
+                <Plus className="h-3.5 w-3.5" />
                 Add Secret
               </button>
             </div>
           )}
         </div>
-      </div>
 
-      {!status?.initialized ? (
-        // Not initialized - show setup
-        <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-8 text-center">
-          <div className="w-16 h-16 rounded-full bg-indigo-500/10 flex items-center justify-center mx-auto mb-4">
-            <Shield className="h-8 w-8 text-indigo-400" />
+        {!secretsStatus?.initialized ? (
+          <div className="p-8 text-center">
+            <p className="text-sm text-white/50 mb-4">
+              The secrets store is not initialized. This is optional and separate from skill encryption.
+            </p>
+            <button
+              onClick={() => setShowInitDialog(true)}
+              className="px-4 py-2 text-sm font-medium text-white/70 border border-white/[0.08] hover:bg-white/[0.04] rounded-lg transition-colors"
+            >
+              Initialize Secrets Store
+            </button>
           </div>
-          <h2 className="text-xl font-semibold text-white mb-2">Initialize Secrets</h2>
-          <p className="text-white/50 mb-6 max-w-md mx-auto">
-            Set up encrypted storage for sensitive data like OAuth tokens and API keys.
-            You'll need to set a passphrase via environment variable.
-          </p>
-          <button
-            onClick={() => setShowInitDialog(true)}
-            className="px-6 py-3 text-sm font-medium text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors"
-          >
-            Initialize Secrets System
-          </button>
-        </div>
-      ) : !status.can_decrypt ? (
-        // Locked - show unlock prompt
-        <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-8 text-center">
-          <div className="w-16 h-16 rounded-full bg-amber-500/10 flex items-center justify-center mx-auto mb-4">
-            <Lock className="h-8 w-8 text-amber-400" />
+        ) : !secretsStatus.can_decrypt ? (
+          <div className="p-8 text-center">
+            <Lock className="h-8 w-8 text-white/20 mx-auto mb-3" />
+            <p className="text-sm text-white/50 mb-4">
+              Secrets store is locked. Enter passphrase to access.
+            </p>
+            <button
+              onClick={() => setShowUnlockDialog(true)}
+              className="px-4 py-2 text-sm font-medium text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 rounded-lg transition-colors"
+            >
+              Unlock
+            </button>
           </div>
-          <h2 className="text-xl font-semibold text-white mb-2">Secrets Locked</h2>
-          <p className="text-white/50 mb-6 max-w-md mx-auto">
-            Enter your passphrase to unlock and access your secrets.
-            Or set OPENAGENT_SECRET_PASSPHRASE environment variable.
-          </p>
-          <button
-            onClick={() => setShowUnlockDialog(true)}
-            className="px-6 py-3 text-sm font-medium text-white bg-emerald-500 hover:bg-emerald-600 rounded-lg transition-colors"
-          >
-            Unlock Secrets
-          </button>
-        </div>
-      ) : (
-        // Unlocked - show secrets
-        <div className="flex gap-6">
-          {/* Registries sidebar */}
-          <div className="w-64 flex-shrink-0">
-            <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] overflow-hidden">
-              <div className="p-3 border-b border-white/[0.06]">
-                <h3 className="text-sm font-medium text-white/60">Registries</h3>
-              </div>
-              <div className="p-2">
-                {status.registries.length === 0 ? (
-                  <p className="text-xs text-white/40 text-center py-4">No registries yet</p>
-                ) : (
-                  status.registries.map((registry) => (
-                    <button
-                      key={registry.name}
-                      onClick={() => setSelectedRegistry(registry.name)}
-                      className={cn(
-                        'w-full text-left p-3 rounded-lg transition-colors mb-1',
-                        selectedRegistry === registry.name
-                          ? 'bg-white/[0.08] text-white'
-                          : 'text-white/60 hover:bg-white/[0.04] hover:text-white'
-                      )}
-                    >
-                      <div className="flex items-center gap-2">
-                        <Key className="h-4 w-4" />
-                        <span className="text-sm font-medium truncate">{registry.name}</span>
-                      </div>
-                      <p className="text-xs text-white/40 mt-1">
-                        {registry.secret_count} secret{registry.secret_count !== 1 ? 's' : ''}
-                      </p>
-                    </button>
-                  ))
-                )}
-              </div>
+        ) : !hasSecrets ? (
+          <div className="p-8 text-center">
+            <p className="text-sm text-white/50">
+              No secrets stored. Click "Add Secret" to store credentials.
+            </p>
+          </div>
+        ) : (
+          <div className="flex">
+            {/* Registries sidebar */}
+            <div className="w-48 border-r border-white/[0.06] p-2">
+              {secretsStatus.registries.map((registry) => (
+                <button
+                  key={registry.name}
+                  onClick={() => setSelectedRegistry(registry.name)}
+                  className={cn(
+                    'w-full text-left p-2 rounded-lg transition-colors mb-1 text-sm',
+                    selectedRegistry === registry.name
+                      ? 'bg-white/[0.08] text-white'
+                      : 'text-white/60 hover:bg-white/[0.04] hover:text-white'
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <Key className="h-3.5 w-3.5" />
+                    <span className="truncate">{registry.name}</span>
+                  </div>
+                  <p className="text-xs text-white/40 mt-0.5 ml-5">
+                    {registry.secret_count} secret{registry.secret_count !== 1 ? 's' : ''}
+                  </p>
+                </button>
+              ))}
             </div>
-          </div>
 
-          {/* Secrets list */}
-          <div className="flex-1">
-            <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] overflow-hidden">
-              <div className="p-4 border-b border-white/[0.06] flex items-center justify-between">
-                <h3 className="text-sm font-medium text-white">
-                  {selectedRegistry ? `Secrets in ${selectedRegistry}` : 'Select a registry'}
-                </h3>
-              </div>
+            {/* Secrets list */}
+            <div className="flex-1">
               <div className="divide-y divide-white/[0.06]">
                 {loadingSecrets ? (
                   <div className="p-8 flex items-center justify-center">
@@ -381,7 +436,7 @@ export default function SecretsPage() {
                   </div>
                 ) : secrets.length === 0 ? (
                   <div className="p-8 text-center text-white/40 text-sm">
-                    {selectedRegistry ? 'No secrets in this registry' : 'Select a registry to view secrets'}
+                    No secrets in this registry
                   </div>
                 ) : (
                   secrets.map((secret) => {
@@ -462,20 +517,21 @@ export default function SecretsPage() {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
+      </div>
 
       {/* Initialize Dialog */}
       {showInitDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-full max-w-md p-6 rounded-xl bg-[#1a1a1c] border border-white/[0.06]">
-            <h3 className="text-lg font-medium text-white mb-4">Initialize Secrets</h3>
+            <h3 className="text-lg font-medium text-white mb-4">Initialize Secrets Store</h3>
             <p className="text-sm text-white/60 mb-4">
-              This will create the secrets configuration. After initialization, you need to set the{' '}
+              This creates a separate encrypted key-value store. After initialization, set{' '}
               <code className="px-1 py-0.5 rounded bg-white/[0.06] text-amber-400">
                 OPENAGENT_SECRET_PASSPHRASE
               </code>{' '}
-              environment variable with your chosen passphrase.
+              to enable encryption.
             </p>
             <div className="flex justify-end gap-2">
               <button

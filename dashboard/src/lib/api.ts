@@ -1714,6 +1714,12 @@ export interface SecretsStatus {
   default_key: string | null;
 }
 
+export interface EncryptionStatus {
+  key_available: boolean;
+  key_source: 'environment' | 'file' | null;
+  key_file_path: string | null;
+}
+
 export interface RegistryInfo {
   name: string;
   description: string | null;
@@ -1738,6 +1744,11 @@ export interface SecretMetadata {
 // Get secrets status
 export async function getSecretsStatus(): Promise<SecretsStatus> {
   return apiGet('/api/secrets/status', 'Failed to get secrets status');
+}
+
+// Get encryption status (for skill content encryption)
+export async function getEncryptionStatus(): Promise<EncryptionStatus> {
+  return apiGet('/api/secrets/encryption', 'Failed to get encryption status');
 }
 
 // Initialize secrets system

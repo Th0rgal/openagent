@@ -1,18 +1,151 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
 import { toast } from '@/components/toast';
 import { StatsCard } from '@/components/stats-card';
-import { ConnectionStatus } from '@/components/connection-status';
 import { RecentTasks } from '@/components/recent-tasks';
 import { ShimmerStat } from '@/components/ui/shimmer';
-import { createMission, getStats, listWorkspaces } from '@/lib/api';
-import { Activity, CheckCircle, DollarSign, Zap } from 'lucide-react';
-import { formatCents } from '@/lib/utils';
-import { SystemMonitor } from '@/components/system-monitor';
+import { RelativeTime } from '@/components/ui/relative-time';
+import {
+  createMission,
+  getStats,
+  listWorkspaces,
+  listMissions,
+  getRunningMissions,
+  cancelMission,
+  deleteMission,
+  resumeMission,
+  type Mission,
+  type MissionStatus,
+  type RunningMissionInfo,
+} from '@/lib/api';
+import {
+  Activity,
+  CheckCircle,
+  DollarSign,
+  Zap,
+  Loader,
+  XCircle,
+  Ban,
+  Clock,
+  RotateCcw,
+  Trash2,
+  Hand,
+} from 'lucide-react';
+import { cn, formatCents } from '@/lib/utils';
 import { NewMissionDialog } from '@/components/new-mission-dialog';
+import {
+  categorizeMissions,
+  getMissionTextColor,
+  type MissionCategory,
+} from '@/lib/mission-status';
+
+interface Column {
+  id: MissionCategory;
+  label: string;
+  icon: typeof Clock;
+}
+
+const columns: Column[] = [
+  { id: 'running', label: 'Running', icon: Loader },
+  { id: 'needs-you', label: 'Needs You', icon: Hand },
+  { id: 'finished', label: 'Finished', icon: CheckCircle },
+];
+
+const statusIcons: Record<string, typeof Clock> = {
+  active: Loader,
+  completed: CheckCircle,
+  failed: XCircle,
+  interrupted: Ban,
+  blocked: Ban,
+  not_feasible: XCircle,
+};
+
+function getMissionTitle(mission: Mission): string {
+  if (mission.title) return mission.title;
+  const firstUser = mission.history?.find((h) => h.role === 'user');
+  if (firstUser?.content) {
+    const content = firstUser.content.trim();
+    return content.length > 50 ? content.slice(0, 50) + '...' : content;
+  }
+  return 'Untitled Mission';
+}
+
+function CompactMissionCard({
+  mission,
+  isActuallyRunning,
+  onCancel,
+  onResume,
+  onDelete,
+}: {
+  mission: Mission;
+  isActuallyRunning: boolean;
+  onCancel: (id: string) => void;
+  onResume: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const Icon = isActuallyRunning ? Loader : (statusIcons[mission.status] || Clock);
+  const color = getMissionTextColor(mission.status, isActuallyRunning);
+  const title = getMissionTitle(mission);
+  const isResumable = !isActuallyRunning && mission.resumable && mission.status === 'interrupted';
+
+  return (
+    <div className="group rounded-md bg-white/[0.02] border border-white/[0.06] hover:border-white/[0.12] px-2.5 py-2 transition-colors">
+      <div className="flex items-center gap-2 mb-1.5">
+        <Icon
+          className={cn('h-3.5 w-3.5 shrink-0', color, isActuallyRunning && 'animate-spin')}
+        />
+        <Link href={`/control?mission=${mission.id}`} className="flex-1 min-w-0">
+          <p className="text-xs text-white/80 leading-snug truncate hover:text-white transition-colors">
+            {title}
+          </p>
+        </Link>
+      </div>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          {mission.workspace_name && (
+            <span className="inline-flex items-center rounded bg-white/[0.04] px-1 py-0.5 text-[9px] text-white/40 truncate max-w-[60px]">
+              {mission.workspace_name}
+            </span>
+          )}
+          <RelativeTime date={mission.updated_at} className="text-[9px] text-white/30" />
+        </div>
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          {isResumable && (
+            <button
+              onClick={() => onResume(mission.id)}
+              className="p-0.5 rounded hover:bg-white/[0.08] text-white/40 hover:text-emerald-400 transition-colors"
+              title="Resume"
+            >
+              <RotateCcw className="h-3 w-3" />
+            </button>
+          )}
+          {isActuallyRunning && (
+            <button
+              onClick={() => onCancel(mission.id)}
+              className="p-0.5 rounded hover:bg-white/[0.08] text-white/40 hover:text-red-400 transition-colors"
+              title="Cancel"
+            >
+              <XCircle className="h-3 w-3" />
+            </button>
+          )}
+          {!isActuallyRunning && (
+            <button
+              onClick={() => onDelete(mission.id)}
+              className="p-0.5 rounded hover:bg-white/[0.08] text-white/40 hover:text-red-400 transition-colors"
+              title="Delete"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function OverviewPage() {
   const router = useRouter();
@@ -43,7 +176,92 @@ export default function OverviewPage() {
     revalidateOnFocus: false,
   });
 
+  // SWR: fetch missions for kanban
+  const { data: missions = [], mutate: mutateMissions } = useSWR(
+    'missions',
+    listMissions,
+    {
+      refreshInterval: 5000,
+      revalidateOnFocus: false,
+    }
+  );
+
+  const { data: runningMissions = [] } = useSWR(
+    'running-missions',
+    getRunningMissions,
+    {
+      refreshInterval: 3000,
+      revalidateOnFocus: false,
+    }
+  );
+
+  // Build a set of actually running mission IDs from the runtime state
+  const runningMissionIds = useMemo(() => {
+    return new Set(runningMissions.map((rm) => rm.mission_id));
+  }, [runningMissions]);
+
+  // Categorize missions using shared utility
+  const categorized = useMemo(
+    () => categorizeMissions(missions, runningMissionIds),
+    [missions, runningMissionIds]
+  );
+
+  // Build column data for display
+  const columnData = useMemo(() => {
+    return columns.map((col) => {
+      const colMissions = categorized[col.id]
+        .sort(
+          (a, b) =>
+            new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+        )
+        .slice(0, col.id === 'finished' ? 8 : 10);
+      return { ...col, missions: colMissions };
+    });
+  }, [categorized]);
+
   const isActive = (stats?.active_tasks ?? 0) > 0;
+
+  const handleCancel = useCallback(
+    async (id: string) => {
+      try {
+        await cancelMission(id);
+        toast.success('Mission cancelled');
+        mutateMissions();
+      } catch {
+        toast.error('Failed to cancel mission');
+      }
+    },
+    [mutateMissions]
+  );
+
+  const handleResume = useCallback(
+    async (id: string) => {
+      try {
+        await resumeMission(id);
+        toast.success('Mission resumed');
+        router.push(`/control?mission=${id}`);
+      } catch {
+        toast.error('Failed to resume mission');
+      }
+    },
+    [router]
+  );
+
+  const handleDelete = useCallback(
+    async (id: string) => {
+      try {
+        await deleteMission(id);
+        mutateMissions(
+          (current) => (current ? current.filter((m) => m.id !== id) : current),
+          false
+        );
+        toast.success('Mission deleted');
+      } catch {
+        toast.error('Failed to delete mission');
+      }
+    },
+    [mutateMissions]
+  );
 
   const handleNewMission = useCallback(
     async (options?: { workspaceId?: string; agent?: string; backend?: string }) => {
@@ -67,11 +285,11 @@ export default function OverviewPage() {
   );
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex h-screen overflow-hidden">
       {/* Main content */}
-      <div className="flex-1 flex flex-col p-6">
+      <div className="flex-1 flex flex-col p-6 min-h-0">
         {/* Header */}
-        <div className="mb-6 flex items-start justify-between">
+        <div className="flex-shrink-0 mb-4 flex items-start justify-between">
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-xl font-semibold text-white">
@@ -97,13 +315,53 @@ export default function OverviewPage() {
           />
         </div>
 
-        {/* System Metrics Area */}
-        <div className="flex-1 flex items-center justify-center rounded-2xl bg-white/[0.01] border border-white/[0.04] mb-6 min-h-[300px] p-6">
-          <SystemMonitor className="w-full max-w-4xl" />
+        {/* Compact Kanban Board - 3 columns, fills available space */}
+        <div className="flex-1 min-h-0 grid grid-cols-3 gap-4 mb-4">
+          {columnData.map((col) => {
+            const ColIcon = col.icon;
+            return (
+              <div
+                key={col.id}
+                className="flex flex-col min-h-0 rounded-xl bg-white/[0.01] border border-white/[0.04] overflow-hidden"
+              >
+                <div className="flex items-center justify-between px-3 py-2.5 border-b border-white/[0.04]">
+                  <div className="flex items-center gap-2">
+                    <ColIcon className={cn('h-3.5 w-3.5', col.id === 'running' && 'animate-spin', col.id === 'running' ? 'text-indigo-400' : col.id === 'needs-you' ? 'text-amber-400' : 'text-white/40')} />
+                    <span className="text-xs font-medium text-white/70">{col.label}</span>
+                  </div>
+                  {col.missions.length > 0 && (
+                    <span className="text-[10px] text-white/30 tabular-nums">
+                      {col.missions.length}
+                    </span>
+                  )}
+                </div>
+                <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                  {col.missions.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-10 text-center">
+                      <p className="text-[10px] text-white/20">
+                        {col.id === 'running' ? 'No active missions' : col.id === 'needs-you' ? 'All good!' : 'No recent missions'}
+                      </p>
+                    </div>
+                  ) : (
+                    col.missions.map((mission) => (
+                      <CompactMissionCard
+                        key={mission.id}
+                        mission={mission}
+                        isActuallyRunning={runningMissionIds.has(mission.id)}
+                        onCancel={handleCancel}
+                        onResume={handleResume}
+                        onDelete={handleDelete}
+                      />
+                    ))
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
 
-        {/* Stats grid - at bottom */}
-        <div className="grid grid-cols-4 gap-4">
+        {/* Stats grid - fixed at bottom */}
+        <div className="flex-shrink-0 grid grid-cols-4 gap-4">
           {statsLoading ? (
             <>
               <ShimmerStat />
@@ -143,12 +401,7 @@ export default function OverviewPage() {
 
       {/* Right sidebar - no glass panel wrapper, just border */}
       <div className="w-80 h-screen border-l border-white/[0.06] p-4 flex flex-col overflow-hidden">
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <RecentTasks />
-        </div>
-        <div className="mt-4 flex-shrink-0">
-          <ConnectionStatus />
-        </div>
+        <RecentTasks />
       </div>
     </div>
   );

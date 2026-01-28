@@ -625,31 +625,29 @@ export function SystemMonitor({ className, intervalMs = 1000 }: SystemMonitorPro
   }
 
   return (
-    <div className={cn("flex flex-col gap-3 h-full", className)}>
+    <div className={cn("grid grid-rows-[1.2fr_1fr] gap-3 h-full min-h-0", className)}>
       {/* CPU - Full width at top */}
-      <div className="flex-[1.2]">
-        <CpuChart
-          coreHistories={coreHistories}
-          avgPercent={metrics?.cpu_percent ?? 0}
-          coreCount={metrics?.cpu_cores.length ?? 0}
-          height={100}
-        />
-      </div>
+      <CpuChart
+        coreHistories={coreHistories}
+        avgPercent={metrics?.cpu_percent ?? 0}
+        coreCount={metrics?.cpu_cores.length ?? 0}
+        height={200}
+      />
 
       {/* Memory and Network - Split bottom */}
-      <div className="flex-1 grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-3 min-h-0">
         <MemoryChart
           data={memoryHistory}
           percent={metrics?.memory_percent ?? 0}
           used={metrics?.memory_used ?? 0}
           total={metrics?.memory_total ?? 0}
-          height={80}
+          height={150}
         />
         <NetworkChart
           rxData={networkRxHistory}
           txData={networkTxHistory}
           max={maxNetworkRate}
-          height={80}
+          height={150}
         />
       </div>
     </div>
