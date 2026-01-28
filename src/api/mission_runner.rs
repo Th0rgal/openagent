@@ -1998,9 +1998,16 @@ pub fn run_claudecode_turn<'a>(
                                 if let Some(cost) = res.total_cost_usd {
                                     total_cost_usd = cost;
                                 }
-                                if res.is_error || res.subtype == "error" {
+                                // Check for errors: explicit error flags OR result text that looks like an API error
+                                let result_text = res.result.clone().unwrap_or_default();
+                                let looks_like_api_error = result_text.starts_with("API Error:")
+                                    || result_text.contains("\"type\":\"error\"")
+                                    || result_text.contains("\"type\":\"overloaded_error\"")
+                                    || result_text.contains("\"type\":\"api_error\"");
+
+                                if res.is_error || res.subtype == "error" || looks_like_api_error {
                                     had_error = true;
-                                    let err_msg = res.result.unwrap_or_else(|| "Unknown error".to_string());
+                                    let err_msg = if result_text.is_empty() { "Unknown error".to_string() } else { result_text };
                                     // Don't send an Error event here - let the failure propagate
                                     // through the AgentResult. control.rs will emit an AssistantMessage
                                     // with success=false which the UI displays as a failure message.

@@ -422,7 +422,14 @@ pub fn convert_cli_event(
         }
 
         CliEvent::Result(res) => {
-            if res.is_error || res.subtype == "error" {
+            // Check for errors: explicit error flags OR result text that looks like an API error
+            let result_text = res.result.as_deref().unwrap_or("");
+            let looks_like_api_error = result_text.starts_with("API Error:")
+                || result_text.contains("\"type\":\"error\"")
+                || result_text.contains("\"type\":\"overloaded_error\"")
+                || result_text.contains("\"type\":\"api_error\"");
+
+            if res.is_error || res.subtype == "error" || looks_like_api_error {
                 results.push(ExecutionEvent::Error {
                     message: res.error_message(),
                 });
