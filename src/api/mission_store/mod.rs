@@ -56,6 +56,9 @@ pub struct Mission {
     /// Session ID for conversation persistence (used by Claude Code --session-id)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Why the mission terminated (for failed/completed missions)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_reason: Option<String>,
 }
 
 fn default_backend() -> String {
@@ -134,6 +137,14 @@ pub trait MissionStore: Send + Sync {
 
     /// Update mission status.
     async fn update_mission_status(&self, id: Uuid, status: MissionStatus) -> Result<(), String>;
+
+    /// Update mission status with terminal reason (for failed/completed missions).
+    async fn update_mission_status_with_reason(
+        &self,
+        id: Uuid,
+        status: MissionStatus,
+        terminal_reason: Option<&str>,
+    ) -> Result<(), String>;
 
     /// Update mission conversation history.
     async fn update_mission_history(

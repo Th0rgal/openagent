@@ -121,6 +121,7 @@ impl MissionStore for FileMissionStore {
             resumable: false,
             desktop_sessions: Vec::new(),
             session_id: Some(Uuid::new_v4().to_string()),
+            terminal_reason: None,
         };
         self.missions
             .write()
@@ -131,6 +132,15 @@ impl MissionStore for FileMissionStore {
     }
 
     async fn update_mission_status(&self, id: Uuid, status: MissionStatus) -> Result<(), String> {
+        self.update_mission_status_with_reason(id, status, None).await
+    }
+
+    async fn update_mission_status_with_reason(
+        &self,
+        id: Uuid,
+        status: MissionStatus,
+        terminal_reason: Option<&str>,
+    ) -> Result<(), String> {
         let mut missions = self.missions.write().await;
         let mission = missions
             .get_mut(&id)
@@ -138,7 +148,12 @@ impl MissionStore for FileMissionStore {
         mission.status = status;
         let now = now_string();
         mission.updated_at = now.clone();
-        if matches!(status, MissionStatus::Interrupted | MissionStatus::Blocked) {
+        mission.terminal_reason = terminal_reason.map(|s| s.to_string());
+        // Failed missions with LlmError are also resumable (transient API errors)
+        if matches!(
+            status,
+            MissionStatus::Interrupted | MissionStatus::Blocked | MissionStatus::Failed
+        ) {
             mission.interrupted_at = Some(now);
             mission.resumable = true;
         } else {
