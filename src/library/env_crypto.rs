@@ -208,8 +208,7 @@ pub async fn ensure_private_key() -> Result<[u8; KEY_LENGTH]> {
             Ok(contents) => {
                 let trimmed = contents.trim();
                 if !trimmed.is_empty() {
-                    let key = parse_key(trimmed)
-                        .context("Invalid key in private_key file")?;
+                    let key = parse_key(trimmed).context("Invalid key in private_key file")?;
                     // Cache in process env for future calls
                     std::env::set_var(PRIVATE_KEY_ENV, trimmed);
                     tracing::info!(
@@ -243,10 +242,12 @@ pub async fn ensure_private_key() -> Result<[u8; KEY_LENGTH]> {
     let key_hex = hex::encode(key);
 
     if let Some(parent) = key_file.parent() {
-        fs::create_dir_all(parent).await
+        fs::create_dir_all(parent)
+            .await
             .context("Failed to create directory for private_key file")?;
     }
-    fs::write(&key_file, &key_hex).await
+    fs::write(&key_file, &key_hex)
+        .await
         .context("Failed to write private_key file")?;
 
     // Set in process env
@@ -420,7 +421,9 @@ pub fn decrypt_content_tags(key: &[u8; KEY_LENGTH], content: &str) -> Result<Str
 /// Get the hex-encoded private key from environment (for backup export).
 /// Returns None if no key is configured.
 pub fn get_private_key_hex() -> Option<String> {
-    std::env::var(PRIVATE_KEY_ENV).ok().filter(|k| !k.trim().is_empty())
+    std::env::var(PRIVATE_KEY_ENV)
+        .ok()
+        .filter(|k| !k.trim().is_empty())
 }
 
 /// Set the private key from a hex string (for backup restore).
@@ -434,7 +437,8 @@ pub async fn set_private_key_hex(key_hex: &str) -> Result<()> {
     if let Some(parent) = key_file.parent() {
         fs::create_dir_all(parent).await?;
     }
-    fs::write(&key_file, key_hex.trim()).await
+    fs::write(&key_file, key_hex.trim())
+        .await
         .context("Failed to write private_key file")?;
 
     // Set in process env
@@ -695,12 +699,18 @@ Use them wisely.
     #[test]
     fn test_has_encrypted_tags() {
         // Unversioned tags
-        assert!(has_encrypted_tags("text <encrypted>secret</encrypted> more"));
+        assert!(has_encrypted_tags(
+            "text <encrypted>secret</encrypted> more"
+        ));
         assert!(has_encrypted_tags("<encrypted>secret</encrypted>"));
 
         // Versioned tags
-        assert!(has_encrypted_tags("text <encrypted v=\"1\">ciphertext</encrypted> more"));
-        assert!(has_encrypted_tags("<encrypted v=\"1\">ciphertext</encrypted>"));
+        assert!(has_encrypted_tags(
+            "text <encrypted v=\"1\">ciphertext</encrypted> more"
+        ));
+        assert!(has_encrypted_tags(
+            "<encrypted v=\"1\">ciphertext</encrypted>"
+        ));
 
         // No tags
         assert!(!has_encrypted_tags("plain text without any tags"));

@@ -696,7 +696,9 @@ async fn get_builtin_commands() -> Json<BuiltinCommandsResponse> {
     let opencode_commands = vec![
         CommandSummary {
             name: "ralph-loop".to_string(),
-            description: Some("Start self-referential development loop until completion".to_string()),
+            description: Some(
+                "Start self-referential development loop until completion".to_string(),
+            ),
             path: "builtin".to_string(),
             params: vec![],
         },
@@ -714,7 +716,9 @@ async fn get_builtin_commands() -> Json<BuiltinCommandsResponse> {
         },
         CommandSummary {
             name: "refactor".to_string(),
-            description: Some("Intelligent refactoring with LSP, AST-grep, and TDD verification".to_string()),
+            description: Some(
+                "Intelligent refactoring with LSP, AST-grep, and TDD verification".to_string(),
+            ),
             path: "builtin".to_string(),
             params: vec![],
         },
@@ -1137,12 +1141,7 @@ async fn save_init_script(
     library
         .save_init_script(&name, &req.content)
         .await
-        .map(|_| {
-            (
-                StatusCode::OK,
-                "Init script saved successfully".to_string(),
-            )
-        })
+        .map(|_| (StatusCode::OK, "Init script saved successfully".to_string()))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
@@ -1268,8 +1267,8 @@ async fn save_openagent_config(
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
             // Sync to working directory
-            if let Err(e) = workspace::sync_openagent_config(&library, &state.config.working_dir)
-                .await
+            if let Err(e) =
+                workspace::sync_openagent_config(&library, &state.config.working_dir).await
             {
                 tracing::warn!(error = %e, "Failed to sync openagent config to working dir");
             }
@@ -1280,8 +1279,8 @@ async fn save_openagent_config(
             ))
         }
         Err((StatusCode::SERVICE_UNAVAILABLE, _)) => {
-            if let Err(e) = workspace::write_openagent_config(&state.config.working_dir, &config)
-                .await
+            if let Err(e) =
+                workspace::write_openagent_config(&state.config.working_dir, &config).await
             {
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,

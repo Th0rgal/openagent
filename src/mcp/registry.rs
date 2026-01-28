@@ -271,13 +271,11 @@ impl McpRegistry {
             }
 
             let missing_flags: Vec<&str> = match &config.transport {
-                McpTransport::Stdio { args, .. } => {
-                    ["--headless", "--isolated", "--no-sandbox"]
-                        .iter()
-                        .copied()
-                        .filter(|flag| !args.iter().any(|arg| arg == *flag))
-                        .collect()
-                }
+                McpTransport::Stdio { args, .. } => ["--headless", "--isolated", "--no-sandbox"]
+                    .iter()
+                    .copied()
+                    .filter(|flag| !args.iter().any(|arg| arg == *flag))
+                    .collect(),
                 McpTransport::Http { .. } => Vec::new(),
             };
 

@@ -47,7 +47,10 @@ async fn main() -> anyhow::Result<()> {
     // Initialize encryption key (ensures key is available for library operations)
     match env_crypto::ensure_private_key().await {
         Ok(_) => info!("Encryption key initialized"),
-        Err(e) => warn!("Could not initialize encryption key: {}. Library encryption will be unavailable.", e),
+        Err(e) => warn!(
+            "Could not initialize encryption key: {}. Library encryption will be unavailable.",
+            e
+        ),
     }
 
     // Start HTTP server

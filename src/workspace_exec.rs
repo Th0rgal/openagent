@@ -63,12 +63,7 @@ impl WorkspaceExec {
             .entry("OPEN_AGENT_WORKSPACE_TYPE".to_string())
             .or_insert_with(|| self.workspace.workspace_type.as_str().to_string());
         if self.workspace.workspace_type == WorkspaceType::Container {
-            if let Some(name) = self
-                .workspace
-                .path
-                .file_name()
-                .and_then(|n| n.to_str())
-            {
+            if let Some(name) = self.workspace.path.file_name().and_then(|n| n.to_str()) {
                 if !name.trim().is_empty() {
                     merged
                         .entry("OPEN_AGENT_WORKSPACE_NAME".to_string())
@@ -92,7 +87,9 @@ impl WorkspaceExec {
                 .entry("XDG_CACHE_HOME".to_string())
                 .or_insert_with(|| "/root/.cache".to_string());
         }
-        if self.workspace.workspace_type == WorkspaceType::Container && !use_nspawn_for_workspace(&self.workspace) {
+        if self.workspace.workspace_type == WorkspaceType::Container
+            && !use_nspawn_for_workspace(&self.workspace)
+        {
             merged
                 .entry("OPEN_AGENT_CONTAINER_FALLBACK".to_string())
                 .or_insert_with(|| "1".to_string());
@@ -287,15 +284,7 @@ impl WorkspaceExec {
         };
         let mut cmd = Command::new(nsenter);
         cmd.args([
-            "--target",
-            leader,
-            "--mount",
-            "--uts",
-            "--ipc",
-            "--net",
-            "--pid",
-            "/bin/sh",
-            "-lc",
+            "--target", leader, "--mount", "--uts", "--ipc", "--net", "--pid", "/bin/sh", "-lc",
         ]);
         cmd.arg(shell_cmd);
         // Note: env vars are now exported in the shell command, not here.
@@ -355,8 +344,15 @@ impl WorkspaceExec {
                     && !nspawn::tailscale_nspawn_extra_args(&env).is_empty();
                 if let Some(leader) = self.running_container_leader().await {
                     return self.build_nsenter_command(
-                        &leader, cwd, program, args, env, needs_tailscale_bootstrap,
-                        stdin, stdout, stderr,
+                        &leader,
+                        cwd,
+                        program,
+                        args,
+                        env,
+                        needs_tailscale_bootstrap,
+                        stdin,
+                        stdout,
+                        stderr,
                     );
                 }
 
@@ -461,7 +457,9 @@ impl WorkspaceExec {
                     // Build a shell command that:
                     // 1. Runs openagent-tailscale-up (which also calls openagent-network-up)
                     // 2. Execs the actual program to hand off control
-                    let shell_cmd = Self::build_tailscale_bootstrap_command(&rel_cwd, program, args, &env, false);
+                    let shell_cmd = Self::build_tailscale_bootstrap_command(
+                        &rel_cwd, program, args, &env, false,
+                    );
                     tracing::info!(
                         workspace = %self.workspace.name,
                         program = %program,
@@ -531,7 +529,7 @@ impl WorkspaceExec {
                 program,
                 args,
                 env,
-                Stdio::piped(),  // Pipe stdin for processes that read input (e.g., Claude Code --print)
+                Stdio::piped(), // Pipe stdin for processes that read input (e.g., Claude Code --print)
                 Stdio::piped(),
                 Stdio::piped(),
             )

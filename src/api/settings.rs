@@ -210,9 +210,15 @@ fn find_claude_credentials() -> Option<(std::path::PathBuf, &'static str)> {
     // Check locations in order of preference
     let locations = [
         // OpenCode isolated home (used when OPENCODE_CONFIG_DIR is set)
-        ("/var/lib/opencode/.claude/.credentials.json", ".claude/.credentials.json"),
+        (
+            "/var/lib/opencode/.claude/.credentials.json",
+            ".claude/.credentials.json",
+        ),
         // Standard root home
-        ("/root/.claude/.credentials.json", ".claude/.credentials.json"),
+        (
+            "/root/.claude/.credentials.json",
+            ".claude/.credentials.json",
+        ),
     ];
 
     for (path, archive_name) in locations {
@@ -285,7 +291,10 @@ async fn download_backup(
                 } else if let Err(e) = zip.write_all(contents.as_bytes()) {
                     tracing::warn!("Failed to write Claude credentials to backup: {}", e);
                 } else {
-                    tracing::info!("Added Claude credentials to backup from {}", creds_path.display());
+                    tracing::info!(
+                        "Added Claude credentials to backup from {}",
+                        creds_path.display()
+                    );
                 }
             }
         }

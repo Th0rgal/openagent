@@ -101,9 +101,10 @@ impl AmpClient {
             )
         })?;
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            anyhow!("Failed to capture Amp stdout")
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("Failed to capture Amp stdout"))?;
 
         let stderr = child.stderr.take();
 
@@ -208,13 +209,14 @@ impl AmpClient {
             "Continuing Amp thread"
         );
 
-        let mut child = cmd.spawn().map_err(|e| {
-            anyhow!("Failed to spawn Amp CLI: {}", e)
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| anyhow!("Failed to spawn Amp CLI: {}", e))?;
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            anyhow!("Failed to capture Amp stdout")
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("Failed to capture Amp stdout"))?;
 
         let stderr = child.stderr.take();
 

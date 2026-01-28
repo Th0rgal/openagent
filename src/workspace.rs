@@ -632,11 +632,15 @@ fn opencode_entry_from_mcp(
 
             let container_fallback = workspace_env
                 .get("OPEN_AGENT_CONTAINER_FALLBACK")
-                .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "y" | "on"))
+                .map(|v| {
+                    matches!(
+                        v.trim().to_lowercase().as_str(),
+                        "1" | "true" | "yes" | "y" | "on"
+                    )
+                })
                 .unwrap_or(false)
                 || (workspace_type == WorkspaceType::Container && !nspawn::nspawn_available());
-            let per_workspace_runner =
-                env_var_bool("OPEN_AGENT_PER_WORKSPACE_RUNNER", true);
+            let per_workspace_runner = env_var_bool("OPEN_AGENT_PER_WORKSPACE_RUNNER", true);
             if container_fallback {
                 merged_env
                     .entry("OPEN_AGENT_CONTAINER_FALLBACK".to_string())
@@ -745,14 +749,9 @@ fn opencode_entry_from_mcp(
                     } else {
                         format!("/{}", rel.to_string_lossy())
                     };
-                    merged_env
-                        .insert("OPEN_AGENT_WORKSPACE".to_string(), rel_str.clone());
-                    merged_env.insert(
-                        "OPEN_AGENT_WORKSPACE_ROOT".to_string(),
-                        "/".to_string(),
-                    );
-                    merged_env
-                        .insert("WORKING_DIR".to_string(), rel_str);
+                    merged_env.insert("OPEN_AGENT_WORKSPACE".to_string(), rel_str.clone());
+                    merged_env.insert("OPEN_AGENT_WORKSPACE_ROOT".to_string(), "/".to_string());
+                    merged_env.insert("WORKING_DIR".to_string(), rel_str);
                 }
 
                 let mut cmd = vec![resolve_command_path(command)];
@@ -966,11 +965,16 @@ async fn write_opencode_config(
     //   inside the workspace execution context (host/container).
     // - Therefore, OpenCode built-in bash MUST be enabled for all workspace types.
     // - The legacy workspace-mcp/desktop-mcp proxy tools are no longer required for core flows.
-    let enable_desktop_tools =
-        env_var_bool("OPEN_AGENT_ENABLE_DESKTOP_TOOLS", false) || env_var_bool("DESKTOP_ENABLED", false);
+    let enable_desktop_tools = env_var_bool("OPEN_AGENT_ENABLE_DESKTOP_TOOLS", false)
+        || env_var_bool("DESKTOP_ENABLED", false);
     let container_fallback = workspace_env
         .get("OPEN_AGENT_CONTAINER_FALLBACK")
-        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "y" | "on"))
+        .map(|v| {
+            matches!(
+                v.trim().to_lowercase().as_str(),
+                "1" | "true" | "yes" | "y" | "on"
+            )
+        })
         .unwrap_or(false);
     let per_workspace_runner = env_var_bool("OPEN_AGENT_PER_WORKSPACE_RUNNER", true);
     let mut tools = serde_json::Map::new();
@@ -1029,9 +1033,7 @@ async fn write_opencode_config(
     }
 
     {
-        let base_obj = base_config
-            .as_object_mut()
-            .expect("opencode base config");
+        let base_obj = base_config.as_object_mut().expect("opencode base config");
         base_obj.insert(
             "$schema".to_string(),
             json!("https://opencode.ai/config.json"),
@@ -1154,15 +1156,22 @@ async fn write_claudecode_config(
 
         match workspace_type {
             WorkspaceType::Container => {
-                claude_md.push_str("This is an **isolated container workspace** managed by Open Agent.\n\n");
+                claude_md.push_str(
+                    "This is an **isolated container workspace** managed by Open Agent.\n\n",
+                );
                 claude_md.push_str("- Shell commands execute inside the container\n");
                 claude_md.push_str("- Use the built-in `Bash` tool for shell commands\n");
-                claude_md.push_str("- Skills are available in `.claude/skills/` - use `/help` to list them\n");
+                claude_md.push_str(
+                    "- Skills are available in `.claude/skills/` - use `/help` to list them\n",
+                );
             }
             WorkspaceType::Host => {
                 claude_md.push_str("This is a **host workspace** managed by Open Agent.\n\n");
-                claude_md.push_str("- Use the built-in `Bash` tool to run shell commands directly\n");
-                claude_md.push_str("- Skills are available in `.claude/skills/` - use `/help` to list them\n");
+                claude_md
+                    .push_str("- Use the built-in `Bash` tool to run shell commands directly\n");
+                claude_md.push_str(
+                    "- Skills are available in `.claude/skills/` - use `/help` to list them\n",
+                );
             }
         }
 
@@ -1208,7 +1217,13 @@ async fn write_amp_config(
         let key = unique_key(&base, &mut used);
         mcp_servers.insert(
             key,
-            amp_entry_from_mcp(&config, workspace_dir, workspace_root, workspace_type, workspace_env),
+            amp_entry_from_mcp(
+                &config,
+                workspace_dir,
+                workspace_root,
+                workspace_type,
+                workspace_env,
+            ),
         );
     }
 
@@ -1239,7 +1254,8 @@ async fn write_amp_config(
 
     match workspace_type {
         WorkspaceType::Container => {
-            agents_md.push_str("This is an **isolated container workspace** managed by Open Agent.\n\n");
+            agents_md
+                .push_str("This is an **isolated container workspace** managed by Open Agent.\n\n");
             agents_md.push_str("- Shell commands execute inside the container\n");
             agents_md.push_str("- Use the built-in `Bash` tool for shell commands\n");
         }
@@ -1253,10 +1269,15 @@ async fn write_amp_config(
     if let Some(skills) = skill_contents {
         if !skills.is_empty() {
             agents_md.push_str("\n## Available Skills\n\n");
-            agents_md.push_str("The following skills provide specialized instructions for specific tasks.\n");
+            agents_md.push_str(
+                "The following skills provide specialized instructions for specific tasks.\n",
+            );
             agents_md.push_str("Read a skill when the task matches its description.\n\n");
             for skill in skills {
-                let desc = skill.description.as_deref().unwrap_or("A specialized skill");
+                let desc = skill
+                    .description
+                    .as_deref()
+                    .unwrap_or("A specialized skill");
                 agents_md.push_str(&format!(
                     "- **{}**: {} - See @.agents/skills/{}/SKILL.md\n",
                     skill.name, desc, skill.name
@@ -1362,7 +1383,11 @@ pub async fn write_amp_skills_to_workspace(
 }
 
 /// Ensure the skill content has required YAML frontmatter fields for Amp.
-fn ensure_amp_skill_frontmatter(content: &str, skill_name: &str, description: Option<&str>) -> String {
+fn ensure_amp_skill_frontmatter(
+    content: &str,
+    skill_name: &str,
+    description: Option<&str>,
+) -> String {
     // Check if the content already has frontmatter
     if content.starts_with("---") {
         // Already has frontmatter, check if name is present
@@ -1645,8 +1670,11 @@ pub async fn write_claudecode_skills_to_workspace(
         tokio::fs::create_dir_all(&skill_dir).await?;
 
         // Ensure skill content has required frontmatter fields for Claude Code
-        let content_with_frontmatter =
-            ensure_claudecode_skill_frontmatter(&skill.content, &skill.name, skill.description.as_deref());
+        let content_with_frontmatter = ensure_claudecode_skill_frontmatter(
+            &skill.content,
+            &skill.name,
+            skill.description.as_deref(),
+        );
 
         // Strip <encrypted> tags - deployed skills should have bare plaintext values
         let content_for_workspace = strip_encrypted_tags(&content_with_frontmatter);
@@ -1808,7 +1836,23 @@ fn convert_command_to_skill_content(content: &str, name: &str) -> String {
 fn format_yaml_description(desc: &str) -> String {
     let clean = desc.replace('\n', " ");
     // Quote if it contains colons, brackets, or other YAML special characters
-    if clean.contains(':') || clean.contains('[') || clean.contains(']') || clean.contains('{') || clean.contains('}') || clean.contains('#') || clean.contains('&') || clean.contains('*') || clean.contains('!') || clean.contains('|') || clean.contains('>') || clean.contains('\'') || clean.contains('"') || clean.contains('%') || clean.contains('@') || clean.contains('`') {
+    if clean.contains(':')
+        || clean.contains('[')
+        || clean.contains(']')
+        || clean.contains('{')
+        || clean.contains('}')
+        || clean.contains('#')
+        || clean.contains('&')
+        || clean.contains('*')
+        || clean.contains('!')
+        || clean.contains('|')
+        || clean.contains('>')
+        || clean.contains('\'')
+        || clean.contains('"')
+        || clean.contains('%')
+        || clean.contains('@')
+        || clean.contains('`')
+    {
         // Escape any double quotes in the description and wrap in quotes
         format!("\"{}\"", clean.replace('\\', "\\\\").replace('"', "\\\""))
     } else {
@@ -1819,7 +1863,11 @@ fn format_yaml_description(desc: &str) -> String {
 /// Ensure the skill content has proper YAML frontmatter for Claude Code.
 /// Claude Code requires `name` and benefits from `description` for auto-discovery.
 /// Also fixes invalid YAML descriptions that contain colons without quotes.
-fn ensure_claudecode_skill_frontmatter(content: &str, skill_name: &str, description: Option<&str>) -> String {
+fn ensure_claudecode_skill_frontmatter(
+    content: &str,
+    skill_name: &str,
+    description: Option<&str>,
+) -> String {
     // Check if the content starts with YAML frontmatter
     if !content.starts_with("---") {
         // No frontmatter, add it with name and description
@@ -1847,11 +1895,19 @@ fn ensure_claudecode_skill_frontmatter(content: &str, skill_name: &str, descript
                 // Get the description value after "description:"
                 let value = trimmed.strip_prefix("description:").unwrap_or("").trim();
                 // If it starts with a quote or '>' or '|', it's already properly formatted
-                if value.starts_with('"') || value.starts_with('\'') || value.starts_with('>') || value.starts_with('|') {
+                if value.starts_with('"')
+                    || value.starts_with('\'')
+                    || value.starts_with('>')
+                    || value.starts_with('|')
+                {
                     return false;
                 }
                 // Check if it contains YAML special characters that need quoting
-                value.contains(':') || value.contains('[') || value.contains(']') || value.contains('{') || value.contains('}')
+                value.contains(':')
+                    || value.contains('[')
+                    || value.contains(']')
+                    || value.contains('{')
+                    || value.contains('}')
             } else {
                 false
             }
@@ -1875,7 +1931,8 @@ fn ensure_claudecode_skill_frontmatter(content: &str, skill_name: &str, descript
         }
         if !has_description {
             if let Some(desc) = description {
-                new_frontmatter.push_str(&format!("description: {}\n", format_yaml_description(desc)));
+                new_frontmatter
+                    .push_str(&format!("description: {}\n", format_yaml_description(desc)));
             }
         }
 
@@ -1885,7 +1942,10 @@ fn ensure_claudecode_skill_frontmatter(content: &str, skill_name: &str, descript
             if needs_description_fix && trimmed.starts_with("description:") {
                 // Fix the description line
                 let value = trimmed.strip_prefix("description:").unwrap_or("").trim();
-                new_frontmatter.push_str(&format!("description: {}\n", format_yaml_description(value)));
+                new_frontmatter.push_str(&format!(
+                    "description: {}\n",
+                    format_yaml_description(value)
+                ));
             } else if !trimmed.is_empty() {
                 new_frontmatter.push_str(line);
                 new_frontmatter.push('\n');
@@ -2420,8 +2480,7 @@ pub async fn prepare_mission_workspace_with_skills_backend(
 ) -> anyhow::Result<PathBuf> {
     let dir = mission_workspace_dir_for_root(&workspace.path, mission_id);
     prepare_workspace_dir(&dir).await?;
-    let mcp_configs =
-        filter_mcp_configs_for_workspace(mcp.list_configs().await, &workspace.mcps);
+    let mcp_configs = filter_mcp_configs_for_workspace(mcp.list_configs().await, &workspace.mcps);
     let skill_allowlist = if workspace.skills.is_empty() {
         None
     } else {
@@ -3113,7 +3172,10 @@ pub async fn build_container_workspace(
             }
 
             let has_init_scripts = !workspace.init_scripts.is_empty();
-            let has_custom_script = workspace.init_script.as_ref().map_or(false, |s| !s.trim().is_empty());
+            let has_custom_script = workspace
+                .init_script
+                .as_ref()
+                .map_or(false, |s| !s.trim().is_empty());
             if has_init_scripts || has_custom_script {
                 append_to_init_log(&workspace.path, "[openagent] Running init script...\n");
             }
@@ -3242,7 +3304,8 @@ fn env_var_bool(name: &str, default: bool) -> bool {
 }
 
 async fn bootstrap_workspace_harnesses(workspace: &Workspace) -> anyhow::Result<()> {
-    if workspace.workspace_type != WorkspaceType::Container || !use_nspawn_for_workspace(workspace) {
+    if workspace.workspace_type != WorkspaceType::Container || !use_nspawn_for_workspace(workspace)
+    {
         return Ok(());
     }
 
@@ -3360,7 +3423,11 @@ async fn run_workspace_init_script(
     library: Option<&LibraryStore>,
 ) -> anyhow::Result<()> {
     let has_fragments = !workspace.init_scripts.is_empty();
-    let custom_script = workspace.init_script.as_ref().map(|s| s.trim()).unwrap_or("");
+    let custom_script = workspace
+        .init_script
+        .as_ref()
+        .map(|s| s.trim())
+        .unwrap_or("");
 
     // If there are fragments and we have a library, assemble them
     let script = if has_fragments {

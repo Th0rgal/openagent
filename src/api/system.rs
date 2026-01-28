@@ -371,9 +371,8 @@ async fn check_claude_code_update(current_version: Option<&str>) -> Option<Strin
 
     let json: serde_json::Value = resp.json().await.ok()?;
     let latest_raw = json.get("version")?.as_str()?;
-    let latest = extract_version_token(latest_raw).unwrap_or_else(|| {
-        latest_raw.trim_start_matches('v').to_string()
-    });
+    let latest = extract_version_token(latest_raw)
+        .unwrap_or_else(|| latest_raw.trim_start_matches('v').to_string());
 
     if latest != current && version_is_newer(&latest, &current) {
         Some(latest.to_string())
@@ -575,12 +574,7 @@ async fn get_oh_my_opencode_version() -> Option<String> {
     {
         if output.status.success() {
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !version.is_empty()
-                && version
-                    .chars()
-                    .next()
-                    .map_or(false, |c| c.is_ascii_digit())
-            {
+            if !version.is_empty() && version.chars().next().map_or(false, |c| c.is_ascii_digit()) {
                 return Some(version);
             }
         }

@@ -467,7 +467,8 @@ impl MissionStore for SqliteMissionStore {
     }
 
     async fn update_mission_status(&self, id: Uuid, status: MissionStatus) -> Result<(), String> {
-        self.update_mission_status_with_reason(id, status, None).await
+        self.update_mission_status_with_reason(id, status, None)
+            .await
     }
 
     async fn update_mission_status_with_reason(
@@ -1110,7 +1111,7 @@ impl MissionStore for SqliteMissionStore {
 
     async fn get_total_cost_cents(&self) -> Result<u64, String> {
         let conn = self.conn.lock().await;
-        
+
         // Use SQLite JSON1 extension to extract cost_cents from metadata
         // and sum across all assistant_message events
         let query = r#"
@@ -1125,10 +1126,11 @@ impl MissionStore for SqliteMissionStore {
             FROM mission_events
             WHERE event_type = 'assistant_message'
         "#;
-        
-        let total: i64 = conn.query_row(query, [], |row| row.get(0))
+
+        let total: i64 = conn
+            .query_row(query, [], |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        
+
         Ok(total as u64)
     }
 }

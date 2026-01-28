@@ -211,7 +211,9 @@ pub fn get_anthropic_auth_for_claudecode(working_dir: &Path) -> Option<ClaudeCod
     if let Some(auth) = get_anthropic_auth_from_ai_providers(working_dir) {
         return Some(auth);
     }
-    tracing::debug!("No Anthropic credentials found in ai_providers.json, trying Claude CLI credentials");
+    tracing::debug!(
+        "No Anthropic credentials found in ai_providers.json, trying Claude CLI credentials"
+    );
 
     // Fall back to Claude CLI's own credentials file
     let result = get_anthropic_auth_from_claude_cli_credentials();
@@ -231,7 +233,9 @@ pub fn get_anthropic_auth_for_claudecode(working_dir: &Path) -> Option<ClaudeCod
 /// - Host workspaces: checks nothing (standard paths are handled by get_anthropic_auth_from_opencode_auth)
 ///
 /// Returns auth with expiry info to enable freshness comparison.
-pub fn get_anthropic_auth_from_workspace(workspace_root: &std::path::Path) -> Option<ClaudeCodeAuthWithExpiry> {
+pub fn get_anthropic_auth_from_workspace(
+    workspace_root: &std::path::Path,
+) -> Option<ClaudeCodeAuthWithExpiry> {
     // For container workspaces, look inside the container's root filesystem
     // The auth file is at: <workspace_root>/root/.opencode/auth/anthropic.json
     let auth_path = workspace_root
@@ -284,8 +288,10 @@ pub fn get_anthropic_auth_from_workspace(workspace_root: &std::path::Path) -> Op
     let auth_type = anthropic_auth.get("type").and_then(|v| v.as_str());
 
     // Determine if this is an OAuth token (for expiry handling)
-    let is_oauth = matches!(auth_type, Some("oauth")) ||
-        (auth_type.is_none() && anthropic_auth.get("access").is_some() && anthropic_auth.get("key").is_none());
+    let is_oauth = matches!(auth_type, Some("oauth"))
+        || (auth_type.is_none()
+            && anthropic_auth.get("access").is_some()
+            && anthropic_auth.get("key").is_none());
 
     let auth = match auth_type {
         Some("api_key") | Some("api") => anthropic_auth
@@ -382,7 +388,9 @@ pub fn get_anthropic_auth_from_host_with_expiry() -> Option<ClaudeCodeAuthWithEx
 /// Refresh an expired workspace Anthropic OAuth token.
 /// Reads the refresh token from the workspace auth file, refreshes it via Anthropic API,
 /// and writes the new token back to the same file.
-pub async fn refresh_workspace_anthropic_auth(workspace_root: &std::path::Path) -> Result<ClaudeCodeAuthWithExpiry, String> {
+pub async fn refresh_workspace_anthropic_auth(
+    workspace_root: &std::path::Path,
+) -> Result<ClaudeCodeAuthWithExpiry, String> {
     let auth_path = get_workspace_auth_path(workspace_root);
     if !auth_path.exists() {
         return Err("No workspace auth file found".to_string());
@@ -790,9 +798,7 @@ fn build_provider_response(
         .unwrap_or_else(|| provider_type.display_name().to_string());
     let base_url = config.as_ref().and_then(|c| c.base_url.clone());
     let enabled = config.as_ref().and_then(|c| c.enabled).unwrap_or(true);
-    let google_project_id = config
-        .as_ref()
-        .and_then(|c| c.google_project_id.clone());
+    let google_project_id = config.as_ref().and_then(|c| c.google_project_id.clone());
     let is_default = default_provider
         .map(|p| p == provider_type)
         .unwrap_or(false);
@@ -998,7 +1004,9 @@ fn sync_to_opencode_auth(
     );
 
     // Also write to Open Agent's canonical credential store
-    if let Err(e) = write_openagent_credential(provider_type, refresh_token, access_token, expires_at) {
+    if let Err(e) =
+        write_openagent_credential(provider_type, refresh_token, access_token, expires_at)
+    {
         tracing::warn!("Failed to write Open Agent credentials: {}", e);
     }
 
@@ -1006,7 +1014,12 @@ fn sync_to_opencode_auth(
     if matches!(provider_type, ProviderType::Anthropic) {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
         let claude_dir = PathBuf::from(home).join(".claude");
-        if let Err(e) = write_claudecode_credentials_from_entry(&claude_dir, access_token, refresh_token, expires_at) {
+        if let Err(e) = write_claudecode_credentials_from_entry(
+            &claude_dir,
+            access_token,
+            refresh_token,
+            expires_at,
+        ) {
             tracing::warn!("Failed to sync Claude Code credentials: {}", e);
         }
     }
@@ -1100,10 +1113,7 @@ fn read_openagent_credential(provider_type: ProviderType) -> Option<OAuthTokenEn
             Some(t) => t,
             None => continue,
         };
-        let access_token = entry
-            .get("access")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let access_token = entry.get("access").and_then(|v| v.as_str()).unwrap_or("");
         let expires_at = entry.get("expires").and_then(|v| v.as_i64()).unwrap_or(0);
 
         tracing::debug!(
@@ -1209,7 +1219,9 @@ fn remove_openagent_credential(provider_type: ProviderType) -> Result<(), String
 fn read_anthropic_from_claude_credentials() -> Option<OAuthTokenEntry> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let candidates = vec![
-        PathBuf::from(&home).join(".claude").join(".credentials.json"),
+        PathBuf::from(&home)
+            .join(".claude")
+            .join(".credentials.json"),
         PathBuf::from("/var/lib/opencode")
             .join(".claude")
             .join(".credentials.json"),
@@ -1241,10 +1253,7 @@ fn read_anthropic_from_claude_credentials() -> Option<OAuthTokenEntry> {
             .get("accessToken")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let expires_at = oauth
-            .get("expiresAt")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
+        let expires_at = oauth.get("expiresAt").and_then(|v| v.as_i64()).unwrap_or(0);
 
         tracing::debug!(
             path = %path.display(),
@@ -1435,7 +1444,10 @@ pub async fn refresh_anthropic_oauth_token() -> Result<(), String> {
             && lower.contains("invalid_grant")
         {
             if let Err(e) = remove_opencode_auth_entry(ProviderType::Anthropic) {
-                tracing::warn!("Failed to clear Anthropic auth entry after invalid_grant: {}", e);
+                tracing::warn!(
+                    "Failed to clear Anthropic auth entry after invalid_grant: {}",
+                    e
+                );
             }
         }
         return Err(format!(
@@ -1520,10 +1532,14 @@ pub async fn refresh_openai_oauth_token() -> Result<(), String> {
             error_text
         );
         let lower = error_text.to_lowercase();
-        if status == reqwest::StatusCode::BAD_REQUEST || status == reqwest::StatusCode::UNAUTHORIZED {
+        if status == reqwest::StatusCode::BAD_REQUEST || status == reqwest::StatusCode::UNAUTHORIZED
+        {
             if lower.contains("invalid_grant") || lower.contains("refresh_token_reused") {
                 if let Err(e) = remove_opencode_auth_entry(ProviderType::OpenAI) {
-                    tracing::warn!("Failed to clear OpenAI auth entry after refresh failure: {}", e);
+                    tracing::warn!(
+                        "Failed to clear OpenAI auth entry after refresh failure: {}",
+                        e
+                    );
                 }
             }
         }
@@ -1613,7 +1629,10 @@ pub async fn refresh_google_oauth_token() -> Result<(), String> {
             && lower.contains("invalid_grant")
         {
             if let Err(e) = remove_opencode_auth_entry(ProviderType::Google) {
-                tracing::warn!("Failed to clear Google auth entry after invalid_grant: {}", e);
+                tracing::warn!(
+                    "Failed to clear Google auth entry after invalid_grant: {}",
+                    e
+                );
             }
         }
         return Err(format!(
@@ -1682,7 +1701,9 @@ pub async fn ensure_google_oauth_token_valid() -> Result<(), String> {
 /// ```
 ///
 /// This allows Claude Code to refresh tokens automatically during long-running missions.
-pub fn write_claudecode_credentials_to_path(credentials_dir: &std::path::Path) -> Result<(), String> {
+pub fn write_claudecode_credentials_to_path(
+    credentials_dir: &std::path::Path,
+) -> Result<(), String> {
     let entry = read_oauth_token_entry(ProviderType::Anthropic)
         .ok_or_else(|| "No Anthropic OAuth entry found".to_string())?;
 
@@ -1727,7 +1748,9 @@ pub fn write_claudecode_credentials_to_path(credentials_dir: &std::path::Path) -
 ///
 /// For container workspaces, writes to the container's root home directory.
 /// For host workspaces, writes to the host's home directory.
-pub fn write_claudecode_credentials_for_workspace(workspace: &crate::workspace::Workspace) -> Result<(), String> {
+pub fn write_claudecode_credentials_for_workspace(
+    workspace: &crate::workspace::Workspace,
+) -> Result<(), String> {
     use crate::workspace::WorkspaceType;
 
     let entry = read_oauth_token_entry(ProviderType::Anthropic)
@@ -1951,15 +1974,12 @@ fn get_opencode_provider_auth_path(provider_type: ProviderType) -> PathBuf {
         }
     }
 
-    candidates
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| {
-            PathBuf::from(home)
-                .join(".opencode")
-                .join("auth")
-                .join(format!("{}.json", provider_type.id()))
-        })
+    candidates.into_iter().next().unwrap_or_else(|| {
+        PathBuf::from(home)
+            .join(".opencode")
+            .join("auth")
+            .join(format!("{}.json", provider_type.id()))
+    })
 }
 
 fn read_opencode_provider_auth(provider_type: ProviderType) -> Result<Option<AuthKind>, String> {
@@ -2000,7 +2020,6 @@ fn opencode_auth_keys(provider_type: ProviderType) -> Vec<&'static str> {
         _ => vec![provider_type.id()],
     }
 }
-
 
 fn get_opencode_config_path(working_dir: &Path) -> PathBuf {
     if let Ok(path) = std::env::var("OPENCODE_CONFIG") {
@@ -2208,10 +2227,8 @@ fn set_provider_config_entry(
                         .entry("options".to_string())
                         .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
                     if let Some(options_obj) = options.as_object_mut() {
-                        options_obj.insert(
-                            "projectId".to_string(),
-                            serde_json::Value::String(value),
-                        );
+                        options_obj
+                            .insert("projectId".to_string(), serde_json::Value::String(value));
                     }
                 }
                 None => {
@@ -2479,7 +2496,10 @@ async fn set_opencode_auth(
     if keys.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            format!("Provider {} does not map to OpenCode auth keys", req.provider),
+            format!(
+                "Provider {} does not map to OpenCode auth keys",
+                req.provider
+            ),
         ));
     }
 

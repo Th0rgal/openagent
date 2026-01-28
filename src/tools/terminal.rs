@@ -230,7 +230,10 @@ fn container_root_from_env() -> Option<PathBuf> {
         return None;
     }
     if let Ok(flag) = env::var("OPEN_AGENT_CONTAINER_FALLBACK") {
-        if matches!(flag.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "y" | "on") {
+        if matches!(
+            flag.trim().to_lowercase().as_str(),
+            "1" | "true" | "yes" | "y" | "on"
+        ) {
             return None;
         }
     }

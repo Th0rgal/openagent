@@ -180,7 +180,8 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
             entry
         },
         {
-            let mut entry = BackendConfigEntry::new("claudecode", "Claude Code", serde_json::json!({}));
+            let mut entry =
+                BackendConfigEntry::new("claudecode", "Claude Code", serde_json::json!({}));
             entry.enabled = claude_detected;
             entry
         },
@@ -665,14 +666,27 @@ async fn get_stats(
 
     // Get mission stats from mission store
     let control_state = state.control.get_or_spawn(&user).await;
-    
+
     // Count missions by status
-    let missions = control_state.mission_store.list_missions(1000, 0).await.unwrap_or_default();
+    let missions = control_state
+        .mission_store
+        .list_missions(1000, 0)
+        .await
+        .unwrap_or_default();
     let mission_total = missions.len();
-    let mission_active = missions.iter().filter(|m| m.status == super::control::MissionStatus::Active).count();
-    let mission_completed = missions.iter().filter(|m| m.status == super::control::MissionStatus::Completed).count();
-    let mission_failed = missions.iter().filter(|m| m.status == super::control::MissionStatus::Failed).count();
-    
+    let mission_active = missions
+        .iter()
+        .filter(|m| m.status == super::control::MissionStatus::Active)
+        .count();
+    let mission_completed = missions
+        .iter()
+        .filter(|m| m.status == super::control::MissionStatus::Completed)
+        .count();
+    let mission_failed = missions
+        .iter()
+        .filter(|m| m.status == super::control::MissionStatus::Failed)
+        .count();
+
     // Combine legacy tasks and missions
     let total_tasks = legacy_total + mission_total;
     let active_tasks = legacy_active + mission_active;

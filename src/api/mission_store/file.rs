@@ -132,7 +132,8 @@ impl MissionStore for FileMissionStore {
     }
 
     async fn update_mission_status(&self, id: Uuid, status: MissionStatus) -> Result<(), String> {
-        self.update_mission_status_with_reason(id, status, None).await
+        self.update_mission_status_with_reason(id, status, None)
+            .await
     }
 
     async fn update_mission_status_with_reason(

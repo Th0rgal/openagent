@@ -30,7 +30,12 @@ pub(crate) fn desktop_enabled() -> bool {
 
 fn env_var_bool(name: &str) -> bool {
     std::env::var(name)
-        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "y" | "on"))
+        .map(|v| {
+            matches!(
+                v.trim().to_lowercase().as_str(),
+                "1" | "true" | "yes" | "y" | "on"
+            )
+        })
         .unwrap_or(false)
 }
 

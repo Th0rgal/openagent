@@ -253,7 +253,7 @@ pub async fn update_backend_config(
                     "Invalid settings payload".to_string(),
                 )
             })?;
-            
+
             tracing::debug!("Amp config update - received settings: {:?}", req.settings);
 
             // Get current config to preserve api_key if not being updated
@@ -274,7 +274,7 @@ pub async fn update_backend_config(
 
             // Use new key if provided, otherwise keep existing
             let api_key = new_api_key.or(current_api_key);
-            
+
             tracing::debug!(
                 "Amp config update - api_key present: {}, api_key_len: {:?}",
                 api_key.is_some(),

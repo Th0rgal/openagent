@@ -331,33 +331,31 @@ pub fn convert_cli_event(
             );
         }
 
-        CliEvent::StreamEvent(wrapper) => {
-            match wrapper.event {
-                StreamEvent::ContentBlockDelta { delta, .. } => {
-                    if let Some(text) = delta.text {
-                        if !text.is_empty() {
-                            results.push(ExecutionEvent::TextDelta { content: text });
-                        }
-                    }
-                    if let Some(thinking) = delta.thinking {
-                        if !thinking.is_empty() {
-                            results.push(ExecutionEvent::Thinking { content: thinking });
-                        }
-                    }
-                    if let Some(partial) = delta.partial_json {
-                        debug!("Tool input delta: {}", partial);
+        CliEvent::StreamEvent(wrapper) => match wrapper.event {
+            StreamEvent::ContentBlockDelta { delta, .. } => {
+                if let Some(text) = delta.text {
+                    if !text.is_empty() {
+                        results.push(ExecutionEvent::TextDelta { content: text });
                     }
                 }
-                StreamEvent::ContentBlockStart { content_block, .. } => {
-                    if content_block.block_type == "tool_use" {
-                        if let (Some(id), Some(name)) = (content_block.id, content_block.name) {
-                            pending_tools.insert(id, name);
-                        }
+                if let Some(thinking) = delta.thinking {
+                    if !thinking.is_empty() {
+                        results.push(ExecutionEvent::Thinking { content: thinking });
                     }
                 }
-                _ => {}
+                if let Some(partial) = delta.partial_json {
+                    debug!("Tool input delta: {}", partial);
+                }
             }
-        }
+            StreamEvent::ContentBlockStart { content_block, .. } => {
+                if content_block.block_type == "tool_use" {
+                    if let (Some(id), Some(name)) = (content_block.id, content_block.name) {
+                        pending_tools.insert(id, name);
+                    }
+                }
+            }
+            _ => {}
+        },
 
         CliEvent::Assistant(evt) => {
             for block in evt.message.content {

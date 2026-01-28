@@ -189,12 +189,14 @@ async fn resolve_claudecode_default_model(library: &SharedLibrary) -> Option<Str
     }?;
 
     match lib.get_claudecode_config().await {
-        Ok(config) => config
-            .default_model
-            .and_then(|model| {
-                let trimmed = model.trim().to_string();
-                if trimmed.is_empty() { None } else { Some(trimmed) }
-            }),
+        Ok(config) => config.default_model.and_then(|model| {
+            let trimmed = model.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        }),
         Err(err) => {
             tracing::warn!("Failed to load Claude Code config from library: {}", err);
             None
@@ -1565,7 +1567,10 @@ pub async fn get_opencode_diagnostics(
         base_url: "per-mission-cli-mode".to_string(),
         session_id: None,
         session_status: None,
-        error: Some("Per-mission CLI mode: No central server. Each mission spawns its own CLI process.".to_string()),
+        error: Some(
+            "Per-mission CLI mode: No central server. Each mission spawns its own CLI process."
+                .to_string(),
+        ),
     }))
 }
 
@@ -2049,7 +2054,8 @@ fn spawn_control_session(
                         {
                             tracing::warn!(
                                 "Failed to mark orphaned mission {} as interrupted: {}",
-                                mission.id, e
+                                mission.id,
+                                e
                             );
                         } else {
                             let _ = tx.send(AgentEvent::MissionStatusChanged {
@@ -2067,7 +2073,10 @@ fn spawn_control_session(
                     tracing::debug!("Startup recovery: no orphaned active missions found");
                 }
                 Err(e) => {
-                    tracing::warn!("Startup recovery: failed to check for orphaned missions: {}", e);
+                    tracing::warn!(
+                        "Startup recovery: failed to check for orphaned missions: {}",
+                        e
+                    );
                 }
             }
         });
@@ -2158,7 +2167,8 @@ async fn stale_mission_cleanup_loop(
                         {
                             tracing::warn!(
                                 "Failed to mark orphaned mission {} as interrupted: {}",
-                                mission.id, e
+                                mission.id,
+                                e
                             );
                         } else {
                             let _ = events_tx.send(AgentEvent::MissionStatusChanged {
@@ -4229,7 +4239,7 @@ async fn run_single_control_turn(
                 tracing::warn!("Failed to prepare mission workspace: {}", e);
                 ws.path.clone()
             }
-            };
+        };
         (dir, Some(ws))
     } else {
         (

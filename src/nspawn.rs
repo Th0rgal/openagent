@@ -224,11 +224,8 @@ pub fn tailscale_nspawn_extra_args(env: &HashMap<String, String>) -> Vec<String>
 /// Return the cache directory for rootfs tarballs.
 /// Defaults to `{WORKING_DIR}/.openagent/cache` (sibling of `containers/`).
 fn rootfs_cache_dir() -> PathBuf {
-    let working_dir = std::env::var("WORKING_DIR")
-        .unwrap_or_else(|_| "/root".to_string());
-    PathBuf::from(working_dir)
-        .join(".openagent")
-        .join("cache")
+    let working_dir = std::env::var("WORKING_DIR").unwrap_or_else(|_| "/root".to_string());
+    PathBuf::from(working_dir).join(".openagent").join("cache")
 }
 
 /// Return the path for a cached rootfs tarball for the given distro.
@@ -400,12 +397,8 @@ async fn create_debootstrap_container(path: &Path, distro: NspawnDistro) -> Nspa
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
-    let log_for_stdout = log_file
-        .as_ref()
-        .and_then(|f| f.try_clone().ok());
-    let log_for_stderr = log_file
-        .as_ref()
-        .and_then(|f| f.try_clone().ok());
+    let log_for_stdout = log_file.as_ref().and_then(|f| f.try_clone().ok());
+    let log_for_stderr = log_file.as_ref().and_then(|f| f.try_clone().ok());
 
     let stdout_handle = tokio::spawn(async move {
         let mut collected = Vec::new();
@@ -455,7 +448,10 @@ async fn create_debootstrap_container(path: &Path, distro: NspawnDistro) -> Nspa
         collected
     });
 
-    let status = child.wait().await.map_err(|e| NspawnError::Debootstrap(e.to_string()))?;
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| NspawnError::Debootstrap(e.to_string()))?;
     let _ = stdout_handle.await;
     let stderr_bytes = stderr_handle.await.unwrap_or_default();
 

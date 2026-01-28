@@ -388,7 +388,8 @@ impl LibraryStore {
         fs::create_dir_all(&skill_dir).await?;
 
         // Encrypt any unversioned encrypted tags (lazily generates key if needed)
-        let key = env_crypto::ensure_private_key().await
+        let key = env_crypto::ensure_private_key()
+            .await
             .context("Failed to ensure encryption key for saving skill")?;
 
         tracing::debug!(skill = %name, "Encryption key loaded, encrypting content tags");
@@ -536,7 +537,8 @@ impl LibraryStore {
 
         // Encrypt tags in .md files (lazily generates key if needed)
         let content_to_write = if ref_path.ends_with(".md") {
-            let key = env_crypto::ensure_private_key().await
+            let key = env_crypto::ensure_private_key()
+                .await
                 .context("Failed to ensure encryption key for saving reference")?;
             env_crypto::encrypt_content_tags(&key, content)?
         } else {
@@ -1233,15 +1235,15 @@ impl LibraryStore {
         let env_vars = if encrypted_set.is_empty() {
             template.env_vars.clone()
         } else {
-            let key = env_crypto::ensure_private_key().await
+            let key = env_crypto::ensure_private_key()
+                .await
                 .context("Failed to ensure encryption key for saving template")?;
             let mut result = HashMap::with_capacity(template.env_vars.len());
             for (k, v) in &template.env_vars {
                 if encrypted_set.contains(k) {
                     result.insert(
                         k.clone(),
-                        env_crypto::encrypt_value(&key, v)
-                            .context("Failed to encrypt env var")?,
+                        env_crypto::encrypt_value(&key, v).context("Failed to encrypt env var")?,
                     );
                 } else {
                     result.insert(k.clone(), v.clone());
@@ -1320,12 +1322,18 @@ impl LibraryStore {
 
             // Read and extract description from first comment line
             let content = fs::read_to_string(&script_sh).await.ok();
-            let description = content.as_ref().and_then(|c| Self::extract_script_description(c));
+            let description = content
+                .as_ref()
+                .and_then(|c| Self::extract_script_description(c));
 
             scripts.push(InitScriptSummary {
                 name,
                 description,
-                path: format!("{}/{}/SCRIPT.sh", INIT_SCRIPT_DIR, entry.file_name().to_string_lossy()),
+                path: format!(
+                    "{}/{}/SCRIPT.sh",
+                    INIT_SCRIPT_DIR,
+                    entry.file_name().to_string_lossy()
+                ),
             });
         }
 
@@ -1414,7 +1422,12 @@ impl LibraryStore {
             // Strip shebang from fragment content if present
             let content = if script.content.starts_with("#!") {
                 // Skip the first line (shebang)
-                script.content.lines().skip(1).collect::<Vec<_>>().join("\n")
+                script
+                    .content
+                    .lines()
+                    .skip(1)
+                    .collect::<Vec<_>>()
+                    .join("\n")
             } else {
                 script.content.clone()
             };

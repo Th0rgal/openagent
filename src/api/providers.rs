@@ -6,7 +6,10 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use axum::{extract::{Query, State}, Json};
+use axum::{
+    extract::{Query, State},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 
 use super::routes::AppState;
@@ -277,7 +280,9 @@ fn get_configured_provider_ids(working_dir: &std::path::Path) -> HashSet<String>
     // 3. Check Open Agent provider config (.openagent/ai_providers.json)
     let ai_providers_path = working_dir.join(".openagent").join("ai_providers.json");
     if let Ok(contents) = std::fs::read_to_string(&ai_providers_path) {
-        if let Ok(providers) = serde_json::from_str::<Vec<crate::ai_providers::AIProvider>>(&contents) {
+        if let Ok(providers) =
+            serde_json::from_str::<Vec<crate::ai_providers::AIProvider>>(&contents)
+        {
             for provider in providers {
                 if provider.enabled && provider.has_credentials() {
                     configured.insert(provider.provider_type.id().to_string());
@@ -317,7 +322,5 @@ pub async fn list_providers(
             .collect()
     };
 
-    Json(ProvidersResponse {
-        providers,
-    })
+    Json(ProvidersResponse { providers })
 }
