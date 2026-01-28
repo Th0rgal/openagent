@@ -2379,10 +2379,11 @@ async fn control_actor_loop(
     ) -> Result<(Mission, String), String> {
         let mission = load_mission_record(mission_store, mission_id).await?;
 
-        // Check if mission can be resumed (interrupted or blocked)
+        // Check if mission can be resumed (interrupted, blocked, or failed)
+        // Failed missions can be resumed to retry after transient errors (e.g., 529 overloaded)
         if !matches!(
             mission.status,
-            MissionStatus::Interrupted | MissionStatus::Blocked
+            MissionStatus::Interrupted | MissionStatus::Blocked | MissionStatus::Failed
         ) {
             return Err(format!(
                 "Mission {} cannot be resumed (status: {})",
@@ -2414,6 +2415,7 @@ async fn control_actor_loop(
         // Add resumption notice based on status
         let resume_reason = match mission.status {
             MissionStatus::Blocked => "reached its iteration limit",
+            MissionStatus::Failed => "failed due to an error (retrying)",
             _ => "was interrupted",
         };
 
@@ -3575,12 +3577,21 @@ async fn control_actor_loop(
                                                     _ if agent_result.success => MissionStatus::Completed,
                                                     _ => MissionStatus::Failed,
                                                 };
+                                                // Convert terminal_reason to string for storage
+                                                let terminal_reason_str = agent_result.terminal_reason.map(|r| match r {
+                                                    TerminalReason::Completed => "completed",
+                                                    TerminalReason::Cancelled => "cancelled",
+                                                    TerminalReason::LlmError => "llm_error",
+                                                    TerminalReason::Stalled => "stalled",
+                                                    TerminalReason::InfiniteLoop => "infinite_loop",
+                                                    TerminalReason::MaxIterations => "max_iterations",
+                                                });
                                                 tracing::info!(
                                                     "Auto-completing mission {} with status '{:?}' (terminal_reason: {:?})",
                                                     mission_id, new_status, agent_result.terminal_reason
                                                 );
                                                 if let Err(e) = mission_store
-                                                    .update_mission_status(mission_id, new_status)
+                                                    .update_mission_status_with_reason(mission_id, new_status, terminal_reason_str)
                                                     .await
                                                 {
                                                     tracing::warn!("Failed to auto-complete mission: {}", e);
