@@ -302,7 +302,7 @@ scripts/validate_skill_isolation.sh
 
 ### 3.3 Install oh-my-opencode (agent pack)
 
-Install the default agent pack as root:
+Install the default agent pack. **Always use `bunx`, never `npm install -g`**:
 
 ```bash
 bunx oh-my-opencode install --no-tui --claude=max20 --gemini=yes
@@ -312,15 +312,16 @@ This installs the **Sisyphus** default agent (plus other personalities like
 Oracle, Librarian, etc.).
 
 **Important**: If you enabled strong workspace skill isolation (section 3.2.1),
-the OpenCode service runs with `HOME=/var/lib/opencode`. The
-`oh-my-opencode install` command writes to `/root/.config/opencode/` by default,
-so you must copy the configs to the isolated home:
+the OpenCode service runs with `HOME=/var/lib/opencode`. Install oh-my-opencode
+with the correct HOME to ensure version detection works:
 
 ```bash
-# Copy configs to isolated OpenCode home (required if using section 3.2.1)
+# Install with isolated HOME (required if using section 3.2.1)
 mkdir -p /var/lib/opencode/.config/opencode
-cp /root/.config/opencode/opencode.json /var/lib/opencode/.config/opencode/
-cp /root/.config/opencode/oh-my-opencode.json /var/lib/opencode/.config/opencode/
+HOME=/var/lib/opencode bunx oh-my-opencode install --no-tui --claude=max20 --gemini=yes
+
+# Also copy/create configs if needed
+cp /root/.config/opencode/opencode.json /var/lib/opencode/.config/opencode/ 2>/dev/null || true
 systemctl restart opencode.service
 
 # Verify agents are loaded
@@ -860,27 +861,57 @@ curl -fsSL http://127.0.0.1:4096/global/health | jq .
 ### 9.4 Update oh-my-opencode
 
 oh-my-opencode is installed via `bunx` and cached in the service's HOME
-directory (`/var/lib/opencode/.bun/install/cache/`). Updates can be triggered
-from the dashboard (Settings → System Components) or manually:
+directory. Updates can be triggered from the dashboard (Settings → System
+Components) or manually:
 
 ```bash
-# Run as the service user context
-sudo -u root HOME=/var/lib/opencode bunx oh-my-opencode@latest install --no-tui --claude=yes --gemini=yes --copilot=no
+# Run with the same HOME as the Open Agent service
+# Check your /etc/open_agent/open_agent.env for the correct HOME value
+source /etc/open_agent/open_agent.env
+bunx oh-my-opencode@latest install --no-tui --claude=yes --gemini=yes --copilot=no
 ```
 
 **Important:** Do NOT install oh-my-opencode globally via `npm install -g`. This
-creates version detection conflicts. Always use `bunx` which caches packages in
-the HOME directory.
+creates version detection conflicts because the global binary in PATH takes
+precedence over bunx cache. Always use `bunx` which caches packages in the HOME
+directory.
 
-To clean up a stale global install:
+#### Troubleshooting version detection issues
+
+If the dashboard shows an old version after updating, check for stale
+installations:
 
 ```bash
+# 1. Check for npm global install
+npm ls -g oh-my-opencode
+# If found, remove it:
 npm uninstall -g oh-my-opencode
+
+# 2. Check for stale binaries in common locations
+which oh-my-opencode
+ls -la /usr/local/bin/oh-my-opencode
+ls -la /usr/bin/oh-my-opencode
+# Remove any found:
+rm -f /usr/local/bin/oh-my-opencode /usr/bin/oh-my-opencode
+
+# 3. Check NVM paths (if using NVM for Node.js)
+ls /root/.nvm/versions/node/*/bin/oh-my-opencode 2>/dev/null
+# Remove any found:
+rm -f /root/.nvm/versions/node/*/bin/oh-my-opencode
+
+# 4. Clear bun cache for the service's HOME
+# Use the same HOME as configured in /etc/open_agent/open_agent.env
+source /etc/open_agent/open_agent.env
+rm -rf $HOME/.bun/install/cache/oh-my-opencode*
+
+# 5. Reinstall and verify
+bunx oh-my-opencode@latest install --no-tui --claude=yes --gemini=yes --copilot=no
+bunx oh-my-opencode --version
 ```
 
-The service detects versions from `$HOME/.bun/install/cache/oh-my-opencode@*`
-directories. Ensure the service's HOME (`/var/lib/opencode`) is used
-consistently.
+The service detects versions by running `bunx oh-my-opencode --version`. If
+there's a binary earlier in PATH, it will report that version instead of the
+bunx-cached version.
 
 ## 10) Production Security (TLS + Reverse Proxy)
 

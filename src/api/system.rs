@@ -1007,7 +1007,7 @@ fn stream_oh_my_opencode_update() -> impl Stream<Item = Result<Event, std::conve
         let _ = Command::new("bash")
             .args([
                 "-c",
-                &format!("rm -rf {}/.bun/install/cache/oh-my-opencode@*", home),
+                &format!("rm -rf {}/.bun/install/cache/oh-my-opencode*", home),
             ])
             .output()
             .await;
