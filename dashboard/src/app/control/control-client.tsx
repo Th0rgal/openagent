@@ -5071,7 +5071,7 @@ export default function ControlClient() {
                     {activeMission.status === "blocked" && (
                       <div className="mt-4 flex gap-2">
                         <button
-                          onClick={() => handleResumeMission(false)}
+                          onClick={() => handleResumeMission()}
                           disabled={missionLoading}
                           className="inline-flex items-center gap-2 rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-600 transition-colors disabled:opacity-50"
                         >
@@ -5081,15 +5081,6 @@ export default function ControlClient() {
                             <PlayCircle className="h-4 w-4" />
                           )}
                           Continue Mission
-                        </button>
-                        <button
-                          onClick={() => handleResumeMission(true)}
-                          disabled={missionLoading}
-                          className="inline-flex items-center gap-2 rounded-lg bg-white/10 border border-white/20 px-4 py-2 text-sm font-medium text-white/70 hover:bg-white/20 hover:text-white transition-colors disabled:opacity-50"
-                          title="Delete work folder and start fresh"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                          Clean & Continue
                         </button>
                       </div>
                     )}
@@ -5242,19 +5233,11 @@ export default function ControlClient() {
                         {!item.success && item.resumable && (
                           <div className="mt-3 flex gap-2">
                             <button
-                              onClick={() => handleResumeMission(false)}
+                              onClick={() => handleResumeMission()}
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 rounded-lg transition-colors"
                             >
                               <RotateCcw className="h-3 w-3" />
                               Resume Mission
-                            </button>
-                            <button
-                              onClick={() => handleResumeMission(true)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white/60 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] rounded-lg transition-colors"
-                              title="Resume and clean workspace"
-                            >
-                              <RefreshCw className="h-3 w-3" />
-                              Clean Resume
                             </button>
                           </div>
                         )}
@@ -5457,19 +5440,11 @@ export default function ControlClient() {
                       {item.resumable && (
                         <div className="mt-3 flex gap-2">
                           <button
-                            onClick={() => handleResumeMission(false)}
+                            onClick={() => handleResumeMission()}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 rounded-lg transition-colors"
                           >
                             <RotateCcw className="h-3 w-3" />
                             Resume Mission
-                          </button>
-                          <button
-                            onClick={() => handleResumeMission(true)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white/60 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] rounded-lg transition-colors"
-                            title="Resume and clean workspace"
-                          >
-                            <RefreshCw className="h-3 w-3" />
-                            Clean Resume
                           </button>
                         </div>
                       )}
@@ -5610,7 +5585,7 @@ export default function ControlClient() {
                       <span className="text-white/50 ml-1">— Agent used all {maxIterations} iterations</span>
                     </div>
                     <button
-                      onClick={() => handleResumeMission(false)}
+                      onClick={() => handleResumeMission()}
                       disabled={missionLoading}
                       className="ml-2 inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-medium text-black hover:bg-amber-400 transition-colors disabled:opacity-50"
                     >
@@ -5621,19 +5596,10 @@ export default function ControlClient() {
                       )}
                       Continue
                     </button>
-                    <button
-                      onClick={() => handleResumeMission(true)}
-                      disabled={missionLoading}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 border border-white/20 px-3 py-1.5 text-sm font-medium text-white/70 hover:bg-white/20 hover:text-white transition-colors disabled:opacity-50"
-                      title="Delete work folder and start fresh"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Clean & Continue
-                    </button>
                   </div>
                 </div>
               )}
-              
+
               <div ref={endRef} />
             </div>
           )}
