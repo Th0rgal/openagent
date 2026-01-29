@@ -4456,38 +4456,18 @@ pub async fn run_opencode_turn(
             return AgentResult::failure(err_msg, 0).with_terminal_reason(TerminalReason::LlmError);
         }
     } else {
-        if command_available(&workspace_exec, work_dir, "oh-my-opencode").await {
-            runner_is_direct = true;
-            "oh-my-opencode".to_string()
+        // Prefer bunx for oh-my-opencode (avoids version conflicts from npm global installs)
+        if command_available(&workspace_exec, work_dir, "bunx").await {
+            "bunx".to_string()
+        } else if command_available(&workspace_exec, work_dir, "npx").await {
+            "npx".to_string()
         } else {
-            let auto_install = env_var_bool("OPEN_AGENT_AUTO_INSTALL_OPENCODE", true);
-            if auto_install && command_available(&workspace_exec, work_dir, "npm").await {
-                let mut install_args = Vec::new();
-                install_args.push("-lc".to_string());
-                install_args.push("npm install -g oh-my-opencode@latest".to_string());
-                if let Err(e) = workspace_exec
-                    .output(work_dir, "/bin/sh", &install_args, HashMap::new())
-                    .await
-                {
-                    tracing::warn!("Failed to auto-install oh-my-opencode: {}", e);
-                }
-            }
-
-            if command_available(&workspace_exec, work_dir, "oh-my-opencode").await {
-                runner_is_direct = true;
-                "oh-my-opencode".to_string()
-            } else if command_available(&workspace_exec, work_dir, "bunx").await {
-                "bunx".to_string()
-            } else if command_available(&workspace_exec, work_dir, "npx").await {
-                "npx".to_string()
-            } else {
-                let err_msg =
-                    "No OpenCode CLI runner found in workspace (expected oh-my-opencode, bunx, or npx)."
-                        .to_string();
-                tracing::error!("{}", err_msg);
-                return AgentResult::failure(err_msg, 0)
-                    .with_terminal_reason(TerminalReason::LlmError);
-            }
+            let err_msg =
+                "No OpenCode CLI runner found in workspace (expected bunx or npx)."
+                    .to_string();
+            tracing::error!("{}", err_msg);
+            return AgentResult::failure(err_msg, 0)
+                .with_terminal_reason(TerminalReason::LlmError);
         }
     };
 

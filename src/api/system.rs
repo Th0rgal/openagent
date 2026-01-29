@@ -1000,19 +1000,35 @@ fn stream_amp_update() -> impl Stream<Item = Result<Event, std::convert::Infalli
 fn stream_oh_my_opencode_update() -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
     async_stream::stream! {
         yield sse("log", "Starting oh-my-opencode update...", Some(0));
-        yield sse("log", "Clearing oh-my-opencode cache...", Some(10));
 
-        // Remove only oh-my-opencode from bun cache (not the entire cache)
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+
+        // Remove conflicting npm/nvm global installs (we only use bunx)
+        yield sse("log", "Removing npm/nvm global installs...", Some(5));
         let _ = Command::new("bash")
             .args([
                 "-c",
-                &format!("rm -rf {}/.bun/install/cache/oh-my-opencode*", home),
+                "npm uninstall -g oh-my-opencode 2>/dev/null || true",
             ])
             .output()
             .await;
 
-        yield sse("log", "Running bunx oh-my-opencode@latest install...", Some(20));
+        // Clear ALL oh-my-opencode caches (bun stores in multiple locations)
+        yield sse("log", "Clearing oh-my-opencode caches...", Some(15));
+        let cache_clear_script = format!(
+            r#"
+            rm -rf {home}/.bun/install/cache/oh-my-opencode* 2>/dev/null
+            rm -rf {home}/.cache/.bun/install/cache/oh-my-opencode* 2>/dev/null
+            rm -rf {home}/.npm/_npx/*/node_modules/oh-my-opencode* 2>/dev/null
+            "#,
+            home = home
+        );
+        let _ = Command::new("bash")
+            .args(["-c", &cache_clear_script])
+            .output()
+            .await;
+
+        yield sse("log", "Running bunx oh-my-opencode@latest install...", Some(25));
 
         // Run the install command with @latest to force the newest version
         // Enable all providers by default for updates
