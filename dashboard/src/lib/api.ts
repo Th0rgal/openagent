@@ -1205,8 +1205,7 @@ export async function importSkill(name: string, file: File): Promise<Skill> {
   const formData = new FormData();
   formData.append("file", file);
 
-  const url = apiUrl(`/api/library/skills/import?name=${encodeURIComponent(name)}`);
-  const res = await fetch(url, {
+  const res = await apiFetch(`/api/library/skills/import?name=${encodeURIComponent(name)}`, {
     method: "POST",
     body: formData,
   });
