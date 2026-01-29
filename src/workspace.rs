@@ -21,6 +21,7 @@ use tokio::sync::RwLock;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::ai_providers::{AIProvider, ProviderType};
 use crate::config::Config;
 use crate::library::env_crypto::strip_encrypted_tags;
 use crate::library::LibraryStore;
@@ -844,6 +845,7 @@ async fn write_opencode_config(
     skill_allowlist: Option<&[String]>,
     command_contents: Option<&[CommandContent]>,
     shared_network: Option<bool>,
+    custom_providers: Option<&[AIProvider]>,
 ) -> anyhow::Result<()> {
     fn strip_jsonc_comments(input: &str) -> String {
         let mut out = String::with_capacity(input.len());
@@ -1044,6 +1046,90 @@ async fn write_opencode_config(
             serde_json::Value::Object(permission),
         );
         base_obj.insert("tools".to_string(), serde_json::Value::Object(tools));
+
+        // Add custom providers if any
+        if let Some(providers) = custom_providers {
+            let custom_only: Vec<_> = providers
+                .iter()
+                .filter(|p| p.provider_type == ProviderType::Custom && p.enabled)
+                .collect();
+
+            if !custom_only.is_empty() {
+                let mut provider_map = serde_json::Map::new();
+
+                for provider in custom_only {
+                    let provider_id = sanitize_key(&provider.name);
+                    let mut provider_config = serde_json::Map::new();
+
+                    // Set npm package (default to openai-compatible)
+                    let npm = provider
+                        .npm_package
+                        .as_deref()
+                        .unwrap_or("@ai-sdk/openai-compatible");
+                    provider_config.insert("npm".to_string(), json!(npm));
+
+                    // Set provider name
+                    provider_config.insert("name".to_string(), json!(&provider.name));
+
+                    // Build options
+                    let mut options = serde_json::Map::new();
+                    if let Some(base_url) = &provider.base_url {
+                        options.insert("baseURL".to_string(), json!(base_url));
+                    }
+
+                    // API key: either direct value or env var reference
+                    if let Some(api_key) = &provider.api_key {
+                        options.insert("apiKey".to_string(), json!(api_key));
+                    } else if let Some(env_var) = &provider.custom_env_var {
+                        options.insert("apiKey".to_string(), json!(format!("{{env:{}}}", env_var)));
+                    }
+                    // API key is optional - some providers may not need it
+
+                    if !options.is_empty() {
+                        provider_config
+                            .insert("options".to_string(), serde_json::Value::Object(options));
+                    }
+
+                    // Build models config
+                    if let Some(models) = &provider.custom_models {
+                        let mut models_map = serde_json::Map::new();
+                        for model in models {
+                            let mut model_config = serde_json::Map::new();
+
+                            if let Some(name) = &model.name {
+                                model_config.insert("name".to_string(), json!(name));
+                            }
+
+                            // Build limit config if either limit is set
+                            if model.context_limit.is_some() || model.output_limit.is_some() {
+                                let mut limit = serde_json::Map::new();
+                                if let Some(context) = model.context_limit {
+                                    limit.insert("context".to_string(), json!(context));
+                                }
+                                if let Some(output) = model.output_limit {
+                                    limit.insert("output".to_string(), json!(output));
+                                }
+                                model_config
+                                    .insert("limit".to_string(), serde_json::Value::Object(limit));
+                            }
+
+                            models_map
+                                .insert(model.id.clone(), serde_json::Value::Object(model_config));
+                        }
+                        if !models_map.is_empty() {
+                            provider_config
+                                .insert("models".to_string(), serde_json::Value::Object(models_map));
+                        }
+                    }
+
+                    provider_map.insert(provider_id, serde_json::Value::Object(provider_config));
+                }
+
+                if !provider_map.is_empty() {
+                    base_obj.insert("provider".to_string(), serde_json::Value::Object(provider_map));
+                }
+            }
+        }
     }
 
     let config_value = base_config;
@@ -1434,6 +1520,7 @@ pub async fn write_backend_config(
     skill_contents: Option<&[SkillContent]>,
     command_contents: Option<&[CommandContent]>,
     shared_network: Option<bool>,
+    custom_providers: Option<&[AIProvider]>,
 ) -> anyhow::Result<()> {
     match backend_id {
         "opencode" => {
@@ -1446,6 +1533,7 @@ pub async fn write_backend_config(
                 skill_allowlist,
                 command_contents,
                 shared_network,
+                custom_providers,
             )
             .await
         }
@@ -1460,6 +1548,7 @@ pub async fn write_backend_config(
                 skill_allowlist,
                 command_contents,
                 shared_network,
+                custom_providers,
             )
             .await?;
             write_claudecode_config(
@@ -1501,6 +1590,7 @@ pub async fn write_backend_config(
                 skill_allowlist,
                 command_contents,
                 shared_network,
+                custom_providers,
             )
             .await
         }
@@ -2415,6 +2505,7 @@ pub async fn prepare_custom_workspace(
         None,
         None, // No command_contents for simple workspace preparation
         None, // shared_network: not relevant for host workspaces
+        None, // custom_providers: none for simple workspace preparation
     )
     .await?;
     Ok(workspace_dir)
@@ -2453,6 +2544,7 @@ pub async fn prepare_mission_workspace_in(
         skill_allowlist,
         None, // No command_contents for simple workspace preparation
         workspace.shared_network,
+        None, // custom_providers: none for simple workspace preparation
     )
     .await?;
     Ok(dir)
@@ -2466,8 +2558,49 @@ pub async fn prepare_mission_workspace_with_skills(
     library: Option<&LibraryStore>,
     mission_id: Uuid,
 ) -> anyhow::Result<PathBuf> {
-    prepare_mission_workspace_with_skills_backend(workspace, mcp, library, mission_id, "opencode")
-        .await
+    prepare_mission_workspace_with_skills_backend(
+        workspace,
+        mcp,
+        library,
+        mission_id,
+        "opencode",
+        None,
+    )
+    .await
+}
+
+/// Read custom providers from the ai_providers.json file.
+fn read_custom_providers_from_file(workspace_root: &Path) -> Vec<AIProvider> {
+    // Try both possible locations for ai_providers.json
+    let candidates = [
+        workspace_root.join(".openagent").join("ai_providers.json"),
+        std::path::PathBuf::from(
+            std::env::var("HOME").unwrap_or_else(|_| "/root".to_string()),
+        )
+        .join(".openagent")
+        .join("ai_providers.json"),
+    ];
+
+    for path in &candidates {
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            if let Ok(providers) = serde_json::from_str::<Vec<AIProvider>>(&contents) {
+                let custom: Vec<AIProvider> = providers
+                    .into_iter()
+                    .filter(|p| p.provider_type == ProviderType::Custom && p.enabled)
+                    .collect();
+                if !custom.is_empty() {
+                    tracing::debug!(
+                        path = %path.display(),
+                        count = custom.len(),
+                        "Loaded custom providers from file"
+                    );
+                    return custom;
+                }
+            }
+        }
+    }
+
+    Vec::new()
 }
 
 /// Prepare a workspace directory for a mission with skill and tool syncing for a specific backend.
@@ -2477,9 +2610,23 @@ pub async fn prepare_mission_workspace_with_skills_backend(
     library: Option<&LibraryStore>,
     mission_id: Uuid,
     backend_id: &str,
+    custom_providers: Option<&[AIProvider]>,
 ) -> anyhow::Result<PathBuf> {
     let dir = mission_workspace_dir_for_root(&workspace.path, mission_id);
     prepare_workspace_dir(&dir).await?;
+
+    // Get custom providers: use provided list or read from file
+    let providers_from_file;
+    let effective_custom_providers = if let Some(providers) = custom_providers {
+        Some(providers)
+    } else {
+        providers_from_file = read_custom_providers_from_file(&workspace.path);
+        if providers_from_file.is_empty() {
+            None
+        } else {
+            Some(providers_from_file.as_slice())
+        }
+    };
     let mcp_configs = filter_mcp_configs_for_workspace(mcp.list_configs().await, &workspace.mcps);
     let skill_allowlist = if workspace.skills.is_empty() {
         None
@@ -2566,6 +2713,7 @@ pub async fn prepare_mission_workspace_with_skills_backend(
         skill_contents.as_deref(),
         command_contents.as_deref(),
         workspace.shared_network,
+        effective_custom_providers,
     )
     .await?;
 
@@ -2742,6 +2890,7 @@ pub async fn prepare_task_workspace(
         None,
         None, // No command_contents for task workspace
         None, // shared_network: not relevant for host workspaces
+        None, // custom_providers: none for task workspace
     )
     .await?;
     Ok(dir)
@@ -2923,6 +3072,7 @@ pub async fn sync_all_workspaces(config: &Config, mcp: &McpRegistry) -> anyhow::
             None,
             None, // No command_contents for migration
             None, // shared_network: not relevant for host workspaces
+            None, // custom_providers: none for migration
         )
         .await
         .is_ok()

@@ -722,6 +722,15 @@ pub struct CreateProviderRequest {
     /// Only applicable for Anthropic provider. Defaults to ["opencode"].
     #[serde(default)]
     pub use_for_backends: Option<Vec<String>>,
+    /// Custom models for custom providers
+    #[serde(default)]
+    pub custom_models: Option<Vec<crate::ai_providers::CustomModel>>,
+    /// Custom environment variable name for API key (for custom providers)
+    #[serde(default)]
+    pub custom_env_var: Option<String>,
+    /// NPM package for custom provider (defaults to @ai-sdk/openai-compatible)
+    #[serde(default)]
+    pub npm_package: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -750,6 +759,15 @@ pub struct ProviderResponse {
     pub has_api_key: bool,
     pub has_oauth: bool,
     pub base_url: Option<String>,
+    /// Custom models for custom providers
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_models: Option<Vec<crate::ai_providers::CustomModel>>,
+    /// Custom environment variable name for API key
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_env_var: Option<String>,
+    /// NPM package for custom provider
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub npm_package: Option<String>,
     pub enabled: bool,
     pub is_default: bool,
     pub uses_oauth: bool,
@@ -830,6 +848,9 @@ fn build_provider_response(
         has_api_key: matches!(auth, Some(AuthKind::ApiKey)),
         has_oauth: matches!(auth, Some(AuthKind::OAuth)),
         base_url,
+        custom_models: None,
+        custom_env_var: None,
+        npm_package: None,
         enabled,
         is_default,
         uses_oauth: provider_type.uses_oauth(),
@@ -2658,6 +2679,39 @@ async fn list_providers(
         })
         .collect();
 
+    // Also include custom providers from AIProviderStore
+    let custom_providers = state.ai_providers.list().await;
+    for provider in custom_providers {
+        if provider.provider_type == ProviderType::Custom && provider.enabled {
+            let now = chrono::Utc::now();
+            providers.push(ProviderResponse {
+                id: provider.id.to_string(),
+                provider_type: ProviderType::Custom,
+                provider_type_name: "Custom".to_string(),
+                name: provider.name.clone(),
+                google_project_id: None,
+                has_api_key: provider.api_key.is_some(),
+                has_oauth: false,
+                base_url: provider.base_url.clone(),
+                custom_models: provider.custom_models.clone(),
+                custom_env_var: provider.custom_env_var.clone(),
+                npm_package: provider.npm_package.clone(),
+                enabled: provider.enabled,
+                is_default: provider.is_default,
+                uses_oauth: false,
+                auth_methods: vec![],
+                status: if provider.base_url.is_some() {
+                    ProviderStatusResponse::Connected
+                } else {
+                    ProviderStatusResponse::NeedsAuth { auth_url: None }
+                },
+                use_for_backends: vec!["opencode".to_string()], // Custom providers work with OpenCode
+                created_at: now,
+                updated_at: now,
+            });
+        }
+    }
+
     providers.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(Json(providers))
 }
@@ -2805,6 +2859,55 @@ async fn create_provider(
     }
 
     let provider_type = req.provider_type;
+
+    // For custom providers, store in AIProviderStore (ai_providers.json)
+    // so that workspace preparation can read custom models and base URL
+    if provider_type == ProviderType::Custom {
+        let mut provider = crate::ai_providers::AIProvider::new(provider_type, req.name.clone());
+        provider.base_url = req.base_url.clone();
+        provider.api_key = req.api_key.clone();
+        provider.custom_models = req.custom_models.clone();
+        provider.custom_env_var = req.custom_env_var.clone();
+        provider.npm_package = req.npm_package.clone();
+        provider.enabled = req.enabled;
+
+        state.ai_providers.add(provider.clone()).await;
+
+        tracing::info!(
+            "Created custom AI provider: {} with {} models",
+            req.name,
+            req.custom_models.as_ref().map(|m| m.len()).unwrap_or(0)
+        );
+
+        // Return a response for custom provider
+        let now = chrono::Utc::now();
+        return Ok(Json(ProviderResponse {
+            id: provider.id.to_string(),
+            provider_type: ProviderType::Custom,
+            provider_type_name: "Custom".to_string(),
+            name: req.name,
+            google_project_id: None,
+            has_api_key: req.api_key.is_some(),
+            has_oauth: false,
+            base_url: req.base_url,
+            custom_models: req.custom_models,
+            custom_env_var: req.custom_env_var,
+            npm_package: req.npm_package,
+            enabled: req.enabled,
+            is_default: false,
+            uses_oauth: false,
+            auth_methods: vec![],
+            status: if req.api_key.is_some() || provider.base_url.is_some() {
+                ProviderStatusResponse::Connected
+            } else {
+                ProviderStatusResponse::NeedsAuth { auth_url: None }
+            },
+            use_for_backends: vec!["opencode".to_string()], // Custom providers work with OpenCode
+            created_at: now,
+            updated_at: now,
+        }));
+    }
+
     let config_path = get_opencode_config_path(&state.config.working_dir);
     let mut opencode_config =
         read_opencode_config(&config_path).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;

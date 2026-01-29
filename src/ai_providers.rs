@@ -65,6 +65,22 @@ pub enum ProviderCredential {
     },
 }
 
+/// Custom model definition for custom providers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomModel {
+    /// Model ID (used in API requests)
+    pub id: String,
+    /// Human-readable name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Context window size (input tokens)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_limit: Option<u32>,
+    /// Maximum output tokens
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_limit: Option<u32>,
+}
+
 /// Known AI provider types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -289,6 +305,15 @@ pub struct AIProvider {
     /// Custom base URL (for self-hosted or proxy endpoints)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    /// Custom models for custom providers
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_models: Option<Vec<CustomModel>>,
+    /// Custom environment variable name for API key (for custom providers)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_env_var: Option<String>,
+    /// NPM package for custom provider (defaults to @ai-sdk/openai-compatible)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub npm_package: Option<String>,
     /// Whether this provider is enabled
     #[serde(default = "default_enabled")]
     pub enabled: bool,
@@ -328,6 +353,9 @@ impl AIProvider {
             api_key: None,
             oauth: None,
             base_url: None,
+            custom_models: None,
+            custom_env_var: None,
+            npm_package: None,
             enabled: true,
             is_default: false,
             status: ProviderStatus::Unknown,
@@ -337,8 +365,11 @@ impl AIProvider {
     }
 
     /// Check if this provider has valid credentials configured.
+    /// Custom providers may not require credentials.
     pub fn has_credentials(&self) -> bool {
-        self.api_key.is_some() || self.oauth.is_some()
+        self.api_key.is_some()
+            || self.oauth.is_some()
+            || (self.provider_type == ProviderType::Custom && self.base_url.is_some())
     }
 
     /// Check if this provider has OAuth credentials.

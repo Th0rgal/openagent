@@ -46,6 +46,14 @@ export interface AIProviderAuthMethod {
   description?: string;
 }
 
+/** Custom model definition for custom providers */
+export interface CustomModel {
+  id: string;
+  name?: string;
+  context_limit?: number;
+  output_limit?: number;
+}
+
 export interface AIProvider {
   id: string;
   provider_type: AIProviderType;
@@ -55,6 +63,12 @@ export interface AIProvider {
   has_api_key: boolean;
   has_oauth: boolean;
   base_url: string | null;
+  /** Custom models for custom providers */
+  custom_models?: CustomModel[] | null;
+  /** Custom environment variable name for API key */
+  custom_env_var?: string | null;
+  /** NPM package for custom provider */
+  npm_package?: string | null;
   enabled: boolean;
   is_default: boolean;
   uses_oauth: boolean;
@@ -136,6 +150,12 @@ export async function createAIProvider(data: {
   base_url?: string;
   enabled?: boolean;
   use_for_backends?: string[];
+  /** Custom models for custom providers */
+  custom_models?: CustomModel[];
+  /** Custom environment variable name for API key */
+  custom_env_var?: string;
+  /** NPM package for custom provider */
+  npm_package?: string;
 }): Promise<AIProvider> {
   return apiPost("/api/ai/providers", data, "Failed to create AI provider");
 }

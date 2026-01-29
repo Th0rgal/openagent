@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { X, ExternalLink, Key, Loader, Cpu } from 'lucide-react';
+import { X, ExternalLink, Key, Loader, Cpu, Plus, Trash2 } from 'lucide-react';
 import { toast } from '@/components/toast';
 import { cn } from '@/lib/utils';
 import {
@@ -12,6 +12,7 @@ import {
   AIProviderTypeInfo,
   AIProviderAuthMethod,
   OAuthAuthorizeResponse,
+  CustomModel,
 } from '@/lib/api';
 
 // Provider icons mapping
@@ -26,6 +27,7 @@ const providerIcons: Record<string, string> = {
   groq: '⚡',
   xai: '𝕏',
   'github-copilot': '🐙',
+  custom: '🔧',
 };
 
 interface AddProviderModalProps {
@@ -77,7 +79,7 @@ const getProviderAuthMethods = (providerType: AIProviderType): AIProviderAuthMet
   return [];
 };
 
-type ModalStep = 'select-provider' | 'select-method' | 'select-backends' | 'enter-api-key' | 'oauth-callback';
+type ModalStep = 'select-provider' | 'select-method' | 'select-backends' | 'enter-api-key' | 'oauth-callback' | 'custom-provider';
 
 export function AddProviderModal({ open, onClose, onSuccess, providerTypes }: AddProviderModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -92,6 +94,13 @@ export function AddProviderModal({ open, onClose, onSuccess, providerTypes }: Ad
   const [loading, setLoading] = useState(false);
   // Backend selection for Anthropic (OpenCode and/or Claude Code)
   const [selectedBackends, setSelectedBackends] = useState<string[]>(['opencode']);
+
+  // Custom provider state
+  const [customName, setCustomName] = useState('');
+  const [customBaseUrl, setCustomBaseUrl] = useState('');
+  const [customApiKey, setCustomApiKey] = useState('');
+  const [customEnvVar, setCustomEnvVar] = useState('');
+  const [customModels, setCustomModels] = useState<CustomModel[]>([{ id: '', name: '' }]);
 
   // Get selected provider info
   const selectedTypeInfo = selectedProvider ? providerTypes.find(t => t.id === selectedProvider) : null;
@@ -109,6 +118,12 @@ export function AddProviderModal({ open, onClose, onSuccess, providerTypes }: Ad
       setOauthCode('');
       setLoading(false);
       setSelectedBackends(['opencode']);
+      // Reset custom provider state
+      setCustomName('');
+      setCustomBaseUrl('');
+      setCustomApiKey('');
+      setCustomEnvVar('');
+      setCustomModels([{ id: '', name: '' }]);
     }
   }, [open]);
 
@@ -142,6 +157,13 @@ export function AddProviderModal({ open, onClose, onSuccess, providerTypes }: Ad
 
   const handleSelectProvider = (providerType: AIProviderType) => {
     setSelectedProvider(providerType);
+
+    // Custom provider has its own flow
+    if (providerType === 'custom') {
+      setStep('custom-provider');
+      return;
+    }
+
     const typeInfo = providerTypes.find(t => t.id === providerType);
     const methods = getProviderAuthMethods(providerType);
 
@@ -259,6 +281,61 @@ export function AddProviderModal({ open, onClose, onSuccess, providerTypes }: Ad
     }
   };
 
+  // Custom provider model management
+  const handleAddModel = () => {
+    setCustomModels([...customModels, { id: '', name: '' }]);
+  };
+
+  const handleRemoveModel = (index: number) => {
+    if (customModels.length > 1) {
+      setCustomModels(customModels.filter((_, i) => i !== index));
+    }
+  };
+
+  const handleUpdateModel = (index: number, field: keyof CustomModel, value: string | number) => {
+    const updated = [...customModels];
+    updated[index] = { ...updated[index], [field]: value };
+    setCustomModels(updated);
+  };
+
+  const handleSubmitCustomProvider = async () => {
+    if (!customName.trim() || !customBaseUrl.trim()) {
+      toast.error('Name and Base URL are required');
+      return;
+    }
+
+    // Filter out empty models
+    const validModels = customModels.filter(m => m.id.trim());
+    if (validModels.length === 0) {
+      toast.error('At least one model is required');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await createAIProvider({
+        provider_type: 'custom',
+        name: customName,
+        base_url: customBaseUrl,
+        api_key: customApiKey || undefined,
+        custom_env_var: customEnvVar || undefined,
+        custom_models: validModels.map(m => ({
+          id: m.id,
+          name: m.name || undefined,
+          context_limit: m.context_limit || undefined,
+          output_limit: m.output_limit || undefined,
+        })),
+      });
+      toast.success('Custom provider added');
+      onSuccess();
+      onClose();
+    } catch (err) {
+      toast.error(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleBack = () => {
     if (step === 'select-method') {
       setStep('select-provider');
@@ -275,6 +352,14 @@ export function AddProviderModal({ open, onClose, onSuccess, providerTypes }: Ad
         setSelectedProvider(null);
       }
       setApiKey('');
+    } else if (step === 'custom-provider') {
+      setStep('select-provider');
+      setSelectedProvider(null);
+      setCustomName('');
+      setCustomBaseUrl('');
+      setCustomApiKey('');
+      setCustomEnvVar('');
+      setCustomModels([{ id: '', name: '' }]);
     }
   };
 
@@ -287,6 +372,7 @@ export function AddProviderModal({ open, onClose, onSuccess, providerTypes }: Ad
       case 'select-backends': return 'Select Backends';
       case 'enter-api-key': return `${selectedTypeInfo?.name} API Key`;
       case 'oauth-callback': return 'Complete Authorization';
+      case 'custom-provider': return 'Custom Provider';
       default: return 'Add Provider';
     }
   };
@@ -299,7 +385,10 @@ export function AddProviderModal({ open, onClose, onSuccess, providerTypes }: Ad
       {/* Dialog */}
       <div
         ref={dialogRef}
-        className="relative w-full max-w-sm rounded-2xl bg-[#1a1a1a] border border-white/[0.06] shadow-xl animate-in fade-in zoom-in-95 duration-200"
+        className={cn(
+          "relative w-full rounded-2xl bg-[#1a1a1a] border border-white/[0.06] shadow-xl animate-in fade-in zoom-in-95 duration-200",
+          step === 'custom-provider' ? 'max-w-md' : 'max-w-sm'
+        )}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.06]">
@@ -341,6 +430,17 @@ export function AddProviderModal({ open, onClose, onSuccess, providerTypes }: Ad
                   <span className="text-sm text-white">{type.name}</span>
                 </button>
               ))}
+              {/* Custom Provider Option */}
+              <button
+                onClick={() => handleSelectProvider('custom')}
+                className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/[0.04] transition-colors cursor-pointer text-left border-t border-white/[0.06] mt-2 pt-3"
+              >
+                <span className="text-xl">🔧</span>
+                <div>
+                  <span className="text-sm text-white">Custom Provider</span>
+                  <div className="text-xs text-white/40">OpenAI-compatible endpoint</div>
+                </div>
+              </button>
             </div>
           )}
 
@@ -470,6 +570,115 @@ export function AddProviderModal({ open, onClose, onSuccess, providerTypes }: Ad
                   {loading ? <Loader className="h-4 w-4 animate-spin mx-auto" /> : 'Connect'}
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* Step 5: Custom Provider Form */}
+          {step === 'custom-provider' && (
+            <div className="space-y-4">
+              {/* Name */}
+              <div>
+                <label className="block text-xs text-white/50 mb-1.5">Provider Name *</label>
+                <input
+                  type="text"
+                  value={customName}
+                  onChange={(e) => setCustomName(e.target.value)}
+                  placeholder="My Self-Hosted Router"
+                  autoFocus
+                  className="w-full rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-indigo-500/50"
+                />
+              </div>
+
+              {/* Base URL */}
+              <div>
+                <label className="block text-xs text-white/50 mb-1.5">Base URL *</label>
+                <input
+                  type="url"
+                  value={customBaseUrl}
+                  onChange={(e) => setCustomBaseUrl(e.target.value)}
+                  placeholder="https://api.example.com/v1"
+                  className="w-full rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-indigo-500/50 font-mono"
+                />
+              </div>
+
+              {/* API Key (optional) */}
+              <div>
+                <label className="block text-xs text-white/50 mb-1.5">API Key (optional)</label>
+                <input
+                  type="password"
+                  value={customApiKey}
+                  onChange={(e) => setCustomApiKey(e.target.value)}
+                  placeholder="sk-..."
+                  className="w-full rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-indigo-500/50"
+                />
+              </div>
+
+              {/* Env Var Name (optional) */}
+              <div>
+                <label className="block text-xs text-white/50 mb-1.5">Environment Variable (optional)</label>
+                <input
+                  type="text"
+                  value={customEnvVar}
+                  onChange={(e) => setCustomEnvVar(e.target.value)}
+                  placeholder="MY_CUSTOM_API_KEY"
+                  className="w-full rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-indigo-500/50 font-mono"
+                />
+                <p className="text-xs text-white/30 mt-1">If set, OpenCode will use this env var for the API key</p>
+              </div>
+
+              {/* Models */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs text-white/50">Models *</label>
+                  <button
+                    type="button"
+                    onClick={handleAddModel}
+                    className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer"
+                  >
+                    <Plus className="h-3 w-3" />
+                    Add Model
+                  </button>
+                </div>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {customModels.map((model, index) => (
+                    <div key={index} className="flex gap-2 items-start">
+                      <div className="flex-1 space-y-1">
+                        <input
+                          type="text"
+                          value={model.id}
+                          onChange={(e) => handleUpdateModel(index, 'id', e.target.value)}
+                          placeholder="model-id (required)"
+                          className="w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-xs text-white placeholder-white/30 focus:outline-none focus:border-indigo-500/50 font-mono"
+                        />
+                        <input
+                          type="text"
+                          value={model.name || ''}
+                          onChange={(e) => handleUpdateModel(index, 'name', e.target.value)}
+                          placeholder="Display name (optional)"
+                          className="w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-xs text-white placeholder-white/30 focus:outline-none focus:border-indigo-500/50"
+                        />
+                      </div>
+                      {customModels.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveModel(index)}
+                          className="p-2 text-white/30 hover:text-red-400 transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                onClick={handleSubmitCustomProvider}
+                disabled={loading || !customName.trim() || !customBaseUrl.trim() || !customModels.some(m => m.id.trim())}
+                className="w-full rounded-xl bg-indigo-500 px-4 py-3 text-sm font-medium text-white hover:bg-indigo-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? <Loader className="h-4 w-4 animate-spin mx-auto" /> : 'Add Custom Provider'}
+              </button>
             </div>
           )}
         </div>
