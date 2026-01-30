@@ -1114,9 +1114,42 @@ export async function getLibraryStatus(): Promise<LibraryStatus> {
   return libGet("/api/library/status", "Failed to fetch library status");
 }
 
+// Error class for diverged git history
+export class DivergedHistoryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DivergedHistoryError";
+  }
+}
+
 // Sync (git pull)
+// Throws DivergedHistoryError if local and remote histories have diverged
 export async function syncLibrary(): Promise<void> {
-  return libPost("/api/library/sync", undefined, "Failed to sync library");
+  const res = await apiFetch("/api/library/sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    // Check for diverged history error (409 Conflict with DIVERGED_HISTORY prefix)
+    if (res.status === 409 && text.includes("DIVERGED_HISTORY")) {
+      throw new DivergedHistoryError(text.replace("DIVERGED_HISTORY: ", ""));
+    }
+    throw new Error(text || "Failed to sync library");
+  }
+}
+
+// Force sync (reset local to remote)
+// Use this when histories have diverged after a force push
+export async function forceSyncLibrary(): Promise<void> {
+  return libPost("/api/library/force-sync", undefined, "Failed to force sync library");
+}
+
+// Force push (overwrite remote with local)
+// Use this when you want to keep local changes and overwrite remote
+export async function forcePushLibrary(): Promise<void> {
+  return libPost("/api/library/force-push", undefined, "Failed to force push library");
 }
 
 // Commit changes

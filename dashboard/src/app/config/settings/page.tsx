@@ -19,7 +19,7 @@ import {
   listBackendAgents,
   listProviders,
 } from '@/lib/api';
-import { Save, Loader, AlertCircle, Check, RefreshCw, RotateCcw, Eye, EyeOff, AlertTriangle, X, GitBranch, Upload, Info, Download } from 'lucide-react';
+import { Save, Loader, AlertCircle, Check, RefreshCw, RotateCcw, Eye, EyeOff, AlertTriangle, X, GitBranch, Upload, Info, Download, GitMerge } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ConfigCodeEditor } from '@/components/config-code-editor';
 import { useLibrary } from '@/contexts/library-context';
@@ -39,12 +39,17 @@ export default function SettingsPage() {
   const {
     status,
     sync,
+    forceSync,
+    forcePush,
+    clearDivergedHistory,
     commit,
     push,
     syncing,
     committing,
     pushing,
     refreshStatus,
+    divergedHistory,
+    divergedHistoryMessage,
   } = useLibrary();
 
   // Harness tab state
@@ -131,6 +136,9 @@ export default function SettingsPage() {
 
   const [showCommitDialog, setShowCommitDialog] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
+  const [showForceSyncDialog, setShowForceSyncDialog] = useState(false);
+  const [forceSyncing, setForceSyncing] = useState(false);
+  const [forcePushing, setForcePushing] = useState(false);
 
   const isDirty = settings !== originalSettings;
   const isOpenAgentDirty =
@@ -336,8 +344,43 @@ export default function SettingsPage() {
       await sync();
       await loadSettings();
     } catch {
-      // Error handled by context
+      // If diverged history error, show the force sync dialog
+      if (divergedHistory) {
+        setShowForceSyncDialog(true);
+      }
+      // Other errors handled by context
     }
+  };
+
+  const handleForceSync = async () => {
+    try {
+      setForceSyncing(true);
+      await forceSync();
+      setShowForceSyncDialog(false);
+      await loadSettings();
+    } catch {
+      // Error handled by context
+    } finally {
+      setForceSyncing(false);
+    }
+  };
+
+  const handleForcePush = async () => {
+    try {
+      setForcePushing(true);
+      await forcePush();
+      setShowForceSyncDialog(false);
+      await refreshStatus();
+    } catch {
+      // Error handled by context
+    } finally {
+      setForcePushing(false);
+    }
+  };
+
+  const handleDismissForceSyncDialog = () => {
+    setShowForceSyncDialog(false);
+    clearDivergedHistory();
   };
 
   const handleCommit = async () => {
@@ -439,6 +482,26 @@ export default function SettingsPage() {
                 Push
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Diverged History Warning */}
+      {divergedHistory && (
+        <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-start gap-3">
+          <GitMerge className="h-5 w-5 text-amber-400 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-amber-400">Git History Diverged</p>
+            <p className="text-sm text-amber-400/80 mt-1">
+              Local and remote histories have diverged. This usually happens after a force push on the remote.
+            </p>
+            <button
+              onClick={() => setShowForceSyncDialog(true)}
+              className="mt-2 flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg transition-colors"
+            >
+              <GitMerge className="h-3.5 w-3.5" />
+              Resolve Conflict
+            </button>
           </div>
         </div>
       )}
@@ -1073,6 +1136,93 @@ export default function SettingsPage() {
               >
                 {committing ? <Loader className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
                 Commit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Force Sync Dialog - shown when git history has diverged */}
+      {showForceSyncDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md px-4">
+          <div className="w-full max-w-lg rounded-2xl bg-[#161618] border border-white/[0.06] shadow-[0_25px_100px_rgba(0,0,0,0.7)] overflow-hidden">
+            <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-amber-500/10">
+                  <GitMerge className="h-5 w-5 text-amber-400" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-white">Git History Diverged</p>
+                  <p className="text-xs text-white/40">Local and remote histories have diverged</p>
+                </div>
+              </div>
+              <button
+                onClick={handleDismissForceSyncDialog}
+                className="p-2 rounded-lg text-white/40 hover:text-white/70 hover:bg-white/[0.06]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                <p className="text-sm text-amber-400/90">
+                  {divergedHistoryMessage || 'The remote repository has been force-pushed, causing local and remote histories to diverge.'}
+                </p>
+              </div>
+              <p className="text-sm text-white/60">
+                Choose how to resolve this conflict:
+              </p>
+              <div className="space-y-3">
+                <div className="p-4 rounded-lg border border-white/[0.08] bg-white/[0.02] hover:bg-white/[0.04] transition-colors">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-white flex items-center gap-2">
+                        <Download className="h-4 w-4 text-blue-400" />
+                        Force Pull (Reset to Remote)
+                      </p>
+                      <p className="text-xs text-white/50 mt-1">
+                        Discard all local changes and reset to match the remote. Use this if you want to accept the remote&apos;s version.
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleForceSync}
+                      disabled={forceSyncing || forcePushing}
+                      className="flex-shrink-0 flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg disabled:opacity-50 transition-colors"
+                    >
+                      {forceSyncing ? <Loader className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                      Force Pull
+                    </button>
+                  </div>
+                </div>
+                <div className="p-4 rounded-lg border border-white/[0.08] bg-white/[0.02] hover:bg-white/[0.04] transition-colors">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-white flex items-center gap-2">
+                        <Upload className="h-4 w-4 text-orange-400" />
+                        Force Push (Overwrite Remote)
+                      </p>
+                      <p className="text-xs text-white/50 mt-1">
+                        Overwrite the remote with your local changes. Use this if your local changes are correct.
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleForcePush}
+                      disabled={forceSyncing || forcePushing}
+                      className="flex-shrink-0 flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-lg disabled:opacity-50 transition-colors"
+                    >
+                      {forcePushing ? <Loader className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                      Force Push
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="px-5 pb-5 flex items-center justify-end">
+              <button
+                onClick={handleDismissForceSyncDialog}
+                className="px-4 py-2 text-xs text-white/60 hover:text-white/80"
+              >
+                Cancel
               </button>
             </div>
           </div>

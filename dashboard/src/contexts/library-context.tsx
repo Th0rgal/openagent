@@ -16,6 +16,8 @@ import {
   listLibrarySkills,
   listLibraryCommands,
   syncLibrary,
+  forceSyncLibrary,
+  forcePushLibrary,
   commitLibrary,
   pushLibrary,
   saveLibraryMcps,
@@ -34,6 +36,7 @@ import {
   saveLibraryTool as apiSaveLibraryTool,
   deleteLibraryTool,
   LibraryUnavailableError,
+  DivergedHistoryError,
   type LibraryStatus,
   type McpServerDef,
   type SkillSummary,
@@ -60,11 +63,20 @@ interface LibraryContextValue {
   loading: boolean;
   libraryUnavailable: boolean;
   libraryUnavailableMessage: string | null;
+  /** Set when sync fails due to diverged history (e.g., after force push on remote) */
+  divergedHistory: boolean;
+  divergedHistoryMessage: string | null;
 
   // Actions
   refresh: () => Promise<void>;
   refreshStatus: () => Promise<void>;
   sync: () => Promise<void>;
+  /** Force reset local to match remote (use after diverged history) */
+  forceSync: () => Promise<void>;
+  /** Force push local to remote (use when you want to keep local changes) */
+  forcePush: () => Promise<void>;
+  /** Clear the diverged history state (e.g., after user acknowledges) */
+  clearDivergedHistory: () => void;
   commit: (message: string) => Promise<void>;
   push: () => Promise<void>;
 
@@ -131,6 +143,8 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
   const [syncing, setSyncing] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const [divergedHistory, setDivergedHistory] = useState(false);
+  const [divergedHistoryMessage, setDivergedHistoryMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -192,15 +206,59 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
   const sync = useCallback(async () => {
     try {
       setSyncing(true);
+      setDivergedHistory(false);
+      setDivergedHistoryMessage(null);
       await syncLibrary();
       await refresh();
     } catch (err) {
+      if (err instanceof DivergedHistoryError) {
+        // Set diverged history state so UI can show force sync options
+        setDivergedHistory(true);
+        setDivergedHistoryMessage(err.message);
+        // Don't show generic error toast - UI will show specific options
+        throw err;
+      }
       showError(err instanceof Error ? err.message : 'Failed to sync');
       throw err;
     } finally {
       setSyncing(false);
     }
   }, [refresh, showError]);
+
+  const forceSync = useCallback(async () => {
+    try {
+      setSyncing(true);
+      await forceSyncLibrary();
+      setDivergedHistory(false);
+      setDivergedHistoryMessage(null);
+      await refresh();
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Failed to force sync');
+      throw err;
+    } finally {
+      setSyncing(false);
+    }
+  }, [refresh, showError]);
+
+  const forcePush = useCallback(async () => {
+    try {
+      setPushing(true);
+      await forcePushLibrary();
+      setDivergedHistory(false);
+      setDivergedHistoryMessage(null);
+      await refreshStatus();
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Failed to force push');
+      throw err;
+    } finally {
+      setPushing(false);
+    }
+  }, [refreshStatus, showError]);
+
+  const clearDivergedHistory = useCallback(() => {
+    setDivergedHistory(false);
+    setDivergedHistoryMessage(null);
+  }, []);
 
   const commit = useCallback(async (message: string) => {
     try {
@@ -354,9 +412,14 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       loading,
       libraryUnavailable,
       libraryUnavailableMessage,
+      divergedHistory,
+      divergedHistoryMessage,
       refresh,
       refreshStatus,
       sync,
+      forceSync,
+      forcePush,
+      clearDivergedHistory,
       commit,
       push,
       saveMcps,
@@ -389,9 +452,14 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       loading,
       libraryUnavailable,
       libraryUnavailableMessage,
+      divergedHistory,
+      divergedHistoryMessage,
       refresh,
       refreshStatus,
       sync,
+      forceSync,
+      forcePush,
+      clearDivergedHistory,
       commit,
       push,
       saveMcps,
