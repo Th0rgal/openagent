@@ -1,21 +1,31 @@
 'use client';
 
 import { useEffect, useRef, useState, useMemo } from 'react';
-import { Plus } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Plus, X, ExternalLink } from 'lucide-react';
 import useSWR from 'swr';
 import { getVisibleAgents, getOpenAgentConfig, listBackends, listBackendAgents, getBackendConfig, getClaudeCodeConfig, type Backend, type BackendAgent } from '@/lib/api';
 import type { Provider, Workspace } from '@/lib/api';
+
+export interface CreateMissionOptions {
+  workspaceId?: string;
+  agent?: string;
+  modelOverride?: string;
+  backend?: string;
+}
+
+export interface CreatedMission {
+  id: string;
+}
 
 interface NewMissionDialogProps {
   workspaces: Workspace[];
   providers?: Provider[];
   disabled?: boolean;
-  onCreate: (options?: {
-    workspaceId?: string;
-    agent?: string;
-    modelOverride?: string;
-    backend?: string;
-  }) => Promise<void> | void;
+  /** Creates a mission and returns its ID for navigation */
+  onCreate: (options?: CreateMissionOptions) => Promise<CreatedMission>;
+  /** Path to the control page (default: '/control') */
+  controlPath?: string;
 }
 
 // Combined agent with backend info
@@ -56,7 +66,9 @@ export function NewMissionDialog({
   providers = [],
   disabled = false,
   onCreate,
+  controlPath = '/control',
 }: NewMissionDialogProps) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [newMissionWorkspace, setNewMissionWorkspace] = useState('');
   // Combined value: "backend:agent" or empty for default
@@ -289,22 +301,35 @@ export function NewMissionDialog({
     setDefaultSet(false);
   };
 
-  const handleCancel = () => {
+  const handleClose = () => {
     setOpen(false);
     resetForm();
   };
 
-  const handleCreate = async () => {
+  const getCreateOptions = (): CreateMissionOptions => {
+    const parsed = parseSelectedValue(selectedAgentValue);
+    return {
+      workspaceId: newMissionWorkspace || undefined,
+      agent: parsed?.agent || undefined,
+      modelOverride: newMissionModelOverride || undefined,
+      backend: parsed?.backend || 'opencode',
+    };
+  };
+
+  const handleCreate = async (openInNewTab: boolean) => {
     if (disabled || submitting) return;
     setSubmitting(true);
     try {
-      const parsed = parseSelectedValue(selectedAgentValue);
-      await onCreate({
-        workspaceId: newMissionWorkspace || undefined,
-        agent: parsed?.agent || undefined,
-        modelOverride: newMissionModelOverride || undefined,
-        backend: parsed?.backend || 'opencode',
-      });
+      const options = getCreateOptions();
+      const mission = await onCreate(options);
+      const url = `${controlPath}?mission=${mission.id}`;
+
+      if (openInNewTab) {
+        window.open(url, '_blank');
+      } else {
+        router.push(url);
+      }
+
       setOpen(false);
       resetForm();
     } finally {
@@ -313,9 +338,6 @@ export function NewMissionDialog({
   };
 
   const isBusy = disabled || submitting;
-
-  // Determine default label based on enabled backends
-  const defaultBackendName = enabledBackends[0]?.name || 'OpenCode';
 
   return (
     <div className="relative" ref={dialogRef}>
@@ -330,7 +352,18 @@ export function NewMissionDialog({
       </button>
       {open && (
         <div className="absolute right-0 top-full mt-1 w-96 rounded-lg border border-white/[0.06] bg-[#1a1a1a] p-4 shadow-xl z-50">
-          <h3 className="text-sm font-medium text-white mb-3">Create New Mission</h3>
+          {/* Header with close button */}
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-medium text-white">Create New Mission</h3>
+            <button
+              type="button"
+              onClick={handleClose}
+              className="p-1 rounded-md text-white/40 hover:text-white/70 hover:bg-white/[0.04] transition-colors"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
           <div className="space-y-3">
             {/* Workspace selection */}
             <div>
@@ -448,21 +481,24 @@ export function NewMissionDialog({
               </p>
             </div>
 
+            {/* Action buttons */}
             <div className="flex gap-2 pt-1">
               <button
                 type="button"
-                onClick={handleCancel}
-                className="flex-1 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-sm text-white/70 hover:bg-white/[0.04] transition-colors"
+                onClick={() => handleCreate(false)}
+                disabled={isBusy}
+                className="flex-1 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-sm text-white/70 hover:bg-white/[0.04] transition-colors disabled:opacity-50"
               >
-                Cancel
+                Create
               </button>
               <button
                 type="button"
-                onClick={handleCreate}
+                onClick={() => handleCreate(true)}
                 disabled={isBusy}
-                className="flex-1 rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-600 transition-colors disabled:opacity-50"
+                className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-600 transition-colors disabled:opacity-50"
               >
-                Create
+                New Tab
+                <ExternalLink className="h-3.5 w-3.5" />
               </button>
             </div>
           </div>

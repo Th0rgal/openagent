@@ -3454,6 +3454,7 @@ export default function ControlClient() {
   // and could be from any mission. We only cache when explicitly loading from API.
 
   // Handle creating a new mission
+  // Returns the mission ID for the NewMissionDialog to handle navigation
   const handleNewMission = async (options?: {
     workspaceId?: string;
     agent?: string;
@@ -3468,11 +3469,11 @@ export default function ControlClient() {
         modelOverride: options?.modelOverride,
         backend: options?.backend,
       });
+      // Set up state for when navigation completes (same-tab case)
       pendingMissionNavRef.current = mission.id;
-      router.replace(`/control?mission=${mission.id}`, { scroll: false });
       setCurrentMission(mission);
       setViewingMission(mission);
-      setViewingMissionId(mission.id); // Also update viewing to the new mission
+      setViewingMissionId(mission.id);
       setItems([]);
       setHasDesktopSession(false);
       // Refresh running missions to get accurate state
@@ -3480,9 +3481,12 @@ export default function ControlClient() {
       setRunningMissions(running);
       refreshRecentMissions();
       toast.success("New mission created");
+      // Return ID for dialog to handle navigation
+      return { id: mission.id };
     } catch (err) {
       console.error("Failed to create mission:", err);
       toast.error("Failed to create new mission");
+      throw err; // Re-throw so dialog knows creation failed
     } finally {
       setMissionLoading(false);
     }

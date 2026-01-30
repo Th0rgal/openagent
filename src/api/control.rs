@@ -1692,6 +1692,10 @@ pub struct ResumeMissionRequest {
     /// If true, clean the mission's work directory before resuming
     #[serde(default)]
     pub clean_workspace: bool,
+    /// If true, only update the mission status without sending the "MISSION RESUMED" message.
+    /// Useful when the user is about to send their own custom message.
+    #[serde(default)]
+    pub skip_message: bool,
 }
 
 /// Resume an interrupted mission.
