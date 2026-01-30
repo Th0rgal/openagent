@@ -4432,9 +4432,11 @@ export default function ControlClient() {
         let mission = await loadMission(targetMissionId);
 
         // If the mission is in a resumable state (failed/interrupted/blocked),
-        // resume it first to update the status before sending the message
+        // resume it first to update the status before sending the message.
+        // Use skipMessage to avoid the auto-generated "MISSION RESUMED" message
+        // since the user is about to send their own custom message.
         if (["failed", "interrupted", "blocked"].includes(mission.status)) {
-          mission = await resumeMission(mission.id);
+          mission = await resumeMission(mission.id, { skipMessage: true });
         }
 
         setCurrentMission(mission);
