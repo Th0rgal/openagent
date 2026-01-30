@@ -151,6 +151,17 @@ struct RunningMissionsBar: View {
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
 
+                    // Queue indicator
+                    if mission.queueLen > 0 {
+                        Text("\(mission.queueLen)Q")
+                            .font(.system(size: 9, weight: .medium).monospaced())
+                            .foregroundStyle(Theme.warning)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Theme.warning.opacity(0.15))
+                            .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    }
+
                     // Stalled indicator
                     if isStalled {
                         HStack(spacing: 2) {

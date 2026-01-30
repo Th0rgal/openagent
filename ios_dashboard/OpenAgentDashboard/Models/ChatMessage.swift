@@ -71,6 +71,130 @@ enum SharedFileKind: String, Codable {
     }
 }
 
+// MARK: - Tool Call State
+
+/// State of a tool call (tracks lifecycle from start to completion)
+enum ToolCallState {
+    case running
+    case success
+    case error
+    case cancelled
+
+    var isComplete: Bool {
+        switch self {
+        case .running: return false
+        case .success, .error, .cancelled: return true
+        }
+    }
+}
+
+// MARK: - Tool Call Data
+
+/// Data associated with a tool call, including arguments, result, and timing
+struct ToolCallData {
+    let toolCallId: String
+    let name: String
+    let args: [String: Any]
+    let startTime: Date
+    var endTime: Date?
+    var result: Any?
+    var state: ToolCallState
+
+    /// Format args as JSON string for display
+    var argsString: String {
+        formatAsJSON(args)
+    }
+
+    /// Format result as JSON string for display
+    var resultString: String? {
+        guard let result = result else { return nil }
+        if let dict = result as? [String: Any] {
+            return formatAsJSON(dict)
+        } else if let str = result as? String {
+            return str
+        } else {
+            return String(describing: result)
+        }
+    }
+
+    /// Check if result indicates an error
+    var isErrorResult: Bool {
+        guard let result = result else { return false }
+
+        // Check dictionary error indicators
+        if let dict = result as? [String: Any] {
+            if dict["error"] != nil { return true }
+            if dict["is_error"] as? Bool == true { return true }
+            if dict["success"] as? Bool == false { return true }
+        }
+
+        // Check string error patterns
+        if let str = resultString?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            if str.hasPrefix("error:") || str.hasPrefix("error -") ||
+               str.hasPrefix("failed:") || str.hasPrefix("exception:") {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    /// Duration in seconds (ongoing or final)
+    var duration: TimeInterval {
+        let end = endTime ?? Date()
+        return end.timeIntervalSince(startTime)
+    }
+
+    /// Formatted duration string
+    var durationFormatted: String {
+        let seconds = Int(duration)
+        if seconds <= 0 { return "<1s" }
+        if seconds < 60 { return "\(seconds)s" }
+        let mins = seconds / 60
+        let secs = seconds % 60
+        return secs > 0 ? "\(mins)m \(secs)s" : "\(mins)m"
+    }
+
+    /// Preview of arguments (truncated)
+    var argsPreview: String {
+        let keys = args.keys.prefix(2).joined(separator: ", ")
+        let preview = keys.isEmpty ? "" : keys
+        return preview.count > 50 ? String(preview.prefix(47)) + "..." : preview
+    }
+
+    /// Extract image paths from result (for screenshot tools)
+    var imagePaths: [String] {
+        guard let str = resultString else { return [] }
+        // Match common image file patterns
+        let pattern = #"/[\w/.-]+\.(png|jpg|jpeg|gif|webp|bmp|svg)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+            return []
+        }
+        let range = NSRange(str.startIndex..., in: str)
+        let matches = regex.matches(in: str, options: [], range: range)
+        return matches.compactMap { match in
+            guard let range = Range(match.range, in: str) else { return nil }
+            return String(str[range])
+        }
+    }
+
+    /// Check if this tool produces images (screenshots, captures, etc.)
+    var isImageProducingTool: Bool {
+        let lower = name.lowercased()
+        return lower.contains("screenshot") || lower.contains("capture") ||
+               lower.contains("desktop_screenshot") || lower.contains("browser_take_screenshot")
+    }
+
+    private func formatAsJSON(_ dict: [String: Any]) -> String {
+        do {
+            let data = try JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys])
+            return String(data: data, encoding: .utf8) ?? "{}"
+        } catch {
+            return "{}"
+        }
+    }
+}
+
 // MARK: - Chat Message Type
 
 enum ChatMessageType {
@@ -89,13 +213,15 @@ struct ChatMessage: Identifiable {
     let type: ChatMessageType
     var content: String
     var toolUI: ToolUIContent?
+    var toolData: ToolCallData?
     let timestamp: Date
-    
-    init(id: String = UUID().uuidString, type: ChatMessageType, content: String, toolUI: ToolUIContent? = nil, timestamp: Date = Date()) {
+
+    init(id: String = UUID().uuidString, type: ChatMessageType, content: String, toolUI: ToolUIContent? = nil, toolData: ToolCallData? = nil, timestamp: Date = Date()) {
         self.id = id
         self.type = type
         self.content = content
         self.toolUI = toolUI
+        self.toolData = toolData
         self.timestamp = timestamp
     }
     

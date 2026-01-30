@@ -1288,8 +1288,31 @@ struct ControlView: View {
                     }
                 }
 
-                // Remove any incomplete thinking messages, phase messages, and active tool calls
-                messages.removeAll { ($0.isThinking && !$0.thinkingDone) || $0.isPhase || ($0.isToolCall && $0.isActiveToolCall) }
+                // Remove any incomplete thinking messages and phase messages
+                // Mark active tool calls as completed instead of removing them
+                messages.removeAll { ($0.isThinking && !$0.thinkingDone) || $0.isPhase }
+
+                // Mark any remaining active tool calls as completed
+                for i in messages.indices {
+                    if messages[i].isToolCall && messages[i].isActiveToolCall {
+                        if var toolData = messages[i].toolData {
+                            toolData.endTime = Date()
+                            if toolData.result == nil {
+                                toolData.state = .success // Assume success if no result yet
+                            }
+                            messages[i].toolData = toolData
+                        }
+                        if let name = messages[i].toolCallName {
+                            messages[i] = ChatMessage(
+                                id: messages[i].id,
+                                type: .toolCall(name: name, isActive: false),
+                                content: messages[i].content,
+                                toolData: messages[i].toolData,
+                                timestamp: messages[i].timestamp
+                            )
+                        }
+                    }
+                }
 
                 let message = ChatMessage(
                     id: id,
@@ -1394,25 +1417,92 @@ struct ControlView: View {
                     )
                     messages.append(message)
                 } else {
-                    // Non-UI tool call: replace the previous active tool indicator
-                    // to show only the latest tool being used
-                    messages.removeAll { $0.isToolCall && $0.isActiveToolCall }
+                    // Mark any previous active tool calls as completed (success by default, will update if error)
+                    for i in messages.indices {
+                        if messages[i].isToolCall && messages[i].isActiveToolCall {
+                            if var toolData = messages[i].toolData {
+                                toolData.endTime = Date()
+                                toolData.state = .success
+                                messages[i].toolData = toolData
+                            }
+                            // Update the type to mark as not active
+                            if let name = messages[i].toolCallName {
+                                messages[i] = ChatMessage(
+                                    id: messages[i].id,
+                                    type: .toolCall(name: name, isActive: false),
+                                    content: messages[i].content,
+                                    toolData: messages[i].toolData,
+                                    timestamp: messages[i].timestamp
+                                )
+                            }
+                        }
+                    }
+
+                    // Create tool call data for tracking
+                    let toolData = ToolCallData(
+                        toolCallId: toolCallId,
+                        name: name,
+                        args: args,
+                        startTime: Date(),
+                        endTime: nil,
+                        result: nil,
+                        state: .running
+                    )
+
                     let message = ChatMessage(
                         id: "tool-\(toolCallId)",
                         type: .toolCall(name: name, isActive: true),
-                        content: ""
+                        content: "",
+                        toolData: toolData
                     )
                     messages.append(message)
                 }
             }
 
         case "tool_result":
-            if let name = data["name"] as? String {
+            if let toolCallId = data["tool_call_id"] as? String {
+                let result = data["result"]
+                let name = data["name"] as? String ?? ""
+
+                // Find the matching tool call message and update it
+                if let index = messages.firstIndex(where: { $0.id == "tool-\(toolCallId)" }) {
+                    if var toolData = messages[index].toolData {
+                        toolData.endTime = Date()
+                        toolData.result = result
+
+                        // Determine state based on result
+                        if let resultDict = result as? [String: Any] {
+                            if resultDict["status"] as? String == "cancelled" {
+                                toolData.state = .cancelled
+                            } else if toolData.isErrorResult {
+                                toolData.state = .error
+                            } else {
+                                toolData.state = .success
+                            }
+                        } else if toolData.isErrorResult {
+                            toolData.state = .error
+                        } else {
+                            toolData.state = .success
+                        }
+
+                        messages[index].toolData = toolData
+                        // Update the type to mark as not active
+                        messages[index] = ChatMessage(
+                            id: messages[index].id,
+                            type: .toolCall(name: toolData.name, isActive: false),
+                            content: messages[index].content,
+                            toolData: toolData,
+                            timestamp: messages[index].timestamp
+                        )
+                    }
+                }
+
                 // Extract display ID from desktop_start_session tool result
-                if name == "desktop_start_session" || name == "desktop_desktop_start_session" {
+                if name == "desktop_start_session" || name == "desktop_desktop_start_session" ||
+                   name.contains("desktop_start_session") {
                     // Handle result as either a dictionary or a JSON string
-                    var resultDict: [String: Any]? = data["result"] as? [String: Any]
-                    if resultDict == nil, let resultString = data["result"] as? String,
+                    var resultDict: [String: Any]? = result as? [String: Any]
+                    if resultDict == nil, let resultString = result as? String,
                        let jsonData = resultString.data(using: .utf8),
                        let parsed = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
                         resultDict = parsed
@@ -1423,6 +1513,49 @@ struct ControlView: View {
                         showDesktopStream = true
                     }
                 }
+            }
+
+        case "mission_status_changed":
+            // Handle mission status changes (e.g., completed, failed, interrupted)
+            if let statusStr = data["status"] as? String,
+               let missionId = data["mission_id"] as? String {
+                let newStatus = MissionStatus(rawValue: statusStr)
+
+                // If mission is no longer active, mark all pending tools as cancelled
+                if newStatus != .active {
+                    for i in messages.indices {
+                        if messages[i].isToolCall && messages[i].isActiveToolCall {
+                            if var toolData = messages[i].toolData {
+                                toolData.endTime = Date()
+                                toolData.state = .cancelled
+                                messages[i].toolData = toolData
+                            }
+                            // Update the type to mark as not active
+                            if let name = messages[i].toolCallName {
+                                messages[i] = ChatMessage(
+                                    id: messages[i].id,
+                                    type: .toolCall(name: name, isActive: false),
+                                    content: messages[i].content,
+                                    toolData: messages[i].toolData,
+                                    timestamp: messages[i].timestamp
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Update the viewing mission status if it matches
+                if viewingMissionId == missionId {
+                    viewingMission?.status = newStatus ?? .active
+                }
+
+                // Update the current mission status if it matches
+                if currentMission?.id == missionId {
+                    currentMission?.status = newStatus ?? .active
+                }
+
+                // Refresh running missions list
+                Task { await refreshRunningMissions() }
             }
 
         default:
@@ -1799,45 +1932,218 @@ private struct PhaseBubble: View {
     }
 }
 
-// MARK: - Tool Call Bubble
+// MARK: - Tool Call Bubble (Enhanced)
 
 private struct ToolCallBubble: View {
     let message: ChatMessage
+    @State private var isExpanded = false
+    @State private var elapsedSeconds: Int = 0
+    @State private var timerTask: Task<Void, Never>?
+
+    private var toolData: ToolCallData? {
+        message.toolData
+    }
+
+    private var isRunning: Bool {
+        toolData?.state == .running
+    }
+
+    private var stateColor: Color {
+        guard let state = toolData?.state else {
+            return message.isActiveToolCall ? Theme.warning : Theme.textMuted
+        }
+        switch state {
+        case .running: return Theme.warning
+        case .success: return Theme.success
+        case .error: return Theme.error
+        case .cancelled: return Theme.warning
+        }
+    }
+
+    private var stateIcon: String {
+        guard let state = toolData?.state else {
+            return message.isActiveToolCall ? "circle.fill" : "checkmark.circle.fill"
+        }
+        switch state {
+        case .running: return "circle.fill"
+        case .success: return "checkmark.circle.fill"
+        case .error: return "xmark.circle.fill"
+        case .cancelled: return "xmark.circle.fill"
+        }
+    }
 
     var body: some View {
         if let name = message.toolCallName {
-            HStack(spacing: 8) {
-                Image(systemName: toolIcon(for: name))
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.textSecondary)
-                    .frame(width: 24, height: 24)
-                    .background(Theme.backgroundTertiary)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            VStack(alignment: .leading, spacing: 0) {
+                // Compact header button
+                Button {
+                    withAnimation(.spring(duration: 0.25)) {
+                        isExpanded.toggle()
+                    }
+                    HapticService.selectionChanged()
+                } label: {
+                    HStack(spacing: 6) {
+                        // Tool icon
+                        Image(systemName: toolIcon(for: name))
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(stateColor)
+                            .frame(width: 18, height: 18)
+                            .background(stateColor.opacity(0.15))
+                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
 
-                Text(name)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(Theme.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                        // Tool name
+                        Text(name)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(Theme.accent)
+                            .lineLimit(1)
 
-                Spacer()
+                        // Args preview
+                        if let preview = toolData?.argsPreview, !preview.isEmpty {
+                            Text("(\(preview))")
+                                .font(.caption2)
+                                .foregroundStyle(Theme.textMuted)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
 
-                if message.isActiveToolCall {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .scaleEffect(0.6)
-                        .tint(Theme.textMuted)
+                        Spacer()
+
+                        // Duration
+                        if let data = toolData {
+                            Text(isRunning ? "\(formattedElapsed)..." : data.durationFormatted)
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(Theme.textMuted)
+                        }
+
+                        // State indicator
+                        if isRunning {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .scaleEffect(0.5)
+                                .tint(stateColor)
+                        } else {
+                            Image(systemName: stateIcon)
+                                .font(.system(size: 12))
+                                .foregroundStyle(stateColor)
+                        }
+
+                        // Chevron
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(Theme.textMuted)
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(stateColor.opacity(0.05))
+                    .clipShape(Capsule())
+                    .overlay(
+                        Capsule()
+                            .stroke(stateColor.opacity(0.2), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+
+                // Expandable content
+                if isExpanded {
+                    VStack(alignment: .leading, spacing: 10) {
+                        // Arguments section
+                        if let data = toolData, !data.args.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Arguments")
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .foregroundStyle(Theme.textMuted)
+                                    .textCase(.uppercase)
+
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    Text(data.argsString)
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(Theme.textSecondary)
+                                        .padding(8)
+                                        .background(Theme.backgroundTertiary.opacity(0.5))
+                                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                }
+                                .frame(maxHeight: 120)
+                            }
+                        }
+
+                        // Result section
+                        if let data = toolData, let resultStr = data.resultString {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(data.isErrorResult ? "Error" : "Result")
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .foregroundStyle(data.isErrorResult ? Theme.error : Theme.success)
+                                    .textCase(.uppercase)
+
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    Text(resultStr)
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(data.isErrorResult ? Theme.error : Theme.textSecondary)
+                                        .padding(8)
+                                        .background((data.isErrorResult ? Theme.error : Theme.backgroundTertiary).opacity(0.1))
+                                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                }
+                                .frame(maxHeight: 120)
+                            }
+                        }
+
+                        // Still running indicator
+                        if isRunning {
+                            HStack(spacing: 6) {
+                                ProgressView()
+                                    .progressViewStyle(.circular)
+                                    .scaleEffect(0.5)
+                                    .tint(Theme.warning)
+                                Text("Running for \(formattedElapsed)...")
+                                    .font(.caption2)
+                                    .foregroundStyle(Theme.warning)
+                            }
+                        }
+                    }
+                    .padding(.top, 8)
+                    .padding(.horizontal, 4)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Theme.textMuted.opacity(0.15), lineWidth: 1)
-            )
-            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            .animation(.spring(duration: 0.25), value: isExpanded)
+            .onAppear {
+                if isRunning {
+                    startTimer()
+                }
+            }
+            .onDisappear {
+                timerTask?.cancel()
+            }
+            .onChange(of: isRunning) { _, running in
+                if running {
+                    startTimer()
+                } else {
+                    timerTask?.cancel()
+                }
+            }
+        }
+    }
+
+    private var formattedElapsed: String {
+        if elapsedSeconds <= 0 { return "<1s" }
+        if elapsedSeconds < 60 { return "\(elapsedSeconds)s" }
+        let mins = elapsedSeconds / 60
+        let secs = elapsedSeconds % 60
+        return secs > 0 ? "\(mins)m \(secs)s" : "\(mins)m"
+    }
+
+    private func startTimer() {
+        timerTask?.cancel()
+        elapsedSeconds = Int(toolData?.duration ?? 0)
+        timerTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                if !Task.isCancelled {
+                    elapsedSeconds = Int(toolData?.duration ?? 0)
+                }
+            }
         }
     }
 
@@ -1855,6 +2161,10 @@ private struct ToolCallBubble: View {
             return "chevron.left.forwardslash.chevron.right"
         } else if lower.contains("task") || lower.contains("agent") || lower.contains("subagent") {
             return "person.2"
+        } else if lower.contains("desktop") || lower.contains("screenshot") {
+            return "display"
+        } else if lower.contains("todo") {
+            return "checklist"
         } else {
             return "wrench"
         }
