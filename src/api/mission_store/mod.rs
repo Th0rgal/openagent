@@ -56,11 +56,6 @@ pub struct Mission {
     /// Session ID for conversation persistence (used by Claude Code --session-id)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    /// Whether the CLI session was initiated (first turn started).
-    /// Once true, subsequent turns should use --resume instead of --session-id
-    /// to avoid "Session ID already in use" errors if the first turn was cancelled.
-    #[serde(default)]
-    pub session_initiated: bool,
     /// Why the mission terminated (for failed/completed missions)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_reason: Option<String>,
@@ -170,10 +165,6 @@ pub trait MissionStore: Send + Sync {
 
     /// Update mission session ID (for backends like Amp that generate their own IDs).
     async fn update_mission_session_id(&self, id: Uuid, session_id: &str) -> Result<(), String>;
-
-    /// Mark that the CLI session was initiated (first turn started).
-    /// Once set, subsequent turns should use --resume instead of --session-id.
-    async fn mark_session_initiated(&self, id: Uuid) -> Result<(), String>;
 
     /// Update mission agent tree.
     async fn update_mission_tree(&self, id: Uuid, tree: &AgentTreeNode) -> Result<(), String>;

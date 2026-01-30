@@ -1608,12 +1608,17 @@ pub fn run_claudecode_turn<'a>(
         // Important: We use a marker file to track if the session was ever initiated.
         // This prevents "Session ID already in use" errors when a turn is cancelled
         // after the session is created but before any assistant response is recorded.
+        // The marker file contains the session ID to prevent cross-mission interference
+        // when workspaces are shared (e.g., fallback to workspace-wide directory).
         let session_marker = work_dir.join(".claude-session-initiated");
-        let session_was_initiated = session_marker.exists();
+        let session_was_initiated = session_marker.exists()
+            && std::fs::read_to_string(&session_marker)
+                .map(|content| content.trim() == session_id)
+                .unwrap_or(false);
 
         // Determine if we should use --resume:
         // - If we have assistant messages in history (normal continuation)
-        // - OR if the session was previously initiated (handles crash/cancel case)
+        // - OR if the session was previously initiated for THIS mission (handles crash/cancel case)
         let use_resume = is_continuation || session_was_initiated;
 
         if use_resume {
