@@ -247,7 +247,7 @@ export function NewMissionDialog({
     }
   }, [selectedBackend, newMissionModelOverride]);
 
-  // Click outside handler
+  // Click outside and Escape key handler
   useEffect(() => {
     if (!open) return;
 
@@ -257,8 +257,18 @@ export function NewMissionDialog({
       }
     };
 
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    };
+
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
   }, [open]);
 
   // Set default agent when dialog opens (only once per open)
