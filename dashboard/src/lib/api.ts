@@ -1920,6 +1920,31 @@ export async function saveConfigProfileFile(
   }
 }
 
+// List default files for a harness from the library
+export async function listHarnessDefaultFiles(harness: string): Promise<string[]> {
+  return apiGet(
+    `/api/library/harness-default/${encodeURIComponent(harness)}`,
+    "Failed to list harness default files"
+  );
+}
+
+// Get a harness default file from the library
+export async function getHarnessDefaultFile(harness: string, fileName: string): Promise<string> {
+  const response = await fetch(
+    apiUrl(`/api/library/harness-default/${encodeURIComponent(harness)}/${fileName}`),
+    {
+      headers: authHeader(),
+    }
+  );
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error(`Harness default file not found: ${harness}/${fileName}`);
+    }
+    throw new Error(`Failed to get harness default file: ${response.statusText}`);
+  }
+  return response.text();
+}
+
 // AI Provider types and functions are now exported from ./api/providers
 // Legacy interface removed - types come from providers module
 

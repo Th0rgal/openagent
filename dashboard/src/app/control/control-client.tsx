@@ -32,7 +32,6 @@ import {
   getRunningMissions,
   isNetworkError,
   cancelMission,
-  listProviders,
   listWorkspaces,
   getHealth,
   listDesktopSessions,
@@ -49,7 +48,6 @@ import {
   type MissionStatus,
   type RunningMissionInfo,
   type UploadProgress,
-  type Provider,
   type Workspace,
   type DesktopSessionDetail,
   type DesktopSessionStatus,
@@ -1999,9 +1997,6 @@ export default function ControlClient() {
   const [urlInput, setUrlInput] = useState("");
   const [urlDownloading, setUrlDownloading] = useState(false);
 
-  // Provider and model selection state
-  const [providers, setProviders] = useState<Provider[]>([]);
-
   // Server configuration (fetched from health endpoint)
   const [maxIterations, setMaxIterations] = useState<number>(50); // Default fallback
 
@@ -3245,18 +3240,6 @@ export default function ControlClient() {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, []);
-
-  // Fetch available providers and models for mission creation (retry on auth success)
-  useEffect(() => {
-    listProviders()
-      .then((data) => {
-        setProviders(data.providers);
-      })
-      .catch((err) => {
-        if (isNetworkError(err)) return;
-        console.error("Failed to fetch providers:", err);
-      });
-  }, [authRetryTrigger]);
 
   // Fetch workspaces and agents for mission creation
   useEffect(() => {
@@ -4639,7 +4622,6 @@ export default function ControlClient() {
         <div className="flex items-center gap-3 shrink-0">
           <NewMissionDialog
             workspaces={workspaces}
-            providers={providers}
             disabled={missionLoading}
             onCreate={handleNewMission}
             initialValues={activeMission ? {

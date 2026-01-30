@@ -288,6 +288,12 @@ pub fn routes() -> Router<Arc<super::routes::AppState>> {
             "/config-profile/:name/file/*file_path",
             put(save_config_profile_file),
         )
+        // Harness defaults (library base configs)
+        .route("/harness-default/:harness", get(list_harness_default_files))
+        .route(
+            "/harness-default/:harness/*file_name",
+            get(get_harness_default_file),
+        )
         // Skills Registry (skills.sh)
         .route("/skill/registry/search", get(search_registry))
         .route("/skill/registry/list/:identifier", get(list_repo_skills))
@@ -2137,6 +2143,51 @@ async fn save_config_profile_file(
         .await
         .map(|_| (StatusCode::OK, "File saved successfully".to_string()))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Harness Defaults Handlers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// GET /api/library/harness-default/:harness - List default files for a harness.
+async fn list_harness_default_files(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path(harness): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<String>>, (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .list_harness_default_files(&harness)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            if e.to_string().contains("Invalid harness") {
+                (StatusCode::BAD_REQUEST, e.to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })
+}
+
+/// GET /api/library/harness-default/:harness/*file_name - Get a harness default file.
+async fn get_harness_default_file(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path((harness, file_name)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<String, (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .get_harness_default_file(&harness, &file_name)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, e.to_string())
+            } else if e.to_string().contains("Invalid harness") {
+                (StatusCode::BAD_REQUEST, e.to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

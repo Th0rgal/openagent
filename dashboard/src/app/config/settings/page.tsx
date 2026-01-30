@@ -9,6 +9,7 @@ import {
   listConfigProfileFiles,
   getConfigProfileFile,
   saveConfigProfileFile,
+  getHarnessDefaultFile,
   ConfigProfileSummary,
   DivergedHistoryError,
 } from '@/lib/api';
@@ -18,72 +19,57 @@ import { ConfigCodeEditor } from '@/components/config-code-editor';
 import { useLibrary } from '@/contexts/library-context';
 
 // Harness configuration metadata
+// Maps harness IDs to their profile directory and library directory
 const HARNESS_CONFIG = {
   opencode: {
     name: 'OpenCode',
-    dir: '.opencode',
+    dir: '.opencode',           // Directory in config profiles
+    libraryDir: 'opencode',     // Directory in library root
     files: [
-      { name: 'settings.json', description: 'Main settings (agents, models, providers)' },
-      { name: 'oh-my-opencode.json', description: 'oh-my-opencode plugin configuration' },
+      { name: 'settings.json', description: 'Main settings (agents, models, providers)', libraryName: 'settings.json' },
+      { name: 'oh-my-opencode.json', description: 'oh-my-opencode plugin configuration', libraryName: 'oh-my-opencode.json' },
     ],
-    defaultContent: {
-      'settings.json': JSON.stringify({
-        agents: {
-          Sisyphus: {
-            model: 'anthropic/claude-sonnet-4-20250514'
-          }
-        }
-      }, null, 2),
-      'oh-my-opencode.json': JSON.stringify({
-        "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/master/assets/oh-my-opencode.schema.json",
-        "agents": {},
-        "categories": {}
-      }, null, 2),
-    },
   },
   claudecode: {
     name: 'Claude Code',
     dir: '.claudecode',
+    libraryDir: 'claudecode',
     files: [
-      { name: 'settings.json', description: 'Default model, agent, visibility settings' },
+      { name: 'settings.json', description: 'Default model, agent, visibility settings', libraryName: 'config.json' },
     ],
-    defaultContent: {
-      'settings.json': JSON.stringify({
-        default_model: null,
-        default_agent: null,
-        hidden_agents: []
-      }, null, 2),
-    },
   },
   ampcode: {
     name: 'Amp',
     dir: '.ampcode',
+    libraryDir: 'ampcode',
     files: [
-      { name: 'settings.json', description: 'Default mode (smart/rush)' },
+      { name: 'settings.json', description: 'Default mode (smart/rush)', libraryName: 'config.json' },
     ],
-    defaultContent: {
-      'settings.json': JSON.stringify({
-        default_mode: 'smart'
-      }, null, 2),
-    },
   },
   openagent: {
     name: 'OpenAgent',
     dir: '.openagent',
+    libraryDir: 'openagent',
     files: [
-      { name: 'config.json', description: 'Agent visibility and defaults for mission dialog' },
+      { name: 'config.json', description: 'Agent visibility and defaults for mission dialog', libraryName: 'config.json' },
     ],
-    defaultContent: {
-      'config.json': JSON.stringify({
-        hidden_agents: [],
-        default_agent: 'Sisyphus',
-        desktop: {
-          auto_close_grace_period_secs: 7200,
-          cleanup_interval_secs: 900,
-          warning_before_close_secs: 300
-        }
-      }, null, 2),
-    },
+  },
+};
+
+// Fallback defaults when library file doesn't exist
+const FALLBACK_DEFAULTS: Record<string, Record<string, string>> = {
+  opencode: {
+    'settings.json': JSON.stringify({ agents: {} }, null, 2),
+    'oh-my-opencode.json': JSON.stringify({ agents: {}, categories: {} }, null, 2),
+  },
+  claudecode: {
+    'settings.json': JSON.stringify({ default_model: null, hidden_agents: [] }, null, 2),
+  },
+  ampcode: {
+    'settings.json': JSON.stringify({ default_mode: 'smart' }, null, 2),
+  },
+  openagent: {
+    'config.json': JSON.stringify({ hidden_agents: [], default_agent: null }, null, 2),
   },
 };
 
@@ -143,6 +129,7 @@ export default function SettingsPage() {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string>('');
   const [originalFileContent, setOriginalFileContent] = useState<string>('');
+  const [isLibraryDefault, setIsLibraryDefault] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -175,23 +162,39 @@ export default function SettingsPage() {
     try {
       setLoading(true);
       setError(null);
+      setIsLibraryDefault(false);
       const content = await getConfigProfileFile(selectedProfile, filePath);
       setFileContent(content);
       setOriginalFileContent(content);
       setSelectedFile(filePath);
-    } catch (err) {
-      // File doesn't exist, use default content
+    } catch {
+      // File doesn't exist in profile, try to load library default
       const harness = Object.entries(HARNESS_CONFIG).find(([, cfg]) =>
         filePath.startsWith(cfg.dir)
       );
       if (harness) {
+        const [harnessId, harnessConfig] = harness;
         const fileName = filePath.split('/').pop() || '';
-        const defaultContent = harness[1].defaultContent[fileName as keyof typeof harness[1]['defaultContent']] || '{}';
-        setFileContent(defaultContent);
-        setOriginalFileContent(''); // Mark as new file
-        setSelectedFile(filePath);
+        const fileConfig = harnessConfig.files.find(f => f.name === fileName);
+        const libraryFileName = fileConfig?.libraryName || fileName;
+
+        try {
+          // Try to fetch from library defaults
+          const libraryContent = await getHarnessDefaultFile(harnessConfig.libraryDir, libraryFileName);
+          setFileContent(libraryContent);
+          setOriginalFileContent(libraryContent);
+          setIsLibraryDefault(true);
+          setSelectedFile(filePath);
+        } catch {
+          // Library default doesn't exist either, use fallback
+          const fallback = FALLBACK_DEFAULTS[harnessId]?.[fileName] || '{}';
+          setFileContent(fallback);
+          setOriginalFileContent(''); // Mark as new file
+          setIsLibraryDefault(false);
+          setSelectedFile(filePath);
+        }
       } else {
-        setError(err instanceof Error ? err.message : 'Failed to load file');
+        setError('Unknown harness for file path');
       }
     } finally {
       setLoading(false);
@@ -229,6 +232,7 @@ export default function SettingsPage() {
       setError(null);
       await saveConfigProfileFile(selectedProfile, selectedFile, fileContent);
       setOriginalFileContent(fileContent);
+      setIsLibraryDefault(false); // No longer showing library default after save
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
       await refreshStatus();
@@ -656,7 +660,7 @@ export default function SettingsPage() {
                     <div className="flex-1 min-w-0">
                       <div className="truncate">{file.name}</div>
                       <div className="text-[10px] text-white/40 truncate">{file.description}</div>
-                      <div className="text-[10px] text-amber-400/60 mt-1">Will be created on save</div>
+                      <div className="text-[10px] text-sky-400/60 mt-1">Using library default</div>
                     </div>
                   </button>
                 );
@@ -671,7 +675,15 @@ export default function SettingsPage() {
             <div className="flex items-center gap-3">
               <h2 className="text-lg font-medium text-white">
                 {selectedFile ? selectedFile.split('/').pop() : 'Select a file'}
-                {isDirty && <span className="text-amber-400 text-sm font-normal ml-2">(unsaved)</span>}
+                {isLibraryDefault && !isDirty && (
+                  <span className="text-sky-400 text-sm font-normal ml-2">(library default)</span>
+                )}
+                {isLibraryDefault && isDirty && (
+                  <span className="text-amber-400 text-sm font-normal ml-2">(modified from library)</span>
+                )}
+                {!isLibraryDefault && isDirty && (
+                  <span className="text-amber-400 text-sm font-normal ml-2">(unsaved)</span>
+                )}
               </h2>
               {parseError && (
                 <span className="text-red-400 text-xs flex items-center gap-1">

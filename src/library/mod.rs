@@ -2177,6 +2177,64 @@ impl LibraryStore {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Harness Defaults
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Get a harness default file from the library.
+    /// Harness defaults are stored at the library root in directories like:
+    /// - opencode/oh-my-opencode.json
+    /// - opencode/settings.json
+    /// - claudecode/config.json
+    /// - ampcode/config.json
+    /// - openagent/config.json
+    pub async fn get_harness_default_file(&self, harness: &str, file_name: &str) -> Result<String> {
+        // Validate harness name
+        let valid_harnesses = ["opencode", "claudecode", "ampcode", "openagent"];
+        if !valid_harnesses.contains(&harness) {
+            anyhow::bail!("Invalid harness: {}", harness);
+        }
+
+        let path = self.path.join(harness).join(file_name);
+
+        if !path.exists() {
+            anyhow::bail!("Harness default file not found: {}/{}", harness, file_name);
+        }
+
+        fs::read_to_string(&path)
+            .await
+            .context("Failed to read harness default file")
+    }
+
+    /// List all default files for a harness.
+    pub async fn list_harness_default_files(&self, harness: &str) -> Result<Vec<String>> {
+        // Validate harness name
+        let valid_harnesses = ["opencode", "claudecode", "ampcode", "openagent"];
+        if !valid_harnesses.contains(&harness) {
+            anyhow::bail!("Invalid harness: {}", harness);
+        }
+
+        let harness_dir = self.path.join(harness);
+        if !harness_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut files = Vec::new();
+        let mut entries = fs::read_dir(&harness_dir).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name() {
+                    files.push(name.to_string_lossy().to_string());
+                }
+            }
+        }
+
+        files.sort();
+        Ok(files)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Migration
     // ─────────────────────────────────────────────────────────────────────────
 
