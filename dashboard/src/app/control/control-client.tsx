@@ -470,12 +470,19 @@ function hasHistoryChanged(
   const currentFingerprints = items
     .filter(i => i.kind === "user" || i.kind === "assistant")
     .map(i => getMessageFingerprint(i.kind, i.content || ""));
-  
+
   const newFingerprints = history.map(e =>
     getMessageFingerprint(e.role === "user" ? "user" : "assistant", e.content || "")
   );
-  
-  if (currentFingerprints.length !== newFingerprints.length) return true;
+
+  // If current items have MORE messages than API history, the API is stale (SSE delivered
+  // messages that haven't been persisted yet). Don't replace - we'd lose messages.
+  if (currentFingerprints.length > newFingerprints.length) return false;
+
+  // If API has more messages, history has changed (e.g., messages from another session)
+  if (currentFingerprints.length < newFingerprints.length) return true;
+
+  // Same count - check if content differs
   return currentFingerprints.some((fp, i) => fp !== newFingerprints[i]);
 }
 
@@ -2220,7 +2227,6 @@ export default function ControlClient() {
   const isBusy = viewingMissionIsRunning;
 
   const streamCleanupRef = useRef<null | (() => void)>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const enhancedInputRef = useRef<EnhancedInputHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const viewingMissionIdRef = useRef<string | null>(null);
@@ -2281,23 +2287,6 @@ export default function ControlClient() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Auto-resize textarea
-  const adjustTextareaHeight = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    textarea.style.height = "auto";
-    const lineHeight = 20;
-    const maxLines = 10;
-    const maxHeight = lineHeight * maxLines;
-    const newHeight = Math.min(textarea.scrollHeight, maxHeight);
-    textarea.style.height = `${newHeight}px`;
-  }, []);
-
-  useEffect(() => {
-    adjustTextareaHeight();
-  }, [input, adjustTextareaHeight]);
 
   const compressImageFile = useCallback(async (file: File) => {
     if (!file.type.startsWith("image/")) return file;
@@ -2390,9 +2379,9 @@ export default function ControlClient() {
 
       toast.success(`Uploaded ${result.name}`);
 
-      // Add a message about the upload at the beginning
+      // Add a message about the upload at the beginning (use full path)
       setInput((prev) => {
-        const uploadNote = `[Uploaded: ${result.name}]`;
+        const uploadNote = `[Uploaded: ${result.path}]`;
         return prev ? `${uploadNote}\n${prev}` : uploadNote;
       });
     } catch (error) {
@@ -2420,9 +2409,9 @@ export default function ControlClient() {
       const result = await downloadFromUrl(urlInput.trim(), contextPath, undefined, workspaceId, missionId);
       toast.success(`Downloaded ${result.name}`);
 
-      // Add a message about the download at the beginning (consistent with uploads)
+      // Add a message about the download at the beginning (use full path)
       setInput((prev) => {
-        const downloadNote = `[Downloaded: ${result.name}]`;
+        const downloadNote = `[Downloaded: ${result.path}]`;
         return prev ? `${downloadNote}\n${prev}` : downloadNote;
       });
 
@@ -2436,42 +2425,6 @@ export default function ControlClient() {
     }
   }, [urlInput, currentMission, viewingMission]);
 
-  // Handle paste to upload files
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    const handlePaste = async (event: ClipboardEvent) => {
-      const items = event.clipboardData?.items;
-      if (!items) return;
-
-      const files: File[] = [];
-      for (const item of items) {
-        if (item.kind === "file") {
-          const file = item.getAsFile();
-          if (file) files.push(file);
-        }
-      }
-
-      if (files.length === 0) return;
-
-      const textData = event.clipboardData?.getData("text/plain") ?? "";
-      if (textData.trim().length > 0) {
-        return;
-      }
-
-      // Prevent default paste for files
-      event.preventDefault();
-
-      // Upload files
-      for (const file of files) {
-        await handleFileUpload(file);
-      }
-    };
-
-    textarea.addEventListener("paste", handlePaste);
-    return () => textarea.removeEventListener("paste", handlePaste);
-  }, [handleFileUpload]);
 
   // Handle file input change
   const handleFileChange = async (
@@ -2486,6 +2439,13 @@ export default function ControlClient() {
       fileInputRef.current.value = "";
     }
   };
+
+  // Handle paste to upload files (e.g., screenshots from clipboard)
+  const handleFilePaste = useCallback(async (files: File[]) => {
+    for (const file of files) {
+      await handleFileUpload(file);
+    }
+  }, [handleFileUpload]);
 
   // Convert mission history to chat items
   const getActiveDesktopSession = useCallback((mission?: Mission | null) => {
@@ -5786,6 +5746,7 @@ export default function ControlClient() {
                   onChange={setInput}
                   onSubmit={handleEnhancedSubmit}
                   onCanSubmitChange={setCanSubmitInput}
+                  onFilePaste={handleFilePaste}
                   placeholder="Message the root agent… (paste files to upload)"
                   backend={viewingMission?.backend ?? currentMission?.backend}
                 />

@@ -31,6 +31,8 @@ interface EnhancedInputProps {
   onChange: (value: string) => void;
   onSubmit: (payload: SubmitPayload) => void;
   onCanSubmitChange?: (canSubmit: boolean) => void;
+  /** Called when files are pasted (e.g., images from clipboard) */
+  onFilePaste?: (files: File[]) => void;
   placeholder?: string;
   disabled?: boolean;
   className?: string;
@@ -51,6 +53,7 @@ export const EnhancedInput = forwardRef<EnhancedInputHandle, EnhancedInputProps>
   onChange,
   onSubmit,
   onCanSubmitChange,
+  onFilePaste,
   placeholder = "Message the root agent...",
   disabled = false,
   className,
@@ -405,6 +408,40 @@ export const EnhancedInput = forwardRef<EnhancedInputHandle, EnhancedInputProps>
     submit: handleSubmit,
     canSubmit,
   }), [handleSubmit, canSubmit]);
+
+  // Handle paste events for file uploads (e.g., pasting screenshots)
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea || !onFilePaste) return;
+
+    const handlePaste = (event: ClipboardEvent) => {
+      const items = event.clipboardData?.items;
+      if (!items) return;
+
+      const files: File[] = [];
+      for (const item of items) {
+        if (item.kind === "file") {
+          const file = item.getAsFile();
+          if (file) files.push(file);
+        }
+      }
+
+      if (files.length === 0) return;
+
+      // If there's text being pasted too, let the default behavior handle it
+      const textData = event.clipboardData?.getData("text/plain") ?? "";
+      if (textData.trim().length > 0) {
+        return;
+      }
+
+      // Prevent default paste and handle file upload
+      event.preventDefault();
+      onFilePaste(files);
+    };
+
+    textarea.addEventListener("paste", handlePaste);
+    return () => textarea.removeEventListener("paste", handlePaste);
+  }, [onFilePaste]);
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value;
