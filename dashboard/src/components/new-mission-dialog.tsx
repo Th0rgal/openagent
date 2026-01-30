@@ -240,27 +240,8 @@ export function NewMissionDialog({
     return backend && agent ? { backend, agent } : null;
   };
 
-  // Get the currently selected backend
-  const selectedBackend = useMemo(() => {
-    const parsed = parseSelectedValue(selectedAgentValue);
-    return parsed?.backend || null;
-  }, [selectedAgentValue]);
-
-  // Filter providers based on selected backend
-  // Claude Code and Amp only support Anthropic models
-  const filteredProviders = useMemo(() => {
-    if (selectedBackend === 'claudecode' || selectedBackend === 'amp') {
-      // Only show Anthropic (Claude) models for Claude Code and Amp
-      return providers.filter(p => p.id === 'anthropic');
-    }
-    // Show all providers for OpenCode or when no backend is selected
-    return providers;
-  }, [providers, selectedBackend]);
-
   const formatWorkspaceType = (type: Workspace['workspace_type']) =>
     type === 'host' ? 'host' : 'isolated';
-
-  // Config profile applies to all backends now - no need for model-specific handling
 
   // Click outside and Escape key handler
   useEffect(() => {
