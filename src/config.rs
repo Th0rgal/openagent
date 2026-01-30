@@ -377,7 +377,10 @@ impl Config {
             .filter(|raw| !raw.trim().is_empty())
             .map(|raw| {
                 serde_json::from_str::<Vec<UserAccount>>(&raw).map_err(|e| {
-                    ConfigError::InvalidValue("SANDBOXED_USERS/OPEN_AGENT_USERS".to_string(), e.to_string())
+                    ConfigError::InvalidValue(
+                        "SANDBOXED_USERS/OPEN_AGENT_USERS".to_string(),
+                        e.to_string(),
+                    )
                 })
             })
             .transpose()?
@@ -411,7 +414,9 @@ impl Config {
             match auth.auth_mode(dev_mode) {
                 AuthMode::MultiUser => {
                     if auth.users.is_empty() {
-                        return Err(ConfigError::MissingEnvVar("SANDBOXED_USERS or OPEN_AGENT_USERS".to_string()));
+                        return Err(ConfigError::MissingEnvVar(
+                            "SANDBOXED_USERS or OPEN_AGENT_USERS".to_string(),
+                        ));
                     }
                     if auth.jwt_secret.is_none() {
                         return Err(ConfigError::MissingEnvVar("JWT_SECRET".to_string()));

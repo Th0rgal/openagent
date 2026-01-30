@@ -45,7 +45,8 @@ impl SecretsStore {
         // Try to load passphrase from environment (support both new and legacy names)
         let mut crypto = SecretsCrypto::new();
         if let Ok(passphrase) = std::env::var("SANDBOXED_SECRET_PASSPHRASE")
-            .or_else(|_| std::env::var("OPENAGENT_SECRET_PASSPHRASE")) {
+            .or_else(|_| std::env::var("OPENAGENT_SECRET_PASSPHRASE"))
+        {
             if !passphrase.is_empty() {
                 crypto.set_passphrase(passphrase);
             }

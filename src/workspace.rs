@@ -1346,8 +1346,9 @@ async fn write_amp_config(
 
     match workspace_type {
         WorkspaceType::Container => {
-            agents_md
-                .push_str("This is an **isolated container workspace** managed by sandboxed.sh.\n\n");
+            agents_md.push_str(
+                "This is an **isolated container workspace** managed by sandboxed.sh.\n\n",
+            );
             agents_md.push_str("- Shell commands execute inside the container\n");
             agents_md.push_str("- Use the built-in `Bash` tool for shell commands\n");
         }
