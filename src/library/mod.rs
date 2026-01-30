@@ -107,13 +107,43 @@ impl LibraryStore {
 
     /// Pull latest changes from remote.
     /// After pulling, encrypts any unversioned <encrypted> tags in skill files.
+    ///
+    /// Returns `Err` with a specific error if the pull fails due to diverged history
+    /// (e.g., after a force push on the remote). In this case, use `force_sync` to
+    /// reset the local branch to match remote.
     pub async fn sync(&self) -> Result<()> {
-        git::pull(&self.path).await?;
+        match git::pull(&self.path).await {
+            Ok(()) => {}
+            Err(git::PullError::DivergedHistory { message }) => {
+                // Return a specific error that the API layer can detect
+                anyhow::bail!("DIVERGED_HISTORY: {}", message);
+            }
+            Err(git::PullError::Other(e)) => {
+                return Err(e);
+            }
+        }
 
         // Encrypt any unversioned encrypted tags in all skills
         self.encrypt_all_skill_files().await?;
 
         Ok(())
+    }
+
+    /// Force sync: reset local branch to match remote, discarding local changes.
+    /// Use this after a force push on the remote has caused history to diverge.
+    pub async fn force_sync(&self) -> Result<()> {
+        git::force_pull(&self.path).await?;
+
+        // Encrypt any unversioned encrypted tags in all skills
+        self.encrypt_all_skill_files().await?;
+
+        Ok(())
+    }
+
+    /// Force push: overwrite remote with local changes.
+    /// Use this when you want to keep local changes and discard remote history.
+    pub async fn force_push(&self) -> Result<()> {
+        git::force_push(&self.path).await
     }
 
     /// Encrypt unversioned <encrypted> tags in all skill files.

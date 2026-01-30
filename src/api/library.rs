@@ -191,6 +191,8 @@ pub fn routes() -> Router<Arc<super::routes::AppState>> {
         // Git operations
         .route("/status", get(get_status))
         .route("/sync", post(sync_library))
+        .route("/force-sync", post(force_sync_library))
+        .route("/force-push", post(force_push_library))
         .route("/commit", post(commit_library))
         .route("/push", post(push_library))
         // MCP servers
@@ -374,15 +376,27 @@ async fn get_status(
 }
 
 /// POST /api/library/sync - Pull latest changes from remote.
+///
+/// Returns 409 Conflict if history has diverged (e.g., after force push).
+/// In that case, use /force-sync to reset to remote or /force-push to overwrite remote.
 async fn sync_library(
     State(state): State<Arc<super::routes::AppState>>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
     let library = ensure_library(&state, &headers).await?;
-    library
-        .sync()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Try to sync - check for diverged history error
+    if let Err(e) = library.sync().await {
+        let error_msg = e.to_string();
+        if error_msg.starts_with("DIVERGED_HISTORY:") {
+            // Return 409 Conflict with a structured error message
+            let msg = error_msg
+                .strip_prefix("DIVERGED_HISTORY: ")
+                .unwrap_or(&error_msg);
+            return Err((StatusCode::CONFLICT, format!("DIVERGED_HISTORY: {}", msg)));
+        }
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, error_msg));
+    }
 
     // Sync plugins to global OpenCode config
     let plugins = library
@@ -407,6 +421,69 @@ async fn sync_library(
     sync_all_workspaces(&state, library.as_ref()).await;
 
     Ok((StatusCode::OK, "Synced successfully".to_string()))
+}
+
+/// POST /api/library/force-sync - Force reset local branch to match remote.
+///
+/// Use this when local and remote histories have diverged (e.g., after a force push on remote).
+/// This discards any local changes and resets to the remote state.
+async fn force_sync_library(
+    State(state): State<Arc<super::routes::AppState>>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .force_sync()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Sync plugins to global OpenCode config
+    let plugins = library
+        .get_plugins()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    crate::opencode_config::sync_global_plugins(&plugins)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Sync OpenCode settings (oh-my-opencode.json) from Library to system
+    if let Err(e) = workspace::sync_opencode_settings(&library).await {
+        tracing::warn!(error = %e, "Failed to sync oh-my-opencode settings during force sync");
+    }
+
+    // Sync OpenAgent config from Library to working directory
+    if let Err(e) = workspace::sync_openagent_config(&library, &state.config.working_dir).await {
+        tracing::warn!(error = %e, "Failed to sync openagent config during force sync");
+    }
+
+    // Sync skills and tools to workspaces
+    sync_all_workspaces(&state, library.as_ref()).await;
+
+    Ok((
+        StatusCode::OK,
+        "Force synced successfully - local branch reset to remote".to_string(),
+    ))
+}
+
+/// POST /api/library/force-push - Force push local changes to remote.
+///
+/// Use this when you want to keep local changes and overwrite the remote history.
+/// Uses --force-with-lease for safety.
+async fn force_push_library(
+    State(state): State<Arc<super::routes::AppState>>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .force_push()
+        .await
+        .map(|_| {
+            (
+                StatusCode::OK,
+                "Force pushed successfully - remote updated with local changes".to_string(),
+            )
+        })
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 /// POST /api/library/commit - Commit all changes.

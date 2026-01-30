@@ -197,20 +197,125 @@ pub async fn status(path: &Path) -> Result<LibraryStatus> {
     })
 }
 
+/// Error type for git pull operations.
+#[derive(Debug)]
+pub enum PullError {
+    /// Pull failed because local and remote histories have diverged.
+    /// This happens after a force push on the remote.
+    DivergedHistory { message: String },
+    /// Pull failed for another reason.
+    Other(anyhow::Error),
+}
+
+impl std::fmt::Display for PullError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PullError::DivergedHistory { message } => {
+                write!(f, "Diverged history: {}", message)
+            }
+            PullError::Other(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl std::error::Error for PullError {}
+
 /// Pull latest changes from remote.
-pub async fn pull(path: &Path) -> Result<()> {
+pub async fn pull(path: &Path) -> Result<(), PullError> {
     tracing::info!(path = %path.display(), "Pulling library changes");
 
     let mut cmd = Command::new("git");
     cmd.current_dir(path).args(["pull", "--ff-only"]);
     apply_ssh_config(&mut cmd);
-    let output = cmd.output().await.context("Failed to execute git pull")?;
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| PullError::Other(anyhow::anyhow!("Failed to execute git pull: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git pull failed: {}", stderr);
+        let stderr_lower = stderr.to_lowercase();
+
+        // Detect diverged history errors
+        if stderr_lower.contains("not possible to fast-forward")
+            || stderr_lower.contains("have diverged")
+            || stderr_lower.contains("cannot fast-forward")
+            || stderr_lower.contains("refusing to merge unrelated histories")
+        {
+            return Err(PullError::DivergedHistory {
+                message: format!(
+                    "Local and remote histories have diverged (likely due to a force push). \
+                     Use 'Force Pull' to reset to remote or 'Force Push' to overwrite remote. \
+                     Git error: {}",
+                    stderr.trim()
+                ),
+            });
+        }
+
+        return Err(PullError::Other(anyhow::anyhow!(
+            "git pull failed: {}",
+            stderr
+        )));
     }
 
+    Ok(())
+}
+
+/// Force pull: reset local branch to match remote (discards local changes).
+/// Use this after a force push on the remote has caused history to diverge.
+pub async fn force_pull(path: &Path) -> Result<()> {
+    tracing::info!(path = %path.display(), "Force pulling library (resetting to remote)");
+
+    // First, fetch the latest from remote
+    let mut cmd = Command::new("git");
+    cmd.current_dir(path).args(["fetch", "origin"]);
+    apply_ssh_config(&mut cmd);
+    let output = cmd.output().await.context("Failed to execute git fetch")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git fetch failed: {}", stderr);
+    }
+
+    // Get the current branch name
+    let branch = get_branch(path).await.unwrap_or_else(|_| "main".to_string());
+
+    // Reset to the remote branch
+    let output = Command::new("git")
+        .current_dir(path)
+        .args(["reset", "--hard", &format!("origin/{}", branch)])
+        .output()
+        .await
+        .context("Failed to execute git reset")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git reset failed: {}", stderr);
+    }
+
+    tracing::info!(path = %path.display(), branch = %branch, "Force pull complete - local branch reset to remote");
+    Ok(())
+}
+
+/// Force push: overwrite remote with local changes.
+/// Use this when you want to keep local changes and discard remote history.
+pub async fn force_push(path: &Path) -> Result<()> {
+    tracing::info!(path = %path.display(), "Force pushing library changes");
+
+    let mut cmd = Command::new("git");
+    cmd.current_dir(path).args(["push", "--force-with-lease"]);
+    apply_ssh_config(&mut cmd);
+    let output = cmd
+        .output()
+        .await
+        .context("Failed to execute git push --force-with-lease")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git push --force-with-lease failed: {}", stderr);
+    }
+
+    tracing::info!(path = %path.display(), "Force push complete");
     Ok(())
 }
 
