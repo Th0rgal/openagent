@@ -118,7 +118,7 @@ The default library uses the OpenAgent template repository. To use your own:
 
 4. Click **Save**
 
-**Note**: The backend will clone your repository on first use. If it's empty, consider forking the [openagent-library-template](https://github.com/Th0rgal/openagent-library-template) as a starting point.
+**Note**: The backend will clone your repository on first use. If it's empty, consider forking the [openagent-library-template](https://github.com/Th0rgal/sandboxed-library-template) as a starting point.
 
 ### 3.3 Sync Library
 
@@ -319,9 +319,9 @@ Now that you're set up, explore these features:
 
 ## Getting Help
 
-- **Documentation**: [https://github.com/Th0rgal/openagent/tree/master/docs](https://github.com/Th0rgal/openagent/tree/master/docs)
-- **Issues**: [https://github.com/Th0rgal/openagent/issues](https://github.com/Th0rgal/openagent/issues)
-- **Discussions**: [https://github.com/Th0rgal/openagent/discussions](https://github.com/Th0rgal/openagent/discussions)
+- **Documentation**: [https://github.com/Th0rgal/sandboxed-sh/tree/master/docs](https://github.com/Th0rgal/sandboxed-sh/tree/master/docs)
+- **Issues**: [https://github.com/Th0rgal/sandboxed-sh/issues](https://github.com/Th0rgal/sandboxed-sh/issues)
+- **Discussions**: [https://github.com/Th0rgal/sandboxed-sh/discussions](https://github.com/Th0rgal/sandboxed-sh/discussions)
 
 ## Summary
 

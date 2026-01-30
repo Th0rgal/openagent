@@ -1,9 +1,10 @@
 # =============================================================================
-# Open Agent — All-in-One Docker Image
+# sandboxed.sh — All-in-One Docker Image
 # =============================================================================
 # Multi-stage build: Rust backend + Next.js dashboard + runtime with AI CLIs
+# Formerly known as "Open Agent"
 #
-# Build:   docker build -t openagent .
+# Build:   docker build -t sandboxed-sh .
 # Run:     docker compose up
 # =============================================================================
 
@@ -30,7 +31,7 @@ RUN mkdir -p src/bin \
 
 # Copy real source and build
 COPY src/ src/
-RUN cargo build --release --bin open_agent --bin desktop-mcp --bin workspace-mcp
+RUN cargo build --release --bin sandboxed-sh --bin desktop-mcp --bin workspace-mcp
 
 # ---------------------------------------------------------------------------
 # Stage 2: Dashboard builder
@@ -89,7 +90,7 @@ RUN curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
     && rm -rf /var/lib/apt/lists/*
 
 # -- Copy Rust binaries from builder -----------------------------------------
-COPY --from=rust-builder /build/target/release/open_agent /usr/local/bin/open_agent
+COPY --from=rust-builder /build/target/release/sandboxed-sh /usr/local/bin/sandboxed-sh
 COPY --from=rust-builder /build/target/release/desktop-mcp /usr/local/bin/desktop-mcp
 COPY --from=rust-builder /build/target/release/workspace-mcp /usr/local/bin/workspace-mcp
 

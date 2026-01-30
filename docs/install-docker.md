@@ -1,6 +1,6 @@
-# Installing Open Agent with Docker
+# Installing sandboxed.sh with Docker
 
-Docker is the easiest way to run Open Agent. One command gets you a complete environment with the Rust backend, Next.js dashboard, and all AI harness CLIs pre-installed.
+Docker is the easiest way to run sandboxed.sh (formerly Open Agent). One command gets you a complete environment with the Rust backend, Next.js dashboard, and all AI harness CLIs pre-installed.
 
 ## Prerequisites
 
@@ -10,8 +10,8 @@ Docker is the easiest way to run Open Agent. One command gets you a complete env
 ## Quick Start
 
 ```bash
-git clone https://github.com/Th0rgal/openagent.git
-cd openagent
+git clone https://github.com/Th0rgal/sandboxed-sh.git
+cd sandboxed-sh
 cp .env.example .env
 # Edit .env — at minimum, set DASHBOARD_PASSWORD and JWT_SECRET
 docker compose up -d
@@ -39,7 +39,7 @@ Copy `.env.example` to `.env` and configure the values below. The full file cont
 
 | Variable | Default | Description |
 |---|---|---|
-| `LIBRARY_REMOTE` | `https://github.com/Th0rgal/openagent-library-template.git` | Git URL for your agent library. By default, clones the official template. Set this to your own fork or custom library (e.g. `git@github.com:your-org/agent-library.git`). Can also be changed via the dashboard Settings page. |
+| `LIBRARY_REMOTE` | `https://github.com/Th0rgal/sandboxed-library-template.git` | Git URL for your agent library. By default, clones the official template. Set this to your own fork or custom library (e.g. `git@github.com:your-org/agent-library.git`). Can also be changed via the dashboard Settings page. |
 | `LIBRARY_PATH` | `/root/.openagent/library` | Local path where the library is cloned |
 
 #### Server

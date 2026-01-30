@@ -61,8 +61,8 @@ if [ "${DESKTOP_ENABLED:-false}" = "true" ]; then
 fi
 
 # -- Start Rust backend -------------------------------------------------------
-echo "[entrypoint] starting open_agent backend on ${HOST:-127.0.0.1}:${PORT:-3000}"
-open_agent &
+echo "[entrypoint] starting sandboxed-sh backend on ${HOST:-127.0.0.1}:${PORT:-3000}"
+sandboxed-sh &
 BACKEND_PID=$!
 
 # Wait for backend to become healthy before starting dashboard/Caddy

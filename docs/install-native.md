@@ -507,7 +507,7 @@ Open Agent expects a git-backed **Library** repo. At runtime it will:
 
 Template:
 
-- https://github.com/Th0rgal/openagent-library-template
+- https://github.com/Th0rgal/sandboxed-library-template
 
 One way to bootstrap:
 
