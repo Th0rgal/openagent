@@ -1,8 +1,8 @@
-//! Open Agent - HTTP Server Entry Point
+//! sandboxed.sh - HTTP Server Entry Point
 //!
 //! Starts the HTTP server that exposes the agent API.
 
-use open_agent::{api, config::Config, library::env_crypto};
+use sandboxed_sh::{api, config::Config, library::env_crypto};
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -12,7 +12,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "open_agent=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| "sandboxed_sh=debug,tower_http=debug".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();

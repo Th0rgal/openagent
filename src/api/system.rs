@@ -22,8 +22,8 @@ use tokio::process::Command;
 
 use super::routes::AppState;
 
-/// Default repo path for Open Agent source
-const OPEN_AGENT_REPO_PATH: &str = "/opt/open_agent/vaduz-v1";
+/// Default repo path for sandboxed.sh source
+const SANDBOXED_REPO_PATH: &str = "/opt/sandboxed-sh/vaduz-v1";
 
 /// Information about a system component.
 #[derive(Debug, Clone, Serialize)]
@@ -117,18 +117,18 @@ async fn get_components(State(state): State<Arc<AppState>>) -> Json<SystemCompon
 
     // Open Agent (self)
     let current_version = env!("CARGO_PKG_VERSION");
-    let update_available = check_open_agent_update(Some(current_version)).await;
+    let update_available = check_sandboxed_update(Some(current_version)).await;
     let status = if update_available.is_some() {
         ComponentStatus::UpdateAvailable
     } else {
         ComponentStatus::Ok
     };
     components.push(ComponentInfo {
-        name: "open_agent".to_string(),
+        name: "sandboxed_sh".to_string(),
         version: Some(current_version.to_string()),
         installed: true,
         update_available,
-        path: Some("/usr/local/bin/open_agent".to_string()),
+        path: Some("/usr/local/bin/sandboxed-sh".to_string()),
         status,
     });
 
@@ -415,13 +415,13 @@ async fn check_opencode_update(current_version: Option<&str>) -> Option<String> 
 
 /// Check if there's a newer version of Open Agent available.
 /// First checks GitHub releases, then falls back to git tags if no releases exist.
-async fn check_open_agent_update(current_version: Option<&str>) -> Option<String> {
+async fn check_sandboxed_update(current_version: Option<&str>) -> Option<String> {
     let current = current_version?;
 
     // First, try GitHub releases API
     let client = reqwest::Client::new();
     let resp = client
-        .get("https://api.github.com/repos/Th0rgal/openagent/releases/latest")
+        .get("https://api.github.com/repos/Th0rgal/sandboxed.sh/releases/latest")
         .header("User-Agent", "open-agent")
         .send()
         .await
@@ -441,7 +441,7 @@ async fn check_open_agent_update(current_version: Option<&str>) -> Option<String
     }
 
     // Fallback: check git tags from the repo if it exists
-    let repo_path = std::path::Path::new(OPEN_AGENT_REPO_PATH);
+    let repo_path = std::path::Path::new(SANDBOXED_REPO_PATH);
     if !repo_path.exists() {
         return None;
     }
@@ -449,14 +449,14 @@ async fn check_open_agent_update(current_version: Option<&str>) -> Option<String
     // Fetch tags first
     let _ = Command::new("git")
         .args(["fetch", "--tags", "origin"])
-        .current_dir(OPEN_AGENT_REPO_PATH)
+        .current_dir(SANDBOXED_REPO_PATH)
         .output()
         .await;
 
     // Get the latest tag
     let tag_result = Command::new("git")
         .args(["describe", "--tags", "--abbrev=0", "origin/master"])
-        .current_dir(OPEN_AGENT_REPO_PATH)
+        .current_dir(SANDBOXED_REPO_PATH)
         .output()
         .await
         .ok()?;
@@ -639,7 +639,7 @@ async fn update_component(
     Path(name): Path<String>,
 ) -> Result<Sse<UpdateStream>, (StatusCode, String)> {
     match name.as_str() {
-        "open_agent" => Ok(Sse::new(Box::pin(stream_open_agent_update()))),
+        "sandboxed_sh" => Ok(Sse::new(Box::pin(stream_sandboxed_update()))),
         "opencode" => Ok(Sse::new(Box::pin(stream_opencode_update()))),
         "claude_code" => Ok(Sse::new(Box::pin(stream_claude_code_update()))),
         "amp" => Ok(Sse::new(Box::pin(stream_amp_update()))),
@@ -653,14 +653,14 @@ async fn update_component(
 
 /// Stream the Open Agent update process.
 /// Builds from source using git tags (no pre-built binaries needed).
-fn stream_open_agent_update() -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+fn stream_sandboxed_update() -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
     async_stream::stream! {
         yield sse("log", "Starting Open Agent update...", Some(0));
 
         // Check if source repo exists
-        let repo_path = std::path::Path::new(OPEN_AGENT_REPO_PATH);
+        let repo_path = std::path::Path::new(SANDBOXED_REPO_PATH);
         if !repo_path.exists() {
-            yield sse("error", format!("Source repo not found at {}. Clone the repo first (see INSTALL.md).", OPEN_AGENT_REPO_PATH), None);
+            yield sse("error", format!("Source repo not found at {}. Clone the repo first (see INSTALL.md).", SANDBOXED_REPO_PATH), None);
             return;
         }
 
@@ -669,7 +669,7 @@ fn stream_open_agent_update() -> impl Stream<Item = Result<Event, std::convert::
 
         let fetch_result = Command::new("git")
             .args(["fetch", "--tags", "origin"])
-            .current_dir(OPEN_AGENT_REPO_PATH)
+            .current_dir(SANDBOXED_REPO_PATH)
             .output()
             .await;
 
@@ -691,7 +691,7 @@ fn stream_open_agent_update() -> impl Stream<Item = Result<Event, std::convert::
 
         let tag_result = Command::new("git")
             .args(["describe", "--tags", "--abbrev=0", "origin/master"])
-            .current_dir(OPEN_AGENT_REPO_PATH)
+            .current_dir(SANDBOXED_REPO_PATH)
             .output()
             .await;
 
@@ -710,21 +710,21 @@ fn stream_open_agent_update() -> impl Stream<Item = Result<Event, std::convert::
         // Reset any local changes before checkout to prevent conflicts
         let _ = Command::new("git")
             .args(["reset", "--hard", "HEAD"])
-            .current_dir(OPEN_AGENT_REPO_PATH)
+            .current_dir(SANDBOXED_REPO_PATH)
             .output()
             .await;
 
         // Clean untracked files that might interfere
         let _ = Command::new("git")
             .args(["clean", "-fd"])
-            .current_dir(OPEN_AGENT_REPO_PATH)
+            .current_dir(SANDBOXED_REPO_PATH)
             .output()
             .await;
 
         // Checkout the tag/branch
         match Command::new("git")
             .args(["checkout", &latest_tag])
-            .current_dir(OPEN_AGENT_REPO_PATH)
+            .current_dir(SANDBOXED_REPO_PATH)
             .output()
             .await
         {
@@ -744,7 +744,7 @@ fn stream_open_agent_update() -> impl Stream<Item = Result<Event, std::convert::
         if latest_tag == "origin/master" {
             if let Ok(output) = Command::new("git")
                 .args(["pull", "origin", "master"])
-                .current_dir(OPEN_AGENT_REPO_PATH)
+                .current_dir(SANDBOXED_REPO_PATH)
                 .output()
                 .await
             {
@@ -759,8 +759,8 @@ fn stream_open_agent_update() -> impl Stream<Item = Result<Event, std::convert::
         yield sse("log", "Building Open Agent (this may take a few minutes)...", Some(20));
 
         match Command::new("bash")
-            .args(["-c", "source /root/.cargo/env && cargo build --bin open_agent"])
-            .current_dir(OPEN_AGENT_REPO_PATH)
+            .args(["-c", "source /root/.cargo/env && cargo build --bin sandboxed-sh"])
+            .current_dir(SANDBOXED_REPO_PATH)
             .output()
             .await
         {
@@ -783,10 +783,10 @@ fn stream_open_agent_update() -> impl Stream<Item = Result<Event, std::convert::
         // Install binaries
         yield sse("log", "Installing binaries...", Some(75));
 
-        let binaries = [("open_agent", "/usr/local/bin/open_agent")];
+        let binaries = [("sandboxed_sh", "/usr/local/bin/sandboxed-sh")];
 
         for (name, dest) in binaries {
-            let src = format!("{}/target/debug/{}", OPEN_AGENT_REPO_PATH, name);
+            let src = format!("{}/target/debug/{}", SANDBOXED_REPO_PATH, name);
             match Command::new("install")
                 .args(["-m", "0755", &src, dest])
                 .output()
@@ -816,7 +816,7 @@ fn stream_open_agent_update() -> impl Stream<Item = Result<Event, std::convert::
         // Restart the service - this will terminate our process, so no code after this
         // will execute. The client should poll /api/health to confirm the new version.
         let _ = Command::new("systemctl")
-            .args(["restart", "open_agent.service"])
+            .args(["restart", "sandboxed-sh.service"])
             .output()
             .await;
     }

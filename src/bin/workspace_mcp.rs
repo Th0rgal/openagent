@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use open_agent::tools;
-use open_agent::tools::Tool;
+use sandboxed_sh::tools;
+use sandboxed_sh::tools::Tool;
 
 // =============================================================================
 // JSON-RPC Types
