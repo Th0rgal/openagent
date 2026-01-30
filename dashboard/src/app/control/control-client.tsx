@@ -4675,6 +4675,11 @@ export default function ControlClient() {
             providers={providers}
             disabled={missionLoading}
             onCreate={handleNewMission}
+            initialValues={activeMission ? {
+              workspaceId: activeMission.workspace_id,
+              agent: activeMission.agent,
+              backend: activeMission.backend,
+            } : undefined}
           />
 
           {/* Thinking panel toggle */}

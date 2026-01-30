@@ -20,6 +20,13 @@ export interface CreatedMission {
   id: string;
 }
 
+/** Initial values to pre-fill the dialog (e.g., from current mission) */
+export interface InitialMissionValues {
+  workspaceId?: string;
+  agent?: string;
+  backend?: string;
+}
+
 interface NewMissionDialogProps {
   workspaces: Workspace[];
   providers?: Provider[];
@@ -28,6 +35,8 @@ interface NewMissionDialogProps {
   onCreate: (options?: CreateMissionOptions) => Promise<CreatedMission>;
   /** Path to the control page (default: '/control') */
   controlPath?: string;
+  /** Initial values to pre-fill the form (from current mission) */
+  initialValues?: InitialMissionValues;
 }
 
 // Combined agent with backend info
@@ -69,6 +78,7 @@ export function NewMissionDialog({
   disabled = false,
   onCreate,
   controlPath = '/control',
+  initialValues,
 }: NewMissionDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -273,7 +283,7 @@ export function NewMissionDialog({
     };
   }, [open]);
 
-  // Set default agent when dialog opens (only once per open)
+  // Set initial values when dialog opens (only once per open)
   useEffect(() => {
     if (!open || defaultSet) return;
     // Wait for config to finish loading
@@ -281,7 +291,24 @@ export function NewMissionDialog({
     // Wait for agents to load
     if (allAgents.length === 0) return;
 
-    // Try to find the default agent from config
+    // Set workspace from initialValues if provided
+    if (initialValues?.workspaceId) {
+      setNewMissionWorkspace(initialValues.workspaceId);
+    }
+
+    // Try to use initialValues for agent (from current mission)
+    if (initialValues?.backend && initialValues?.agent) {
+      const matchingAgent = allAgents.find(
+        a => a.backend === initialValues.backend && a.agent === initialValues.agent
+      );
+      if (matchingAgent) {
+        setSelectedAgentValue(matchingAgent.value);
+        setDefaultSet(true);
+        return;
+      }
+    }
+
+    // Fallback: try to find the default agent from config
     if (config?.default_agent) {
       const defaultAgent = allAgents.find(a => a.agent === config.default_agent);
       if (defaultAgent) {
@@ -304,7 +331,7 @@ export function NewMissionDialog({
       setSelectedAgentValue(allAgents[0].value);
     }
     setDefaultSet(true);
-  }, [open, defaultSet, allAgents, config]);
+  }, [open, defaultSet, allAgents, config, initialValues]);
 
   const resetForm = () => {
     setNewMissionWorkspace('');
