@@ -4425,7 +4425,14 @@ export default function ControlClient() {
     // Sync mission state before sending (backend needs current_mission set correctly)
     if (targetMissionId) {
       try {
-        const mission = await loadMission(targetMissionId);
+        let mission = await loadMission(targetMissionId);
+
+        // If the mission is in a resumable state (failed/interrupted/blocked),
+        // resume it first to update the status before sending the message
+        if (["failed", "interrupted", "blocked"].includes(mission.status)) {
+          mission = await resumeMission(mission.id);
+        }
+
         setCurrentMission(mission);
         setViewingMission(mission);
         setViewingMissionId(mission.id);
