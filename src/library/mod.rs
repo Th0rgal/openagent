@@ -2054,10 +2054,7 @@ impl LibraryStore {
     }
 
     /// Get Amp Code config from a specific profile.
-    pub async fn get_ampcode_config_for_profile(
-        &self,
-        profile: &str,
-    ) -> Result<AmpCodeConfig> {
+    pub async fn get_ampcode_config_for_profile(&self, profile: &str) -> Result<AmpCodeConfig> {
         Self::validate_name(profile)?;
 
         let profile_dir = self.path.join(CONFIGS_DIR).join(profile);
@@ -2096,11 +2093,7 @@ impl LibraryStore {
     }
 
     /// Get a specific file from a config profile.
-    pub async fn get_config_profile_file(
-        &self,
-        profile: &str,
-        file_path: &str,
-    ) -> Result<String> {
+    pub async fn get_config_profile_file(&self, profile: &str, file_path: &str) -> Result<String> {
         Self::validate_name(profile)?;
 
         let profile_dir = self.path.join(CONFIGS_DIR).join(profile);

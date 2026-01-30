@@ -166,7 +166,6 @@ async fn reinitialize_library(state: &Arc<AppState>, remote: &str) -> Result<(),
                         );
                     }
                 }
-
             }
 
             Ok(())

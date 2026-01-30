@@ -619,11 +619,7 @@ async fn sync_workspace(
             )
         })?;
 
-    tracing::info!(
-        "Synced skills to workspace: {} ({})",
-        workspace.name,
-        id
-    );
+    tracing::info!("Synced skills to workspace: {} ({})", workspace.name, id);
 
     Ok(Json(workspace.into()))
 }

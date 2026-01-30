@@ -1346,7 +1346,8 @@ pub async fn create_mission(
     // If no model_override specified, resolve from config profile for Claude Code
     if backend.as_deref() == Some("claudecode") && model_override.is_none() {
         if let Some(default_model) =
-            resolve_claudecode_default_model(&state.library, effective_config_profile.as_deref()).await
+            resolve_claudecode_default_model(&state.library, effective_config_profile.as_deref())
+                .await
         {
             model_override = Some(default_model);
         }
