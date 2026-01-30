@@ -599,7 +599,7 @@ export default function SettingsPage() {
       )}
 
       {/* Main Content: File Browser + Editor */}
-      <div className="flex gap-4 flex-1">
+      <div className="flex gap-4 flex-1 min-h-0">
         {/* File Browser Sidebar */}
         <div className="w-64 flex-shrink-0 rounded-xl bg-white/[0.02] border border-white/[0.06] p-4">
           <div className="flex items-center gap-2 mb-4">
@@ -637,16 +637,20 @@ export default function SettingsPage() {
         </div>
 
         {/* Editor */}
-        <div className="flex-1 space-y-4">
+        <div className="flex-1 flex flex-col min-h-0">
           {/* Editor Header */}
-          <div className="flex items-center justify-between">
-            <div>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
               <h2 className="text-lg font-medium text-white">
                 {selectedFile ? selectedFile.split('/').pop() : 'Select a file'}
+                {isDirty && <span className="text-amber-400 text-sm font-normal ml-2">(unsaved)</span>}
               </h2>
-              <p className="text-sm text-white/50">
-                Profile: {selectedProfile} / {harnessConfig.name}
-              </p>
+              {parseError && (
+                <span className="text-red-400 text-xs flex items-center gap-1">
+                  <AlertCircle className="h-3 w-3" />
+                  {parseError}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {isDirty && (
@@ -679,26 +683,14 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* Status Bar */}
-          <div className="flex items-center gap-4 text-xs text-white/50">
-            {isDirty && <span className="text-amber-400">Unsaved changes</span>}
-            {parseError && (
-              <span className="text-red-400 flex items-center gap-1">
-                <AlertCircle className="h-3 w-3" />
-                {parseError}
-              </span>
-            )}
-          </div>
-
-          {/* Editor */}
-          <div className="min-h-[500px] rounded-xl bg-white/[0.02] border border-white/[0.06] overflow-hidden">
+          {/* Editor - fills remaining space */}
+          <div className="flex-1 rounded-xl bg-white/[0.02] border border-white/[0.06] overflow-hidden">
             <ConfigCodeEditor
               value={fileContent}
               onChange={setFileContent}
               placeholder='{\n  "key": "value"\n}'
               disabled={saving || !selectedFile}
               className="h-full"
-              minHeight={500}
               padding={16}
               language="json"
             />
