@@ -278,7 +278,9 @@ pub async fn force_pull(path: &Path) -> Result<()> {
     }
 
     // Get the current branch name
-    let branch = get_branch(path).await.unwrap_or_else(|_| "main".to_string());
+    let branch = get_branch(path)
+        .await
+        .unwrap_or_else(|_| "main".to_string());
 
     // Reset to the remote branch
     let output = Command::new("git")
