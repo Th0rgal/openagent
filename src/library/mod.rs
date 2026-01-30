@@ -1826,7 +1826,7 @@ impl LibraryStore {
             .context("Failed to write opencode settings")?;
 
         // Save Sandboxed config
-        let sandboxed_content = serde_json::to_string_pretty(&profile.sandboxed-sh_config)?;
+        let sandboxed_content = serde_json::to_string_pretty(&profile.sandboxed_config)?;
         fs::write(sandboxed_dir.join("config.json"), sandboxed_content)
             .await
             .context("Failed to write sandboxed config")?;
@@ -1902,7 +1902,7 @@ impl LibraryStore {
             path: format!("{}/{}", CONFIGS_DIR, name),
             files: Vec::new(), // Files will be populated on next get_config_profile
             opencode_settings: base.opencode_settings,
-            sandboxed_config: base.sandboxed-sh_config,
+            sandboxed_config: base.sandboxed_config,
             claudecode_config: base.claudecode_config,
             ampcode_config: base.ampcode_config,
         };
