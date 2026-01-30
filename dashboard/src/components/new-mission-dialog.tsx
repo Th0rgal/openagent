@@ -12,6 +12,8 @@ export interface CreateMissionOptions {
   agent?: string;
   modelOverride?: string;
   backend?: string;
+  /** Whether the mission will be opened in a new tab (skip local state updates) */
+  openInNewTab?: boolean;
 }
 
 export interface CreatedMission {
@@ -331,7 +333,7 @@ export function NewMissionDialog({
     setSubmitting(true);
     try {
       const options = getCreateOptions();
-      const mission = await onCreate(options);
+      const mission = await onCreate({ ...options, openInNewTab });
       const url = `${controlPath}?mission=${mission.id}`;
 
       if (openInNewTab) {

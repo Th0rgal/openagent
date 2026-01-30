@@ -245,7 +245,7 @@ export default function OverviewPage() {
   );
 
   const handleNewMission = useCallback(
-    async (options?: { workspaceId?: string; agent?: string; modelOverride?: string; backend?: string }) => {
+    async (options?: { workspaceId?: string; agent?: string; modelOverride?: string; backend?: string; openInNewTab?: boolean }) => {
       try {
         setCreatingMission(true);
         const mission = await createMission({

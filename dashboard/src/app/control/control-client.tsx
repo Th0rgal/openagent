@@ -3460,6 +3460,7 @@ export default function ControlClient() {
     agent?: string;
     modelOverride?: string;
     backend?: string;
+    openInNewTab?: boolean;
   }) => {
     try {
       setMissionLoading(true);
@@ -3469,13 +3470,18 @@ export default function ControlClient() {
         modelOverride: options?.modelOverride,
         backend: options?.backend,
       });
-      // Set up state for when navigation completes (same-tab case)
-      pendingMissionNavRef.current = mission.id;
-      setCurrentMission(mission);
-      setViewingMission(mission);
-      setViewingMissionId(mission.id);
-      setItems([]);
-      setHasDesktopSession(false);
+
+      // Only update local state for same-tab navigation
+      // For new tab, the new tab will load its own state
+      if (!options?.openInNewTab) {
+        pendingMissionNavRef.current = mission.id;
+        setCurrentMission(mission);
+        setViewingMission(mission);
+        setViewingMissionId(mission.id);
+        setItems([]);
+        setHasDesktopSession(false);
+      }
+
       // Refresh running missions to get accurate state
       const running = await getRunningMissions();
       setRunningMissions(running);
