@@ -12,10 +12,24 @@ export const ENCRYPTED_TAG_REGEX = /<encrypted(?:\s+v="\d+")?>([^<]*)<\/encrypte
 /** Pattern for unversioned encrypted tags (for editing display) */
 export const ENCRYPTED_DISPLAY_REGEX = /<encrypted>([^<]*)<\/encrypted>/g;
 
+/** Pattern to match failed-to-decrypt tags */
+export const ENCRYPTED_FAILED_TAG_REGEX = /<encrypted-failed(?:\s+v="\d+")?>([^<]*)<\/encrypted-failed>/g;
+
 /** Check if a value looks like an encrypted tag */
 export const isEncryptedTag = (value: string): boolean => {
   const trimmed = value.trim();
   return trimmed.startsWith('<encrypted') && trimmed.endsWith('</encrypted>');
+};
+
+/** Check if a value is a failed-to-decrypt tag */
+export const isEncryptedFailedTag = (value: string): boolean => {
+  const trimmed = value.trim();
+  return trimmed.startsWith('<encrypted-failed') && trimmed.endsWith('</encrypted-failed>');
+};
+
+/** Check if content contains any failed-to-decrypt tags */
+export const hasFailedEncryptedTags = (content: string): boolean => {
+  return content.includes('<encrypted-failed');
 };
 
 /** Extract the value from an encrypted tag */
