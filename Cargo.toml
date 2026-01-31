@@ -1,9 +1,9 @@
 [package]
-name = "open_agent"
-version = "0.5.0"
+name = "sandboxed_sh"
+version = "0.5.1"
 edition = "2021"
-description = "Cloud orchestrator for AI coding agents (Claude Code & OpenCode)"
-authors = ["Open Agent Contributors"]
+description = "Self-hosted orchestrator for AI coding agents (formerly Open Agent)"
+authors = ["sandboxed.sh Contributors"]
 
 [dependencies]
 # Async runtime
@@ -74,7 +74,7 @@ zip = "2"
 idna_adapter = "=1.1.0"
 
 [[bin]]
-name = "open_agent"
+name = "sandboxed-sh"
 path = "src/main.rs"
 
 [[bin]]

@@ -16,6 +16,8 @@ import {
   listLibrarySkills,
   listLibraryCommands,
   syncLibrary,
+  forceSyncLibrary,
+  forcePushLibrary,
   commitLibrary,
   pushLibrary,
   saveLibraryMcps,
@@ -29,11 +31,8 @@ import {
   getLibraryAgent as apiGetLibraryAgent,
   saveLibraryAgent as apiSaveLibraryAgent,
   deleteLibraryAgent,
-  listLibraryTools,
-  getLibraryTool as apiGetLibraryTool,
-  saveLibraryTool as apiSaveLibraryTool,
-  deleteLibraryTool,
   LibraryUnavailableError,
+  DivergedHistoryError,
   type LibraryStatus,
   type McpServerDef,
   type SkillSummary,
@@ -41,8 +40,6 @@ import {
   type Plugin,
   type LibraryAgentSummary,
   type LibraryAgent,
-  type LibraryToolSummary,
-  type LibraryTool,
 } from '@/lib/api';
 
 // Re-export types for consumers
@@ -56,15 +53,21 @@ interface LibraryContextValue {
   commands: CommandSummary[];
   plugins: Record<string, Plugin>;
   libraryAgents: LibraryAgentSummary[];
-  libraryTools: LibraryToolSummary[];
   loading: boolean;
   libraryUnavailable: boolean;
   libraryUnavailableMessage: string | null;
+  /** Set when sync fails due to diverged history (e.g., after force push on remote) */
+  divergedHistory: boolean;
+  divergedHistoryMessage: string | null;
 
   // Actions
   refresh: () => Promise<void>;
   refreshStatus: () => Promise<void>;
   sync: () => Promise<void>;
+  /** Force reset local to match remote (use after diverged history) */
+  forceSync: () => Promise<void>;
+  /** Force push local to remote (use when you want to keep local changes) */
+  forcePush: () => Promise<void>;
   commit: (message: string) => Promise<void>;
   push: () => Promise<void>;
 
@@ -88,12 +91,6 @@ interface LibraryContextValue {
   saveLibraryAgent: (name: string, content: string) => Promise<void>;
   removeLibraryAgent: (name: string) => Promise<void>;
   refreshLibraryAgents: () => Promise<void>;
-
-  // Library Tool operations
-  getLibraryTool: (name: string) => Promise<LibraryTool>;
-  saveLibraryTool: (name: string, content: string) => Promise<void>;
-  removeLibraryTool: (name: string) => Promise<void>;
-  refreshLibraryTools: () => Promise<void>;
 
   // Operation states
   syncing: boolean;
@@ -123,7 +120,6 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
   const [commands, setCommands] = useState<CommandSummary[]>([]);
   const [plugins, setPlugins] = useState<Record<string, Plugin>>({});
   const [libraryAgents, setLibraryAgents] = useState<LibraryAgentSummary[]>([]);
-  const [libraryTools, setLibraryTools] = useState<LibraryToolSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [libraryUnavailable, setLibraryUnavailable] = useState(false);
   const [libraryUnavailableMessage, setLibraryUnavailableMessage] = useState<string | null>(null);
@@ -131,6 +127,8 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
   const [syncing, setSyncing] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const [divergedHistory, setDivergedHistory] = useState(false);
+  const [divergedHistoryMessage, setDivergedHistoryMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -138,14 +136,13 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       setLibraryUnavailable(false);
       setLibraryUnavailableMessage(null);
 
-      const [statusData, mcpsData, skillsData, commandsData, pluginsData, agentsData, toolsData] = await Promise.all([
+      const [statusData, mcpsData, skillsData, commandsData, pluginsData, agentsData] = await Promise.all([
         getLibraryStatus(),
         getLibraryMcps(),
         listLibrarySkills(),
         listLibraryCommands(),
         getLibraryPlugins().catch(() => ({})), // May not exist yet
         listLibraryAgents().catch(() => []),
-        listLibraryTools().catch(() => []),
       ]);
 
       setStatus(statusData);
@@ -154,7 +151,6 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       setCommands(commandsData);
       setPlugins(pluginsData);
       setLibraryAgents(agentsData);
-      setLibraryTools(toolsData);
     } catch (err) {
       if (err instanceof LibraryUnavailableError) {
         setLibraryUnavailable(true);
@@ -165,7 +161,6 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
         setCommands([]);
         setPlugins({});
         setLibraryAgents([]);
-        setLibraryTools([]);
         return;
       }
       showError(err instanceof Error ? err.message : 'Failed to load library data');
@@ -192,15 +187,54 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
   const sync = useCallback(async () => {
     try {
       setSyncing(true);
+      setDivergedHistory(false);
+      setDivergedHistoryMessage(null);
       await syncLibrary();
       await refresh();
     } catch (err) {
+      if (err instanceof DivergedHistoryError) {
+        // Set diverged history state so UI can show force sync options
+        setDivergedHistory(true);
+        setDivergedHistoryMessage(err.message);
+        // Don't show generic error toast - UI will show specific options
+        throw err;
+      }
       showError(err instanceof Error ? err.message : 'Failed to sync');
       throw err;
     } finally {
       setSyncing(false);
     }
   }, [refresh, showError]);
+
+  const forceSync = useCallback(async () => {
+    try {
+      setSyncing(true);
+      await forceSyncLibrary();
+      setDivergedHistory(false);
+      setDivergedHistoryMessage(null);
+      await refresh();
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Failed to force sync');
+      throw err;
+    } finally {
+      setSyncing(false);
+    }
+  }, [refresh, showError]);
+
+  const forcePush = useCallback(async () => {
+    try {
+      setPushing(true);
+      await forcePushLibrary();
+      setDivergedHistory(false);
+      setDivergedHistoryMessage(null);
+      await refreshStatus();
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Failed to force push');
+      throw err;
+    } finally {
+      setPushing(false);
+    }
+  }, [refreshStatus, showError]);
 
   const commit = useCallback(async (message: string) => {
     try {
@@ -315,33 +349,6 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
     }
   }, []);
 
-  // Library Tool operations
-  const getLibraryTool = useCallback(async (name: string): Promise<LibraryTool> => {
-    return apiGetLibraryTool(name);
-  }, []);
-
-  const saveLibraryToolFn = useCallback(async (name: string, content: string) => {
-    await apiSaveLibraryTool(name, content);
-    const toolsData = await listLibraryTools();
-    setLibraryTools(toolsData);
-    await refreshStatus();
-  }, [refreshStatus]);
-
-  const removeLibraryTool = useCallback(async (name: string) => {
-    await deleteLibraryTool(name);
-    setLibraryTools((prev) => prev.filter((t) => t.name !== name));
-    await refreshStatus();
-  }, [refreshStatus]);
-
-  const refreshLibraryTools = useCallback(async () => {
-    try {
-      const toolsData = await listLibraryTools();
-      setLibraryTools(toolsData);
-    } catch {
-      // Silently fail
-    }
-  }, []);
-
   const value = useMemo<LibraryContextValue>(
     () => ({
       status,
@@ -350,13 +357,16 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       commands,
       plugins,
       libraryAgents,
-      libraryTools,
       loading,
       libraryUnavailable,
       libraryUnavailableMessage,
+      divergedHistory,
+      divergedHistoryMessage,
       refresh,
       refreshStatus,
       sync,
+      forceSync,
+      forcePush,
       commit,
       push,
       saveMcps,
@@ -370,10 +380,6 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       saveLibraryAgent: saveLibraryAgentFn,
       removeLibraryAgent,
       refreshLibraryAgents,
-      getLibraryTool,
-      saveLibraryTool: saveLibraryToolFn,
-      removeLibraryTool,
-      refreshLibraryTools,
       syncing,
       committing,
       pushing,
@@ -385,13 +391,16 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       commands,
       plugins,
       libraryAgents,
-      libraryTools,
       loading,
       libraryUnavailable,
       libraryUnavailableMessage,
+      divergedHistory,
+      divergedHistoryMessage,
       refresh,
       refreshStatus,
       sync,
+      forceSync,
+      forcePush,
       commit,
       push,
       saveMcps,
@@ -405,10 +414,6 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
       saveLibraryAgentFn,
       removeLibraryAgent,
       refreshLibraryAgents,
-      getLibraryTool,
-      saveLibraryToolFn,
-      removeLibraryTool,
-      refreshLibraryTools,
       syncing,
       committing,
       pushing,

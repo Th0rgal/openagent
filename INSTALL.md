@@ -1,6 +1,6 @@
-# Installing Open Agent
+# Installing sandboxed.sh
 
-There are two ways to install Open Agent:
+There are two ways to install sandboxed.sh (formerly Sandboxed.sh):
 
 ## Docker (recommended for most users)
 
@@ -9,8 +9,8 @@ One command gets you a complete environment on any OS (Linux, macOS, Windows).
 → **[Docker installation guide](docs/install-docker.md)**
 
 ```bash
-git clone https://github.com/Th0rgal/openagent.git
-cd openagent
+git clone https://github.com/Th0rgal/sandboxed-sh.git
+cd sandboxed-sh
 cp .env.example .env
 docker compose up -d
 ```

@@ -601,6 +601,20 @@ textarea.config-code-editor::placeholder {
   border-radius: 2px;
 }
 
+/* Failed-to-decrypt tag highlighting (red) */
+.token-encrypted-failed-tag {
+  color: #f87171;
+}
+
+.token-encrypted-failed-value {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.15);
+  padding: 0 2px;
+  border-radius: 2px;
+  text-decoration: line-through;
+  text-decoration-color: rgba(239, 68, 68, 0.5);
+}
+
 /* URL token for markdown links */
 .token.url {
   color: #4fc1ff;

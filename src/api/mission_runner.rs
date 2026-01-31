@@ -29,8 +29,8 @@ use crate::workspace::{self, Workspace, WorkspaceType};
 use crate::workspace_exec::WorkspaceExec;
 
 use super::control::{
-    safe_truncate_index, AgentEvent, AgentTreeNode, ControlStatus, ExecutionProgress,
-    FrontendToolHub,
+    resolve_claudecode_default_model, safe_truncate_index, AgentEvent, AgentTreeNode,
+    ControlStatus, ExecutionProgress, FrontendToolHub,
 };
 use super::library::SharedLibrary;
 
@@ -555,6 +555,9 @@ pub struct MissionRunner {
     /// Session ID for conversation persistence (used by Claude Code --session-id)
     pub session_id: Option<String>,
 
+    /// Config profile from the mission (overrides workspace config_profile)
+    pub config_profile: Option<String>,
+
     /// Current state
     pub state: MissionRunState,
 
@@ -603,12 +606,14 @@ impl MissionRunner {
         agent_override: Option<String>,
         backend_id: Option<String>,
         session_id: Option<String>,
+        config_profile: Option<String>,
     ) -> Self {
         Self {
             mission_id,
             workspace_id,
             backend_id: backend_id.unwrap_or_else(|| "opencode".to_string()),
             session_id,
+            config_profile,
             state: MissionRunState::Queued,
             agent_override,
             queue: VecDeque::new(),
@@ -738,6 +743,7 @@ impl MissionRunner {
         let agent_override = self.agent_override.clone();
         let backend_id = self.backend_id.clone();
         let session_id = self.session_id.clone();
+        let config_profile = self.config_profile.clone();
         let user_message = msg.content.clone();
         let msg_id = msg.id;
         tracing::info!(
@@ -785,6 +791,7 @@ impl MissionRunner {
                 agent_override,
                 secrets,
                 session_id,
+                config_profile,
             )
             .await;
             (msg_id, user_message, result)
@@ -868,28 +875,6 @@ fn build_history_context(history: &[(String, String)], max_chars: usize) -> Stri
     result
 }
 
-async fn resolve_claudecode_default_model(library: &SharedLibrary) -> Option<String> {
-    let lib = {
-        let guard = library.read().await;
-        guard.clone()
-    }?;
-
-    match lib.get_claudecode_config().await {
-        Ok(config) => config.default_model.and_then(|model| {
-            let trimmed = model.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        }),
-        Err(err) => {
-            tracing::warn!("Failed to load Claude Code config from library: {}", err);
-            None
-        }
-    }
-}
-
 /// Try to resolve a library command from a user message starting with `/`.
 /// If the message starts with `/command-name` and a matching command exists in the library,
 /// returns the command's body content (frontmatter stripped). Otherwise returns the original message.
@@ -961,14 +946,30 @@ async fn run_mission_turn(
     agent_override: Option<String>,
     secrets: Option<Arc<SecretsStore>>,
     session_id: Option<String>,
+    mission_config_profile: Option<String>,
 ) -> AgentResult {
     let mut config = config;
     let effective_agent = agent_override.clone();
     if let Some(ref agent) = effective_agent {
         config.opencode_agent = Some(agent.clone());
     }
+    // Get config profile: mission's config_profile takes priority over workspace's
+    let workspace_config_profile = if let Some(ws_id) = workspace_id {
+        workspaces.get(ws_id).await.and_then(|ws| ws.config_profile)
+    } else {
+        None
+    };
+    tracing::info!(
+        mission_id = %mission_id,
+        mission_config_profile = ?mission_config_profile,
+        workspace_config_profile = ?workspace_config_profile,
+        "Resolving config profile"
+    );
+    let effective_config_profile = mission_config_profile.or(workspace_config_profile);
     if backend_id == "claudecode" && config.default_model.is_none() {
-        if let Some(default_model) = resolve_claudecode_default_model(&library).await {
+        if let Some(default_model) =
+            resolve_claudecode_default_model(&library, effective_config_profile.as_deref()).await
+        {
             config.default_model = Some(default_model);
         }
     }
@@ -1050,6 +1051,7 @@ async fn run_mission_turn(
             mission_id,
             &backend_id,
             None, // custom_providers: TODO integrate with provider store
+            effective_config_profile.as_deref(),
         )
         .await
     } {
@@ -1155,7 +1157,7 @@ fn read_backend_configs() -> Option<Vec<serde_json::Value>> {
     if let Some(ref wd) = working_dir {
         candidates.push(
             std::path::PathBuf::from(wd)
-                .join(".openagent")
+                .join(".sandboxed-sh")
                 .join("backend_config.json"),
         );
     }
@@ -1163,27 +1165,27 @@ fn read_backend_configs() -> Option<Vec<serde_json::Value>> {
     // Add HOME paths
     candidates.push(
         std::path::PathBuf::from(&home)
-            .join(".openagent")
+            .join(".sandboxed-sh")
             .join("backend_config.json"),
     );
     candidates.push(
         std::path::PathBuf::from(&home)
-            .join(".openagent")
+            .join(".sandboxed-sh")
             .join("data")
             .join("backend_configs.json"),
     );
 
-    // Always check /root/.openagent as fallback since the dashboard saves config there
+    // Always check /root/.sandboxed-sh as fallback since the dashboard saves config there
     // and Open Agent service may run with a different HOME (e.g., /var/lib/opencode)
     if home != "/root" {
         candidates.push(
             std::path::PathBuf::from("/root")
-                .join(".openagent")
+                .join(".sandboxed-sh")
                 .join("backend_config.json"),
         );
         candidates.push(
             std::path::PathBuf::from("/root")
-                .join(".openagent")
+                .join(".sandboxed-sh")
                 .join("data")
                 .join("backend_configs.json"),
         );
@@ -1602,17 +1604,45 @@ pub fn run_claudecode_turn<'a>(
             args.push(m.to_string());
         }
 
-        // For continuation turns, use --resume to resume existing session
-        // For first turn, use --session-id to create new session with that ID
-        if is_continuation {
+        // For continuation turns, use --resume to resume existing session.
+        // For first turn, use --session-id to create new session with that ID.
+        //
+        // Important: We use a marker file to track if the session was ever initiated.
+        // This prevents "Session ID already in use" errors when a turn is cancelled
+        // after the session is created but before any assistant response is recorded.
+        // The marker file contains the session ID to prevent cross-mission interference
+        // when workspaces are shared (e.g., fallback to workspace-wide directory).
+        let session_marker = work_dir.join(".claude-session-initiated");
+        let session_was_initiated = session_marker.exists()
+            && std::fs::read_to_string(&session_marker)
+                .map(|content| content.trim() == session_id)
+                .unwrap_or(false);
+
+        // Determine if we should use --resume:
+        // - If we have assistant messages in history (normal continuation)
+        // - OR if the session was previously initiated for THIS mission (handles crash/cancel case)
+        let use_resume = is_continuation || session_was_initiated;
+
+        if use_resume {
             args.push("--resume".to_string());
             args.push(session_id.clone());
             tracing::debug!(
                 mission_id = %mission_id,
                 session_id = %session_id,
+                is_continuation = is_continuation,
+                session_was_initiated = session_was_initiated,
                 "Resuming existing Claude Code session"
             );
         } else {
+            // Create the marker file BEFORE starting the CLI to prevent races
+            if let Err(e) = std::fs::write(&session_marker, &session_id) {
+                tracing::warn!(
+                    mission_id = %mission_id,
+                    error = %e,
+                    "Failed to write session marker file"
+                );
+            }
+
             args.push("--session-id".to_string());
             args.push(session_id.clone());
             tracing::debug!(
@@ -2219,20 +2249,20 @@ fn install_opencode_serve_port_wrapper(
     }
 
     // Determine the wrapper directory.
-    // For containers: use /root/.openagent-bin (NOT /tmp) because nspawn mounts
+    // For containers: use /root/.sandboxed-sh-bin (NOT /tmp) because nspawn mounts
     // a fresh tmpfs over /tmp, hiding anything we write to the container rootfs.
     let (wrapper_dir_host, wrapper_dir_env) = if workspace.workspace_type
         == WorkspaceType::Container
         && workspace::use_nspawn_for_workspace(workspace)
     {
         (
-            workspace.path.join("root").join(".openagent-bin"),
-            "/root/.openagent-bin".to_string(),
+            workspace.path.join("root").join(".sandboxed-sh-bin"),
+            "/root/.sandboxed-sh-bin".to_string(),
         )
     } else {
         (
-            std::path::PathBuf::from("/tmp/.openagent-bin"),
-            "/tmp/.openagent-bin".to_string(),
+            std::path::PathBuf::from("/tmp/.sandboxed-sh-bin"),
+            "/tmp/.sandboxed-sh-bin".to_string(),
         )
     };
 
@@ -2873,7 +2903,7 @@ fn ensure_opencode_plugin_specs(opencode_config_dir: &std::path::Path, plugin_sp
 
 fn detect_google_project_id() -> Option<String> {
     for key in [
-        "OPEN_AGENT_GOOGLE_PROJECT_ID",
+        "SANDBOXED_SH_GOOGLE_PROJECT_ID",
         "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_PROJECT_ID",
         "GCP_PROJECT",
@@ -3319,7 +3349,7 @@ fn patch_oh_my_opencode_port_override(workspace: &Workspace) -> bool {
         }
     };
 
-    if contents.contains("OPEN_AGENT_OPENCODE_PORT_PATCH") {
+    if contents.contains("SANDBOXED_SH_OPENCODE_PORT_PATCH") {
         return true;
     }
 
@@ -3341,7 +3371,7 @@ fn patch_oh_my_opencode_port_override(workspace: &Workspace) -> bool {
     }
 
     let replacement = format!(
-        "const __oaPortRaw = process.env.OPENCODE_SERVER_PORT;{nl}    const __oaPort = __oaPortRaw ? Number(__oaPortRaw) : void 0;{nl}    const __oaHost = process.env.OPENCODE_SERVER_HOSTNAME;{nl}    const {{ client: client3, server: server2 }} = await createOpencode({{{nl}      signal: abortController.signal,{nl}      ...(Number.isFinite(__oaPort) ? {{ port: __oaPort }} : {{}}),{nl}      ...(__oaHost ? {{ hostname: __oaHost }} : {{}}),{nl}      // OPEN_AGENT_OPENCODE_PORT_PATCH{nl}    }});",
+        "const __oaPortRaw = process.env.OPENCODE_SERVER_PORT;{nl}    const __oaPort = __oaPortRaw ? Number(__oaPortRaw) : void 0;{nl}    const __oaHost = process.env.OPENCODE_SERVER_HOSTNAME;{nl}    const {{ client: client3, server: server2 }} = await createOpencode({{{nl}      signal: abortController.signal,{nl}      ...(Number.isFinite(__oaPort) ? {{ port: __oaPort }} : {{}}),{nl}      ...(__oaHost ? {{ hostname: __oaHost }} : {{}}),{nl}      // SANDBOXED_SH_OPENCODE_PORT_PATCH{nl}    }});",
         nl = newline
     );
 
@@ -3507,7 +3537,9 @@ fn workspace_opencode_provider_auth_dir(workspace: &Workspace) -> Option<std::pa
 fn build_opencode_auth_from_ai_providers(
     app_working_dir: &std::path::Path,
 ) -> Option<serde_json::Value> {
-    let path = app_working_dir.join(".openagent").join("ai_providers.json");
+    let path = app_working_dir
+        .join(".sandboxed-sh")
+        .join("ai_providers.json");
     let contents = std::fs::read_to_string(&path).ok()?;
     let providers: Vec<crate::ai_providers::AIProvider> = serde_json::from_str(&contents).ok()?;
 
@@ -4099,7 +4131,7 @@ async fn ensure_claudecode_cli_available(
         }
     }
 
-    let auto_install = env_var_bool("OPEN_AGENT_AUTO_INSTALL_CLAUDECODE", true);
+    let auto_install = env_var_bool("SANDBOXED_SH_AUTO_INSTALL_CLAUDECODE", true);
     if !auto_install {
         return Err(format!(
             "Claude Code CLI '{}' not found in workspace. Install it or set CLAUDE_CLI_PATH.",
@@ -4268,7 +4300,7 @@ async fn ensure_opencode_cli_available(
         return Ok(());
     }
 
-    let auto_install = env_var_bool("OPEN_AGENT_AUTO_INSTALL_OPENCODE", true);
+    let auto_install = env_var_bool("SANDBOXED_SH_AUTO_INSTALL_OPENCODE", true);
     if !auto_install {
         return Err(
             "OpenCode CLI 'opencode' not found in workspace. Install it or disable OpenCode."
@@ -4367,7 +4399,7 @@ pub async fn run_opencode_turn(
     let mut resolved_model = model
         .map(|m| m.to_string())
         .or_else(|| {
-            std::env::var("OPEN_AGENT_OPENCODE_DEFAULT_MODEL")
+            std::env::var("SANDBOXED_SH_OPENCODE_DEFAULT_MODEL")
                 .ok()
                 .filter(|v| !v.trim().is_empty())
         })
@@ -4606,7 +4638,7 @@ pub async fn run_opencode_turn(
     let opencode_auth = sync_opencode_auth_to_workspace(workspace, app_working_dir);
 
     // Allow per-mission OpenCode server port; default to an allocated free port.
-    let requested_port = std::env::var("OPEN_AGENT_OPENCODE_SERVER_PORT")
+    let requested_port = std::env::var("SANDBOXED_SH_OPENCODE_SERVER_PORT")
         .ok()
         .filter(|v| !v.trim().is_empty());
     let mut opencode_port = requested_port
@@ -4619,7 +4651,7 @@ pub async fn run_opencode_turn(
     }
 
     env.insert("OPENCODE_SERVER_PORT".to_string(), opencode_port.clone());
-    if let Ok(host) = std::env::var("OPEN_AGENT_OPENCODE_SERVER_HOSTNAME") {
+    if let Ok(host) = std::env::var("SANDBOXED_SH_OPENCODE_SERVER_HOSTNAME") {
         if !host.trim().is_empty() {
             env.insert("OPENCODE_SERVER_HOSTNAME".to_string(), host);
         }
@@ -4675,7 +4707,7 @@ pub async fn run_opencode_turn(
     // Set non-interactive mode
     env.insert("OPENCODE_NON_INTERACTIVE".to_string(), "true".to_string());
     env.insert("OPENCODE_RUN".to_string(), "true".to_string());
-    env.entry("OPEN_AGENT_WORKSPACE_TYPE".to_string())
+    env.entry("SANDBOXED_SH_WORKSPACE_TYPE".to_string())
         .or_insert_with(|| workspace.workspace_type.as_str().to_string());
 
     if let Some(auth) = opencode_auth.as_ref() {
@@ -4692,7 +4724,7 @@ pub async fn run_opencode_turn(
     prepend_opencode_bin_to_path(&mut env, workspace);
 
     // Install the opencode serve wrapper AFTER prepend_opencode_bin_to_path so the
-    // wrapper dir (/tmp/.openagent-bin) is prepended last and takes priority over
+    // wrapper dir (/tmp/.sandboxed-sh-bin) is prepended last and takes priority over
     // the real binary at ~/.opencode/bin/opencode.
     // oh-my-opencode v3+ is a compiled binary that spawns `opencode serve --port=4096`;
     // the wrapper intercepts this and overrides the port.
@@ -4752,7 +4784,7 @@ pub async fn run_opencode_turn(
             let events_tx = events_tx.clone();
             let opencode_port = opencode_port.clone();
             let mission_id = mission_id;
-            let sse_host = std::env::var("OPEN_AGENT_OPENCODE_SERVER_HOSTNAME")
+            let sse_host = std::env::var("SANDBOXED_SH_OPENCODE_SERVER_HOSTNAME")
                 .ok()
                 .filter(|v| !v.trim().is_empty())
                 .unwrap_or_else(|| "127.0.0.1".to_string());
@@ -5181,7 +5213,7 @@ pub async fn run_amp_turn(
 
     // Check if amp CLI is available
     if !command_available(&workspace_exec, work_dir, "amp").await {
-        let auto_install = env_var_bool("OPEN_AGENT_AUTO_INSTALL_AMP", true);
+        let auto_install = env_var_bool("SANDBOXED_SH_AUTO_INSTALL_AMP", true);
         if auto_install {
             // Try to install via bun first (preferred for container templates), then npm
             let has_bun = command_available(&workspace_exec, work_dir, "bun").await;

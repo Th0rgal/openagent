@@ -5,7 +5,7 @@
 //! ## Architecture
 //!
 //! ```text
-//! .openagent/secrets/
+//! .sandboxed-sh/secrets/
 //! ├── config.json           # Key configuration (git-tracked)
 //! ├── keys/
 //! │   └── default.key       # Key marker file (git-tracked)
@@ -15,7 +15,7 @@
 //! ```
 //!
 //! The actual passphrase is provided via:
-//! - `OPENAGENT_SECRET_PASSPHRASE` environment variable
+//! - `SANDBOXED_SECRET_PASSPHRASE` (or legacy `OPENAGENT_SECRET_PASSPHRASE`) environment variable
 //! - Or via the unlock API endpoint (session-based)
 //!
 //! ## Usage

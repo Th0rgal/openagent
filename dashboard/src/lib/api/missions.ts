@@ -59,6 +59,7 @@ export interface CreateMissionOptions {
   workspaceId?: string;
   agent?: string;
   modelOverride?: string;
+  configProfile?: string;
   backend?: string;
 }
 
@@ -107,6 +108,7 @@ export async function createMission(
     workspace_id?: string;
     agent?: string;
     model_override?: string;
+    config_profile?: string;
     backend?: string;
   } = {};
 
@@ -114,6 +116,7 @@ export async function createMission(
   if (options?.workspaceId) body.workspace_id = options.workspaceId;
   if (options?.agent) body.agent = options.agent;
   if (options?.modelOverride) body.model_override = options.modelOverride;
+  if (options?.configProfile) body.config_profile = options.configProfile;
   if (options?.backend) body.backend = options.backend;
 
   const res = await apiFetch("/api/control/missions", {
@@ -182,9 +185,14 @@ export async function cleanupEmptyMissions(): Promise<{ ok: boolean; deleted_cou
   return res.json();
 }
 
-export async function resumeMission(id: string): Promise<Mission> {
+export async function resumeMission(
+  id: string,
+  options?: { skipMessage?: boolean }
+): Promise<Mission> {
   const res = await apiFetch(`/api/control/missions/${id}/resume`, {
     method: "POST",
+    headers: options ? { "Content-Type": "application/json" } : undefined,
+    body: options ? JSON.stringify({ skip_message: options.skipMessage }) : undefined,
   });
   if (!res.ok) {
     const text = await res.text();

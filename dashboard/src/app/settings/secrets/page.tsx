@@ -5,6 +5,8 @@ import useSWR from 'swr';
 import {
   getSecretsStatus,
   getEncryptionStatus,
+  getPrivateKey,
+  setPrivateKey,
   initializeSecrets,
   unlockSecrets,
   lockSecrets,
@@ -32,6 +34,7 @@ import {
   Server,
   CheckCircle,
   AlertCircle,
+  Settings,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/components/toast';
@@ -82,6 +85,16 @@ export default function SecretsPage() {
   // Copy feedback
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
+  // Private key management
+  const [showKeyDialog, setShowKeyDialog] = useState(false);
+  const [currentKeyHex, setCurrentKeyHex] = useState<string | null>(null);
+  const [newKeyHex, setNewKeyHex] = useState('');
+  const [loadingKey, setLoadingKey] = useState(false);
+  const [savingKey, setSavingKey] = useState(false);
+  const [showCurrentKey, setShowCurrentKey] = useState(false);
+  const [keyDialogMode, setKeyDialogMode] = useState<'view' | 'edit'>('view');
+  const [keyCopied, setKeyCopied] = useState(false);
+
   // Load secrets when registry changes
   useEffect(() => {
     if (selectedRegistry && secretsStatus?.can_decrypt) {
@@ -103,11 +116,55 @@ export default function SecretsPage() {
         if (showInitDialog) setShowInitDialog(false);
         if (showUnlockDialog) setShowUnlockDialog(false);
         if (showAddDialog) setShowAddDialog(false);
+        if (showKeyDialog) setShowKeyDialog(false);
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [showInitDialog, showUnlockDialog, showAddDialog]);
+  }, [showInitDialog, showUnlockDialog, showAddDialog, showKeyDialog]);
+
+  const handleOpenKeyDialog = async () => {
+    setShowKeyDialog(true);
+    setKeyDialogMode('view');
+    setShowCurrentKey(false);
+    setNewKeyHex('');
+    setLoadingKey(true);
+    try {
+      const response = await getPrivateKey();
+      setCurrentKeyHex(response.key_hex);
+    } catch (err) {
+      console.error('Failed to load private key:', err);
+      setCurrentKeyHex(null);
+    } finally {
+      setLoadingKey(false);
+    }
+  };
+
+  const handleSaveKey = async () => {
+    if (!newKeyHex.trim()) return;
+    try {
+      setSavingKey(true);
+      const response = await setPrivateKey(newKeyHex.trim());
+      if (response.success) {
+        // Reload encryption status
+        window.location.reload();
+      } else {
+        showError(response.message);
+      }
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Failed to save key');
+    } finally {
+      setSavingKey(false);
+    }
+  };
+
+  const handleCopyCurrentKey = async () => {
+    if (currentKeyHex) {
+      await navigator.clipboard.writeText(currentKeyHex);
+      setKeyCopied(true);
+      setTimeout(() => setKeyCopied(false), 2000);
+    }
+  };
 
   const loadSecrets = async (registry: string) => {
     try {
@@ -295,30 +352,48 @@ export default function SecretsPage() {
               Encrypts <code className="text-xs bg-white/[0.06] px-1 py-0.5 rounded">&lt;encrypted&gt;...&lt;/encrypted&gt;</code> tags in skill markdown files.
             </p>
             {encryptionStatus?.key_available ? (
-              <div className="flex items-center gap-4 text-sm">
-                <div className="flex items-center gap-2 text-white/60">
-                  {encryptionStatus.key_source === 'environment' ? (
-                    <>
-                      <Server className="h-4 w-4" />
-                      <span>Key from environment variable</span>
-                    </>
-                  ) : (
-                    <>
-                      <FileKey className="h-4 w-4" />
-                      <span>Key from file</span>
-                    </>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4 text-sm">
+                  <div className="flex items-center gap-2 text-white/60">
+                    {encryptionStatus.key_source === 'environment' ? (
+                      <>
+                        <Server className="h-4 w-4" />
+                        <span>Key from environment variable</span>
+                      </>
+                    ) : (
+                      <>
+                        <FileKey className="h-4 w-4" />
+                        <span>Key from file</span>
+                      </>
+                    )}
+                  </div>
+                  {encryptionStatus.key_file_path && encryptionStatus.key_source === 'file' && (
+                    <code className="text-xs text-white/40 bg-white/[0.04] px-2 py-1 rounded">
+                      {encryptionStatus.key_file_path}
+                    </code>
                   )}
                 </div>
-                {encryptionStatus.key_file_path && encryptionStatus.key_source === 'file' && (
-                  <code className="text-xs text-white/40 bg-white/[0.04] px-2 py-1 rounded">
-                    {encryptionStatus.key_file_path}
-                  </code>
-                )}
+                <button
+                  onClick={handleOpenKeyDialog}
+                  className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-white/60 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] rounded-lg transition-colors"
+                >
+                  <Settings className="h-3.5 w-3.5" />
+                  Manage Key
+                </button>
               </div>
             ) : (
-              <p className="text-sm text-white/40">
-                Set <code className="text-xs bg-white/[0.06] px-1 py-0.5 rounded">PRIVATE_KEY</code> environment variable or the key will be auto-generated on first use.
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-white/40">
+                  Set <code className="text-xs bg-white/[0.06] px-1 py-0.5 rounded">PRIVATE_KEY</code> environment variable or configure below.
+                </p>
+                <button
+                  onClick={handleOpenKeyDialog}
+                  className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20 rounded-lg transition-colors"
+                >
+                  <Settings className="h-3.5 w-3.5" />
+                  Configure Key
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -658,6 +733,137 @@ export default function SecretsPage() {
               >
                 {addingSecret ? 'Adding...' : 'Add Secret'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Private Key Management Dialog */}
+      {showKeyDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-lg p-6 rounded-xl bg-[#1a1a1c] border border-white/[0.06]">
+            <h3 className="text-lg font-medium text-white mb-4">Manage Encryption Key</h3>
+
+            {loadingKey ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader className="h-6 w-6 animate-spin text-white/40" />
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* Current key section */}
+                {currentKeyHex && (
+                  <div>
+                    <label className="block text-sm text-white/60 mb-2">Current Key (hex)</label>
+                    <div className="flex gap-2">
+                      <div className="flex-1 relative">
+                        <input
+                          type={showCurrentKey ? 'text' : 'password'}
+                          value={currentKeyHex}
+                          readOnly
+                          className="w-full px-4 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-white font-mono text-sm focus:outline-none"
+                        />
+                        <button
+                          onClick={() => setShowCurrentKey(!showCurrentKey)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-white/40 hover:text-white"
+                        >
+                          {showCurrentKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                      <button
+                        onClick={handleCopyCurrentKey}
+                        className="px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-white/60 hover:text-white transition-colors"
+                        title="Copy key"
+                      >
+                        {keyCopied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Mode toggle */}
+                <div className="flex gap-2 border-b border-white/[0.06] pb-4">
+                  <button
+                    onClick={() => setKeyDialogMode('view')}
+                    className={cn(
+                      'px-3 py-1.5 text-sm rounded-lg transition-colors',
+                      keyDialogMode === 'view'
+                        ? 'bg-white/[0.08] text-white'
+                        : 'text-white/40 hover:text-white'
+                    )}
+                  >
+                    View
+                  </button>
+                  <button
+                    onClick={() => setKeyDialogMode('edit')}
+                    className={cn(
+                      'px-3 py-1.5 text-sm rounded-lg transition-colors',
+                      keyDialogMode === 'edit'
+                        ? 'bg-white/[0.08] text-white'
+                        : 'text-white/40 hover:text-white'
+                    )}
+                  >
+                    {currentKeyHex ? 'Update Key' : 'Set Key'}
+                  </button>
+                </div>
+
+                {/* Edit mode */}
+                {keyDialogMode === 'edit' && (
+                  <div>
+                    <label className="block text-sm text-white/60 mb-2">
+                      {currentKeyHex ? 'New Key (hex, 64 characters)' : 'Enter Key (hex, 64 characters)'}
+                    </label>
+                    <textarea
+                      placeholder="Enter 64-character hex key (256 bits)..."
+                      value={newKeyHex}
+                      onChange={(e) => setNewKeyHex(e.target.value)}
+                      rows={2}
+                      className="w-full px-4 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-white placeholder:text-white/30 focus:outline-none focus:border-indigo-500/50 resize-none font-mono text-sm"
+                    />
+                    {currentKeyHex && (
+                      <p className="text-xs text-amber-400/80 mt-2">
+                        Warning: Changing the key will re-encrypt all skill content that can be decrypted with the current key.
+                      </p>
+                    )}
+                    {newKeyHex && newKeyHex.length !== 64 && (
+                      <p className="text-xs text-red-400/80 mt-2">
+                        Key must be exactly 64 hex characters ({newKeyHex.length}/64)
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Info section for view mode */}
+                {keyDialogMode === 'view' && !currentKeyHex && (
+                  <div className="py-4 text-center">
+                    <p className="text-sm text-white/50 mb-2">No encryption key configured.</p>
+                    <p className="text-xs text-white/40">
+                      Click "Set Key" to configure an encryption key for skill content.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => {
+                  setShowKeyDialog(false);
+                  setNewKeyHex('');
+                  setShowCurrentKey(false);
+                }}
+                className="px-4 py-2 text-sm text-white/60 hover:text-white"
+              >
+                {keyDialogMode === 'view' ? 'Close' : 'Cancel'}
+              </button>
+              {keyDialogMode === 'edit' && (
+                <button
+                  onClick={handleSaveKey}
+                  disabled={!newKeyHex.trim() || newKeyHex.length !== 64 || savingKey}
+                  className="px-4 py-2 text-sm font-medium text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg disabled:opacity-50"
+                >
+                  {savingKey ? 'Saving...' : currentKeyHex ? 'Update Key' : 'Set Key'}
+                </button>
+              )}
             </div>
           </div>
         </div>

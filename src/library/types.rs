@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::workspace::TailscaleMode;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MCP Server Types (OpenCode-aligned format)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -111,36 +113,6 @@ pub struct LibraryAgent {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Library Tool Types (TypeScript tool definitions)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Library tool summary for listing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LibraryToolSummary {
-    /// Tool name (filename without .ts)
-    pub name: String,
-    /// Description extracted from code comments or export
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Path relative to library root (e.g., "tool/database-query.ts")
-    pub path: String,
-}
-
-/// Full library tool with content.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LibraryTool {
-    /// Tool name
-    pub name: String,
-    /// Description
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Path relative to library root
-    pub path: String,
-    /// Full TypeScript content
-    pub content: String,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Workspace Template Types
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -198,10 +170,19 @@ pub struct WorkspaceTemplate {
     /// Set to false for isolated networking (e.g., Tailscale).
     #[serde(default)]
     pub shared_network: Option<bool>,
+    /// Tailscale networking mode when shared_network is false.
+    /// - `exit_node`: Route all traffic through Tailscale exit node
+    /// - `tailnet_only`: Connect to tailnet but use host gateway for internet
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailscale_mode: Option<TailscaleMode>,
     /// MCP server names to enable for workspaces created from this template.
     /// Empty = use default MCPs (those with `default_enabled = true`).
     #[serde(default)]
     pub mcps: Vec<String>,
+    /// Config profile to use for workspaces created from this template.
+    /// Defaults to "default" if not specified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_profile: Option<String>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -411,7 +392,7 @@ pub struct MigrationReport {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OpenAgent Config Types
+// Sandboxed Config Types
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Desktop session lifecycle configuration.
@@ -456,10 +437,10 @@ impl Default for DesktopConfig {
     }
 }
 
-/// OpenAgent configuration stored in the Library.
+/// Sandboxed configuration stored in the Library.
 /// Controls agent visibility and defaults in the dashboard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenAgentConfig {
+pub struct SandboxedConfig {
     /// Agents to hide from the mission dialog selector.
     /// These are typically internal/system agents that users shouldn't select directly.
     #[serde(default)]
@@ -472,7 +453,7 @@ pub struct OpenAgentConfig {
     pub desktop: DesktopConfig,
 }
 
-impl Default for OpenAgentConfig {
+impl Default for SandboxedConfig {
     fn default() -> Self {
         Self {
             hidden_agents: vec![
@@ -508,6 +489,74 @@ pub struct ClaudeCodeConfig {
     /// These agents won't appear in the dropdown but can still be used via API.
     #[serde(default)]
     pub hidden_agents: Vec<String>,
+}
+
+/// Amp Code configuration stored in the Library.
+/// Controls default mode and settings for Amp backend.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AmpCodeConfig {
+    /// Default mode to use for Amp missions ("smart" or "rush").
+    #[serde(default)]
+    pub default_mode: Option<String>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Config Profile Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Config profile summary for listing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigProfileSummary {
+    /// Profile name (folder name, e.g., "default", "development", "production")
+    pub name: String,
+    /// Whether this is the default profile used when creating new workspaces
+    #[serde(default)]
+    pub is_default: bool,
+    /// Path relative to library root (e.g., "configs/default")
+    pub path: String,
+}
+
+/// A file within a config profile (for file-based editing).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigProfileFile {
+    /// Relative path within the profile (e.g., ".opencode/settings.json")
+    pub path: String,
+    /// File content as string
+    pub content: String,
+}
+
+/// Full config profile with all harness configurations.
+/// A profile is an instance of configs for OpenCode, Claude Code, Amp, and Sandboxed.
+///
+/// Directory structure mirrors actual harness config directories:
+/// - `.opencode/` - OpenCode settings (settings.json, oh-my-opencode.json)
+/// - `.claudecode/` - Claude Code settings (settings.json)
+/// - `.ampcode/` - Amp settings (settings.json)
+/// - `.sandboxed-sh/` - Sandboxed config (config.json)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigProfile {
+    /// Profile name
+    pub name: String,
+    /// Whether this is the default profile
+    #[serde(default)]
+    pub is_default: bool,
+    /// Path relative to library root
+    pub path: String,
+    /// All files in the profile (for file-based editing)
+    #[serde(default)]
+    pub files: Vec<ConfigProfileFile>,
+    /// OpenCode settings (oh-my-opencode.json content) - legacy, for backward compat
+    #[serde(default)]
+    pub opencode_settings: serde_json::Value,
+    /// Sandboxed config - legacy, for backward compat
+    #[serde(default)]
+    pub sandboxed_config: SandboxedConfig,
+    /// Claude Code config - legacy, for backward compat
+    #[serde(default)]
+    pub claudecode_config: ClaudeCodeConfig,
+    /// Amp Code config
+    #[serde(default)]
+    pub ampcode_config: AmpCodeConfig,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

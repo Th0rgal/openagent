@@ -119,7 +119,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         crate::opencode_config::OpenCodeStore::new(
             config
                 .working_dir
-                .join(".openagent/opencode_connections.json"),
+                .join(".sandboxed-sh/opencode_connections.json"),
         )
         .await,
     );
@@ -127,7 +127,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     // Initialize AI provider store
     let ai_providers = Arc::new(
         crate::ai_providers::AIProviderStore::new(
-            config.working_dir.join(".openagent/ai_providers.json"),
+            config.working_dir.join(".sandboxed-sh/ai_providers.json"),
         )
         .await,
     );
@@ -193,7 +193,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     ];
     let backend_configs = Arc::new(
         crate::backend_config::BackendConfigStore::new(
-            config.working_dir.join(".openagent/backend_config.json"),
+            config.working_dir.join(".sandboxed-sh/backend_config.json"),
             backend_defaults,
         )
         .await,
@@ -273,17 +273,6 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
                                         workspace = %workspace.name,
                                         error = %e,
                                         "Failed to sync skills after library init"
-                                    );
-                                }
-                            }
-                            if is_default_host || !workspace.tools.is_empty() {
-                                if let Err(e) =
-                                    workspace::sync_workspace_tools(&workspace, library).await
-                                {
-                                    tracing::warn!(
-                                        workspace = %workspace.name,
-                                        error = %e,
-                                        "Failed to sync tools after library init"
                                     );
                                 }
                             }

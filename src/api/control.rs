@@ -182,13 +182,17 @@ fn build_history_context(history: &[(String, String)], max_chars: usize) -> Stri
     result
 }
 
-async fn resolve_claudecode_default_model(library: &SharedLibrary) -> Option<String> {
+pub(crate) async fn resolve_claudecode_default_model(
+    library: &SharedLibrary,
+    config_profile: Option<&str>,
+) -> Option<String> {
     let lib = {
         let guard = library.read().await;
         guard.clone()
     }?;
 
-    match lib.get_claudecode_config().await {
+    let profile = config_profile.unwrap_or("default");
+    match lib.get_claudecode_config_for_profile(profile).await {
         Ok(config) => config.default_model.and_then(|model| {
             let trimmed = model.trim().to_string();
             if trimmed.is_empty() {
@@ -198,7 +202,11 @@ async fn resolve_claudecode_default_model(library: &SharedLibrary) -> Option<Str
             }
         }),
         Err(err) => {
-            tracing::warn!("Failed to load Claude Code config from library: {}", err);
+            tracing::warn!(
+                "Failed to load Claude Code config from library (profile: {}): {}",
+                profile,
+                err
+            );
             None
         }
     }
@@ -653,6 +661,8 @@ pub enum ControlCommand {
         model_override: Option<String>,
         /// Backend to use for this mission ("opencode" or "claudecode")
         backend: Option<String>,
+        /// Config profile to use for this mission
+        config_profile: Option<String>,
         respond: oneshot::Sender<Result<Mission, String>>,
     },
     /// Update mission status
@@ -681,6 +691,8 @@ pub enum ControlCommand {
         mission_id: Uuid,
         /// If true, clean the mission's work directory before resuming
         clean_workspace: bool,
+        /// If true, only update status without sending the "MISSION RESUMED" message
+        skip_message: bool,
         respond: oneshot::Sender<Result<Mission, String>>,
     },
     /// Graceful shutdown - mark running missions as interrupted
@@ -900,7 +912,11 @@ impl ControlHub {
             .map(|s| MissionStoreType::from_str(&s))
             .unwrap_or(MissionStoreType::Sqlite);
 
-        let base_dir = self.config.working_dir.join(".openagent").join("missions");
+        let base_dir = self
+            .config
+            .working_dir
+            .join(".sandboxed-sh")
+            .join("missions");
         let mission_store: Arc<dyn MissionStore> =
             match create_mission_store(store_type, base_dir, &user.id).await {
                 Ok(store) => Arc::from(store),
@@ -944,7 +960,11 @@ impl ControlHub {
             .map(|s| MissionStoreType::from_str(&s))
             .unwrap_or(MissionStoreType::Sqlite);
 
-        let base_dir = self.config.working_dir.join(".openagent").join("missions");
+        let base_dir = self
+            .config
+            .working_dir
+            .join(".sandboxed-sh")
+            .join("missions");
 
         match create_mission_store(store_type, base_dir, "default").await {
             Ok(store) => Arc::from(store),
@@ -1255,8 +1275,10 @@ pub struct CreateMissionRequest {
     pub workspace_id: Option<Uuid>,
     /// Agent name from library (e.g., "code-reviewer")
     pub agent: Option<String>,
-    /// Optional model override (provider/model)
+    /// Optional model override (provider/model) - deprecated, use config_profile instead
     pub model_override: Option<String>,
+    /// Config profile to use for this mission (overrides workspace's default profile)
+    pub config_profile: Option<String>,
     /// Backend to use for this mission ("opencode" or "claudecode")
     pub backend: Option<String>,
 }
@@ -1268,17 +1290,18 @@ pub async fn create_mission(
 ) -> Result<Json<Mission>, (StatusCode, String)> {
     let (tx, rx) = oneshot::channel();
 
-    let (title, workspace_id, agent, model_override, mut backend) = body
+    let (title, workspace_id, agent, model_override, config_profile, mut backend) = body
         .map(|b| {
             (
                 b.title.clone(),
                 b.workspace_id,
                 b.agent.clone(),
                 b.model_override.clone(),
+                b.config_profile.clone(),
                 b.backend.clone(),
             )
         })
-        .unwrap_or((None, None, None, None, None));
+        .unwrap_or((None, None, None, None, None, None));
 
     let mut model_override = model_override;
     if let Some(value) = backend.as_ref() {
@@ -1314,8 +1337,28 @@ pub async fn create_mission(
         }
     }
 
+    // Resolve the effective config profile:
+    // 1. Use explicit config_profile from request if provided
+    // 2. Otherwise use workspace's config_profile
+    // 3. Fall back to "default"
+    let effective_config_profile = if let Some(ref profile) = config_profile {
+        Some(profile.clone())
+    } else if let Some(ws_id) = workspace_id {
+        state
+            .workspaces
+            .get(ws_id)
+            .await
+            .and_then(|ws| ws.config_profile)
+    } else {
+        None
+    };
+
+    // If no model_override specified, resolve from config profile for Claude Code
     if backend.as_deref() == Some("claudecode") && model_override.is_none() {
-        if let Some(default_model) = resolve_claudecode_default_model(&state.library).await {
+        if let Some(default_model) =
+            resolve_claudecode_default_model(&state.library, effective_config_profile.as_deref())
+                .await
+        {
             model_override = Some(default_model);
         }
     }
@@ -1329,6 +1372,7 @@ pub async fn create_mission(
             agent,
             model_override,
             backend,
+            config_profile: effective_config_profile,
             respond: tx,
         })
         .await
@@ -1692,6 +1736,10 @@ pub struct ResumeMissionRequest {
     /// If true, clean the mission's work directory before resuming
     #[serde(default)]
     pub clean_workspace: bool,
+    /// If true, only update the mission status without sending the "MISSION RESUMED" message.
+    /// Useful when the user is about to send their own custom message.
+    #[serde(default)]
+    pub skip_message: bool,
 }
 
 /// Resume an interrupted mission.
@@ -1702,7 +1750,9 @@ pub async fn resume_mission(
     Path(mission_id): Path<Uuid>,
     body: Option<Json<ResumeMissionRequest>>,
 ) -> Result<Json<Mission>, (StatusCode, String)> {
-    let clean_workspace = body.map(|b| b.clean_workspace).unwrap_or(false);
+    let (clean_workspace, skip_message) = body
+        .map(|b| (b.clean_workspace, b.skip_message))
+        .unwrap_or((false, false));
     let (tx, rx) = oneshot::channel();
 
     let control = control_for_user(&state, &user).await;
@@ -1711,6 +1761,7 @@ pub async fn resume_mission(
         .send(ControlCommand::ResumeMission {
             mission_id,
             clean_workspace,
+            skip_message,
             respond: tx,
         })
         .await
@@ -2367,7 +2418,7 @@ async fn control_actor_loop(
 
     // Helper to create a new mission
     async fn create_new_mission(mission_store: &Arc<dyn MissionStore>) -> Result<Mission, String> {
-        create_new_mission_with_title(mission_store, None, None, None, None, None).await
+        create_new_mission_with_title(mission_store, None, None, None, None, None, None).await
     }
 
     // Helper to create a new mission with title
@@ -2378,9 +2429,17 @@ async fn control_actor_loop(
         agent: Option<&str>,
         model_override: Option<&str>,
         backend: Option<&str>,
+        config_profile: Option<&str>,
     ) -> Result<Mission, String> {
         mission_store
-            .create_mission(title, workspace_id, agent, model_override, backend)
+            .create_mission(
+                title,
+                workspace_id,
+                agent,
+                model_override,
+                backend,
+                config_profile,
+            )
             .await
     }
 
@@ -2488,8 +2547,8 @@ async fn control_actor_loop(
                         // Skip common non-artifact directories
                         if dir_name == "venv"
                             || dir_name == ".venv"
-                            || dir_name == ".open_agent"
-                            || dir_name == ".openagent"
+                            || dir_name == ".sandboxed_sh"
+                            || dir_name == ".sandboxed-sh"
                             || dir_name == "temp"
                         {
                             continue;
@@ -2659,6 +2718,7 @@ async fn control_actor_loop(
                                                 mission.agent.clone(),
                                                 Some(mission.backend.clone()),
                                                 mission.session_id.clone(),
+                                                mission.config_profile.clone(),
                                             );
                                             // Load existing history
                                             for entry in &mission.history {
@@ -2861,7 +2921,7 @@ async fn control_actor_loop(
                                 let progress_ref = Arc::clone(&progress);
                                 // Capture which mission this task is working on
                                 let mission_id = current_mission.read().await.clone();
-                                let (workspace_id, model_override, mission_agent, backend_id, session_id) = if let Some(mid) = mission_id {
+                                let (workspace_id, model_override, mission_agent, backend_id, session_id, mission_config_profile) = if let Some(mid) = mission_id {
                                     match mission_store.get_mission(mid).await {
                                         Ok(Some(mission)) => {
                                             // Activate mission: if pending, interrupted, or blocked, update status to active
@@ -2884,6 +2944,7 @@ async fn control_actor_loop(
                                                 mission.agent.clone(),
                                                 Some(mission.backend.clone()),
                                                 mission.session_id.clone(),
+                                                mission.config_profile.clone(),
                                             )
                                         }
                                         Ok(None) => {
@@ -2891,7 +2952,7 @@ async fn control_actor_loop(
                                                 "Mission {} not found while resolving workspace",
                                                 mid
                                             );
-                                            (None, None, None, None, None)
+                                            (None, None, None, None, None, None)
                                         }
                                         Err(e) => {
                                             tracing::warn!(
@@ -2899,11 +2960,11 @@ async fn control_actor_loop(
                                                 mid,
                                                 e
                                             );
-                                            (None, None, None, None, None)
+                                            (None, None, None, None, None, None)
                                         }
                                     }
                                 } else {
-                                    (None, None, None, None, None)
+                                    (None, None, None, None, None, None)
                                 };
                                 // Per-message agent overrides mission agent
                                 let agent_override = per_msg_agent.or(mission_agent);
@@ -2936,6 +2997,7 @@ async fn control_actor_loop(
                                         agent_override,
                                         session_id,
                                         false, // force_session_resume: regular message, not a resume
+                                        mission_config_profile,
                                     )
                                     .await;
                                     (mid, msg, result)
@@ -3008,7 +3070,7 @@ async fn control_actor_loop(
                             }
                         }
                     }
-                    ControlCommand::CreateMission { title, workspace_id, agent, model_override, backend, respond } => {
+                    ControlCommand::CreateMission { title, workspace_id, agent, model_override, backend, config_profile, respond } => {
                         // First persist current mission history
                         persist_mission_history(
                             &mission_store,
@@ -3025,6 +3087,7 @@ async fn control_actor_loop(
                             agent.as_deref(),
                             model_override.as_deref(),
                             backend.as_deref(),
+                            config_profile.as_deref(),
                         )
                         .await {
                             Ok(mission) => {
@@ -3117,6 +3180,7 @@ async fn control_actor_loop(
                                 mission.agent.clone(),
                                 Some(mission.backend.clone()),
                                 mission.session_id.clone(),
+                                mission.config_profile.clone(),
                             );
 
                             // Load existing history into runner to preserve conversation context
@@ -3223,7 +3287,7 @@ async fn control_actor_loop(
 
                         let _ = respond.send(running_list);
                     }
-                    ControlCommand::ResumeMission { mission_id, clean_workspace, respond } => {
+                    ControlCommand::ResumeMission { mission_id, clean_workspace, skip_message, respond } => {
                         // Resume an interrupted mission by building resume context
                         match resume_mission_impl(
                             &mission_store,
@@ -3264,8 +3328,11 @@ async fn control_actor_loop(
                                 }
 
                                 // Queue the resume prompt as a message (no per-message agent override)
-                                let msg_id = Uuid::new_v4();
-                                queue.push_back((msg_id, resume_prompt, None));
+                                // Skip if the caller just wants to update the status (e.g., before sending a custom message)
+                                if !skip_message {
+                                    let msg_id = Uuid::new_v4();
+                                    queue.push_back((msg_id, resume_prompt, None));
+                                }
 
                                 // Start execution if not already running
                                 if running.is_none() {
@@ -3300,6 +3367,7 @@ async fn control_actor_loop(
                                         // Resume uses mission agent (no per-message override for resumes)
                                         let agent_override = mission.agent.clone();
                                         let session_id = mission.session_id.clone();
+                                        let mission_config_profile = mission.config_profile.clone();
                                         running_cancel = Some(cancel.clone());
                                         // Capture which mission this task is working on (the resumed mission)
                                         running_mission_id = Some(mission_id);
@@ -3328,6 +3396,7 @@ async fn control_actor_loop(
                                                 agent_override,
                                                 session_id,
                                                 true, // force_session_resume: this is a resume operation
+                                                mission_config_profile,
                                             )
                                             .await;
                                             (mid, msg, result)
@@ -3789,7 +3858,7 @@ async fn control_actor_loop(
                     running_cancel = Some(cancel.clone());
                     // Capture which mission this task is working on
                     let mission_id = current_mission.read().await.clone();
-                    let (workspace_id, model_override, mission_agent, backend_id, session_id) = if let Some(mid) = mission_id {
+                    let (workspace_id, model_override, mission_agent, backend_id, session_id, mission_config_profile) = if let Some(mid) = mission_id {
                         match mission_store.get_mission(mid).await {
                             Ok(Some(mission)) => (
                                 Some(mission.workspace_id),
@@ -3797,13 +3866,14 @@ async fn control_actor_loop(
                                 mission.agent.clone(),
                                 Some(mission.backend.clone()),
                                 mission.session_id.clone(),
+                                mission.config_profile.clone(),
                             ),
                             Ok(None) => {
                                 tracing::warn!(
                                     "Mission {} not found while resolving workspace",
                                     mid
                                 );
-                                (None, None, None, None, None)
+                                (None, None, None, None, None, None)
                             }
                             Err(e) => {
                                 tracing::warn!(
@@ -3811,11 +3881,11 @@ async fn control_actor_loop(
                                     mid,
                                     e
                                 );
-                                (None, None, None, None, None)
+                                (None, None, None, None, None, None)
                             }
                         }
                     } else {
-                        (None, None, None, None, None)
+                        (None, None, None, None, None, None)
                     };
                     // Per-message agent overrides mission agent
                     let agent_override = per_msg_agent.or(mission_agent);
@@ -3847,6 +3917,7 @@ async fn control_actor_loop(
                             agent_override,
                             session_id,
                             false, // force_session_resume: continuation turn, not a resume
+                            mission_config_profile,
                         )
                         .await;
                         (mid, msg, result)
@@ -4277,12 +4348,22 @@ async fn run_single_control_turn(
     agent_override: Option<String>,
     session_id: Option<String>,
     force_session_resume: bool,
+    mission_config_profile: Option<String>,
 ) -> crate::agents::AgentResult {
     let is_claudecode = backend_id.as_deref() == Some("claudecode");
+    // Get config profile: mission's config_profile takes priority over workspace's
+    let workspace_config_profile = if let Some(ws_id) = workspace_id {
+        workspaces.get(ws_id).await.and_then(|ws| ws.config_profile)
+    } else {
+        None
+    };
+    let effective_config_profile = mission_config_profile.or(workspace_config_profile);
     if let Some(model) = model_override {
         config.default_model = Some(model);
     } else if is_claudecode && config.default_model.is_none() {
-        if let Some(default_model) = resolve_claudecode_default_model(&library).await {
+        if let Some(default_model) =
+            resolve_claudecode_default_model(&library, effective_config_profile.as_deref()).await
+        {
             config.default_model = Some(default_model);
         }
     }
@@ -4302,6 +4383,7 @@ async fn run_single_control_turn(
             mid,
             backend_id.as_deref().unwrap_or("opencode"),
             None, // custom_providers: TODO integrate with provider store
+            effective_config_profile.as_deref(),
         )
         .await
         {

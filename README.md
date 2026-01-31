@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="dashboard/public/favicon.svg" width="120" alt="Open Agent" />
+  <img src="dashboard/public/favicon.svg" width="120" alt="sandboxed.sh" />
 </p>
 
-<h1 align="center">Open Agent</h1>
+<h1 align="center">sandboxed.sh</h1>
 
 <p align="center">
   <strong>Self-hosted cloud orchestrator for AI coding agents</strong><br/>
@@ -10,6 +10,11 @@
 </p>
 
 <p align="center">
+  <em>Formerly known as "Sandboxed.sh"</em>
+</p>
+
+<p align="center">
+  <a href="https://sandboxed.sh">Website</a> ·
   <a href="#vision">Vision</a> ·
   <a href="#features">Features</a> ·
   <a href="#ecosystem">Ecosystem</a> ·
@@ -20,7 +25,7 @@
 <br/>
 
 <p align="center">
-  <img src="screenshots/hero.webp" alt="Open Agent Dashboard" width="100%" />
+  <img src="screenshots/hero.webp" alt="sandboxed.sh Dashboard" width="100%" />
 </p>
 
 <p align="center">
@@ -65,7 +70,7 @@ literature. Local inference, isolated containers, nothing leaves your machines.
 
 ## Ecosystem
 
-Open Agent orchestrates multiple AI coding agent runtimes:
+sandboxed.sh orchestrates multiple AI coding agent runtimes:
 
 - **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)**: Anthropic's
   official coding agent with native skills support (`.claude/skills/`)
@@ -75,7 +80,7 @@ Open Agent orchestrates multiple AI coding agent runtimes:
   multi-model support
 
 Each runtime executes inside isolated workspaces, so bash commands and file
-operations are scoped correctly. Open Agent handles orchestration, workspace
+operations are scoped correctly. sandboxed.sh handles orchestration, workspace
 isolation, and Library-based configuration management.
 
 ---
@@ -120,8 +125,8 @@ isolation, and Library-based configuration management.
 ### Docker (recommended for most users)
 
 ```bash
-git clone https://github.com/Th0rgal/openagent.git
-cd openagent
+git clone https://github.com/Th0rgal/sandboxed-sh.git
+cd sandboxed-sh
 cp .env.example .env
 # Edit .env with your settings
 docker compose up -d
@@ -141,12 +146,35 @@ systemd-nspawn isolation.
 
 → **[Full native installation guide](docs/install-native.md)**
 
+### First-time setup
+
+After installation, follow the **[Getting Started Guide](docs/getting-started.md)** for:
+- Configuring your backend connection
+- Setting up your library repository
+- Exploring skills and tools
+- Creating your first mission
+
 ### AI-assisted setup
 
 Point your coding agent at the installation guide and let it handle the
 deployment:
 
-> "Deploy Open Agent on my server at `1.2.3.4` with domain `agent.example.com`"
+> "Deploy Sandboxed.sh on my server at `1.2.3.4` with domain `agent.example.com`"
+
+---
+
+## Development
+
+### Setup git hooks
+
+Enable pre-push formatting checks to catch CI failures locally:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This runs `cargo fmt --check` before each push. If formatting issues are found,
+run `cargo fmt --all` to fix them.
 
 ---
 

@@ -7,9 +7,8 @@
 //! - Commands CRUD
 //! - Plugins CRUD
 //! - Library Agents CRUD
-//! - Library Tools CRUD
 //! - OpenCode settings (oh-my-opencode.json)
-//! - OpenAgent config (agent visibility, defaults)
+//! - Sandboxed config (agent visibility, defaults)
 //! - Migration
 
 use axum::{
@@ -25,9 +24,9 @@ use tokio::sync::RwLock;
 
 use crate::library::{
     rename::{ItemType, RenameResult},
-    ClaudeCodeConfig, Command, CommandSummary, GitAuthor, InitScript, InitScriptSummary,
-    LibraryAgent, LibraryAgentSummary, LibraryStatus, LibraryStore, LibraryTool,
-    LibraryToolSummary, McpServer, MigrationReport, OpenAgentConfig, Plugin, Skill, SkillSummary,
+    AmpCodeConfig, ClaudeCodeConfig, Command, CommandSummary, ConfigProfile, ConfigProfileSummary,
+    GitAuthor, InitScript, InitScriptSummary, LibraryAgent, LibraryAgentSummary, LibraryStatus,
+    LibraryStore, McpServer, MigrationReport, Plugin, SandboxedConfig, Skill, SkillSummary,
     WorkspaceTemplate, WorkspaceTemplateSummary,
 };
 use crate::nspawn::NspawnDistro;
@@ -36,9 +35,9 @@ use crate::workspace::{self, WorkspaceType, DEFAULT_WORKSPACE_ID};
 /// Shared library state.
 pub type SharedLibrary = Arc<RwLock<Option<Arc<LibraryStore>>>>;
 
-const LIBRARY_REMOTE_HEADER: &str = "x-openagent-library-remote";
-const GIT_AUTHOR_NAME_HEADER: &str = "x-openagent-git-author-name";
-const GIT_AUTHOR_EMAIL_HEADER: &str = "x-openagent-git-author-email";
+const LIBRARY_REMOTE_HEADER: &str = "x-sandboxed-library-remote";
+const GIT_AUTHOR_NAME_HEADER: &str = "x-sandboxed-git-author-name";
+const GIT_AUTHOR_EMAIL_HEADER: &str = "x-sandboxed-git-author-email";
 
 fn extract_library_remote(headers: &HeaderMap) -> Option<String> {
     headers
@@ -85,15 +84,6 @@ async fn sync_all_workspaces(state: &super::routes::AppState, library: &LibraryS
                 );
             }
         }
-        if is_default_host_workspace(&workspace) || !workspace.tools.is_empty() {
-            if let Err(e) = workspace::sync_workspace_tools(&workspace, library).await {
-                tracing::warn!(
-                    workspace = %workspace.name,
-                    error = %e,
-                    "Failed to sync tools after library update"
-                );
-            }
-        }
     }
 }
 
@@ -112,26 +102,6 @@ async fn sync_skill_to_workspaces(
                     skill = %skill_name,
                     error = %e,
                     "Failed to sync skill to workspace"
-                );
-            }
-        }
-    }
-}
-
-async fn sync_tool_to_workspaces(
-    state: &super::routes::AppState,
-    library: &LibraryStore,
-    tool_name: &str,
-) {
-    let workspaces = state.workspaces.list().await;
-    for workspace in workspaces {
-        if is_default_host_workspace(&workspace) || workspace.tools.iter().any(|t| t == tool_name) {
-            if let Err(e) = workspace::sync_workspace_tools(&workspace, library).await {
-                tracing::warn!(
-                    workspace = %workspace.name,
-                    tool = %tool_name,
-                    error = %e,
-                    "Failed to sync tool to workspace"
                 );
             }
         }
@@ -191,6 +161,8 @@ pub fn routes() -> Router<Arc<super::routes::AppState>> {
         // Git operations
         .route("/status", get(get_status))
         .route("/sync", post(sync_library))
+        .route("/force-sync", post(force_sync_library))
+        .route("/force-push", post(force_push_library))
         .route("/commit", post(commit_library))
         .route("/push", post(push_library))
         // MCP servers
@@ -237,11 +209,6 @@ pub fn routes() -> Router<Arc<super::routes::AppState>> {
         .route("/agent/:name", get(get_library_agent))
         .route("/agent/:name", put(save_library_agent))
         .route("/agent/:name", delete(delete_library_agent))
-        // Library Tools
-        .route("/tool", get(list_library_tools))
-        .route("/tool/:name", get(get_library_tool))
-        .route("/tool/:name", put(save_library_tool))
-        .route("/tool/:name", delete(delete_library_tool))
         // Workspace Templates
         .route("/workspace-template", get(list_workspace_templates))
         .route("/workspace-template/:name", get(get_workspace_template))
@@ -262,13 +229,75 @@ pub fn routes() -> Router<Arc<super::routes::AppState>> {
         // OpenCode Settings (oh-my-opencode.json)
         .route("/opencode/settings", get(get_opencode_settings))
         .route("/opencode/settings", put(save_opencode_settings))
-        // OpenAgent Config
-        .route("/openagent/config", get(get_openagent_config))
-        .route("/openagent/config", put(save_openagent_config))
-        .route("/openagent/agents", get(get_visible_agents))
+        // Sandboxed Config
+        .route("/sandboxed-sh/config", get(get_sandboxed_config))
+        .route("/sandboxed-sh/config", put(save_sandboxed_config))
+        .route("/sandboxed-sh/agents", get(get_visible_agents))
         // Claude Code Config
         .route("/claudecode/config", get(get_claudecode_config))
         .route("/claudecode/config", put(save_claudecode_config))
+        // Config Profiles
+        .route("/config-profile", get(list_config_profiles))
+        .route("/config-profile", post(create_config_profile))
+        .route("/config-profile/:name", get(get_config_profile))
+        .route("/config-profile/:name", put(save_config_profile))
+        .route("/config-profile/:name", delete(delete_config_profile))
+        // Profile-specific config endpoints
+        .route(
+            "/config-profile/:name/opencode/settings",
+            get(get_opencode_settings_for_profile),
+        )
+        .route(
+            "/config-profile/:name/opencode/settings",
+            put(save_opencode_settings_for_profile),
+        )
+        .route(
+            "/config-profile/:name/sandboxed-sh/config",
+            get(get_sandboxed_config_for_profile),
+        )
+        .route(
+            "/config-profile/:name/sandboxed-sh/config",
+            put(save_sandboxed_config_for_profile),
+        )
+        .route(
+            "/config-profile/:name/claudecode/config",
+            get(get_claudecode_config_for_profile),
+        )
+        .route(
+            "/config-profile/:name/claudecode/config",
+            put(save_claudecode_config_for_profile),
+        )
+        .route(
+            "/config-profile/:name/ampcode/config",
+            get(get_ampcode_config_for_profile),
+        )
+        .route(
+            "/config-profile/:name/ampcode/config",
+            put(save_ampcode_config_for_profile),
+        )
+        // File-based config profile editing
+        .route(
+            "/config-profile/:name/files",
+            get(list_config_profile_files),
+        )
+        .route(
+            "/config-profile/:name/file/*file_path",
+            get(get_config_profile_file),
+        )
+        .route(
+            "/config-profile/:name/file/*file_path",
+            put(save_config_profile_file),
+        )
+        .route(
+            "/config-profile/:name/file/*file_path",
+            delete(delete_config_profile_file),
+        )
+        // Harness defaults (library base configs)
+        .route("/harness-default/:harness", get(list_harness_default_files))
+        .route(
+            "/harness-default/:harness/*file_name",
+            get(get_harness_default_file),
+        )
         // Skills Registry (skills.sh)
         .route("/skill/registry/search", get(search_registry))
         .route("/skill/registry/list/:identifier", get(list_repo_skills))
@@ -327,9 +356,14 @@ pub struct SaveWorkspaceTemplateRequest {
     /// Whether to share the host network (default: true).
     /// Set to false for isolated networking (e.g., Tailscale).
     pub shared_network: Option<bool>,
+    /// Tailscale networking mode (only relevant when shared_network is false).
+    pub tailscale_mode: Option<crate::workspace::TailscaleMode>,
     /// MCP server names to enable for workspaces created from this template.
     #[serde(default)]
     pub mcps: Option<Vec<String>>,
+    /// Config profile to use for workspaces created from this template.
+    #[serde(default)]
+    pub config_profile: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -339,6 +373,15 @@ pub struct RenameRequest {
     /// If true, return what would be changed without actually changing anything.
     #[serde(default)]
     pub dry_run: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateConfigProfileRequest {
+    /// Name for the new profile
+    pub name: String,
+    /// Optional base profile to copy settings from
+    #[serde(default)]
+    pub base_profile: Option<String>,
 }
 
 fn sanitize_skill_list(skills: Vec<String>) -> Vec<String> {
@@ -360,6 +403,37 @@ fn sanitize_skill_list(skills: Vec<String>) -> Vec<String> {
 // Git Operations
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Sync all library configurations after a git sync/pull operation.
+/// This includes plugins, OpenCode settings, Sandboxed config, and workspaces.
+async fn sync_library_configs(
+    state: &Arc<super::routes::AppState>,
+    library: &LibraryStore,
+) -> Result<(), (StatusCode, String)> {
+    // Sync plugins to global OpenCode config
+    let plugins = library
+        .get_plugins()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    crate::opencode_config::sync_global_plugins(&plugins)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Sync OpenCode settings (oh-my-opencode.json) from Library to system
+    if let Err(e) = workspace::sync_opencode_settings(library).await {
+        tracing::warn!(error = %e, "Failed to sync oh-my-opencode settings during library sync");
+    }
+
+    // Sync Sandboxed config from Library to working directory
+    if let Err(e) = workspace::sync_sandboxed_config(library, &state.config.working_dir).await {
+        tracing::warn!(error = %e, "Failed to sync sandboxed config during library sync");
+    }
+
+    // Sync skills and tools to workspaces
+    sync_all_workspaces(state, library).await;
+
+    Ok(())
+}
+
 /// GET /api/library/status - Get git status of the library.
 async fn get_status(
     State(state): State<Arc<super::routes::AppState>>,
@@ -374,39 +448,76 @@ async fn get_status(
 }
 
 /// POST /api/library/sync - Pull latest changes from remote.
+///
+/// Returns 409 Conflict if history has diverged (e.g., after force push).
+/// In that case, use /force-sync to reset to remote or /force-push to overwrite remote.
 async fn sync_library(
     State(state): State<Arc<super::routes::AppState>>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
     let library = ensure_library(&state, &headers).await?;
-    library
-        .sync()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Sync plugins to global OpenCode config
-    let plugins = library
-        .get_plugins()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    crate::opencode_config::sync_global_plugins(&plugins)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // Sync OpenCode settings (oh-my-opencode.json) from Library to system
-    if let Err(e) = workspace::sync_opencode_settings(&library).await {
-        tracing::warn!(error = %e, "Failed to sync oh-my-opencode settings during library sync");
+    // Try to sync - check for diverged history error
+    if let Err(e) = library.sync().await {
+        let error_msg = e.to_string();
+        if error_msg.starts_with("DIVERGED_HISTORY:") {
+            // Return 409 Conflict with a structured error message
+            let msg = error_msg
+                .strip_prefix("DIVERGED_HISTORY: ")
+                .unwrap_or(&error_msg);
+            return Err((StatusCode::CONFLICT, format!("DIVERGED_HISTORY: {}", msg)));
+        }
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, error_msg));
     }
 
-    // Sync OpenAgent config from Library to working directory
-    if let Err(e) = workspace::sync_openagent_config(&library, &state.config.working_dir).await {
-        tracing::warn!(error = %e, "Failed to sync openagent config during library sync");
-    }
-
-    // Sync skills and tools to workspaces
-    sync_all_workspaces(&state, library.as_ref()).await;
+    // Sync all library configurations
+    sync_library_configs(&state, library.as_ref()).await?;
 
     Ok((StatusCode::OK, "Synced successfully".to_string()))
+}
+
+/// POST /api/library/force-sync - Force reset local branch to match remote.
+///
+/// Use this when local and remote histories have diverged (e.g., after a force push on remote).
+/// This discards any local changes and resets to the remote state.
+async fn force_sync_library(
+    State(state): State<Arc<super::routes::AppState>>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .force_sync()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Sync all library configurations
+    sync_library_configs(&state, library.as_ref()).await?;
+
+    Ok((
+        StatusCode::OK,
+        "Force synced successfully - local branch reset to remote".to_string(),
+    ))
+}
+
+/// POST /api/library/force-push - Force push local changes to remote.
+///
+/// Use this when you want to keep local changes and overwrite the remote history.
+/// Uses --force-with-lease for safety.
+async fn force_push_library(
+    State(state): State<Arc<super::routes::AppState>>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .force_push()
+        .await
+        .map(|_| {
+            (
+                StatusCode::OK,
+                "Force pushed successfully - remote updated with local changes".to_string(),
+            )
+        })
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 /// POST /api/library/commit - Commit all changes.
@@ -1107,74 +1218,6 @@ async fn delete_library_agent(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Library Tools
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// GET /api/library/tool - List all library tools.
-async fn list_library_tools(
-    State(state): State<Arc<super::routes::AppState>>,
-    headers: HeaderMap,
-) -> Result<Json<Vec<LibraryToolSummary>>, (StatusCode, String)> {
-    let library = ensure_library(&state, &headers).await?;
-    library
-        .list_library_tools()
-        .await
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-}
-
-/// GET /api/library/tool/:name - Get a library tool by name.
-async fn get_library_tool(
-    State(state): State<Arc<super::routes::AppState>>,
-    Path(name): Path<String>,
-    headers: HeaderMap,
-) -> Result<Json<LibraryTool>, (StatusCode, String)> {
-    let library = ensure_library(&state, &headers).await?;
-    library
-        .get_library_tool(&name)
-        .await
-        .map(Json)
-        .map_err(|e| {
-            if e.to_string().contains("not found") {
-                (StatusCode::NOT_FOUND, e.to_string())
-            } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-            }
-        })
-}
-
-/// PUT /api/library/tool/:name - Save a library tool.
-async fn save_library_tool(
-    State(state): State<Arc<super::routes::AppState>>,
-    Path(name): Path<String>,
-    headers: HeaderMap,
-    Json(req): Json<SaveContentRequest>,
-) -> Result<(StatusCode, String), (StatusCode, String)> {
-    let library = ensure_library(&state, &headers).await?;
-    library
-        .save_library_tool(&name, &req.content)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    sync_tool_to_workspaces(&state, library.as_ref(), &name).await;
-    Ok((StatusCode::OK, "Tool saved successfully".to_string()))
-}
-
-/// DELETE /api/library/tool/:name - Delete a library tool.
-async fn delete_library_tool(
-    State(state): State<Arc<super::routes::AppState>>,
-    Path(name): Path<String>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, String), (StatusCode, String)> {
-    let library = ensure_library(&state, &headers).await?;
-    library
-        .delete_library_tool(&name)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    sync_tool_to_workspaces(&state, library.as_ref(), &name).await;
-    Ok((StatusCode::OK, "Tool deleted successfully".to_string()))
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Workspace Templates
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1243,7 +1286,9 @@ async fn save_workspace_template(
         init_scripts: req.init_scripts.unwrap_or_default(),
         init_script: req.init_script.unwrap_or_default(),
         shared_network: req.shared_network,
+        tailscale_mode: req.tailscale_mode,
         mcps: req.mcps.unwrap_or_default(),
+        config_profile: req.config_profile.clone(),
     };
 
     library
@@ -1411,78 +1456,78 @@ async fn save_opencode_settings(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OpenAgent Config
+// Sandboxed Config
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// GET /api/library/openagent/config - Get OpenAgent config from Library.
-async fn get_openagent_config(
+/// GET /api/library/sandboxed-sh/config - Get Sandboxed config from Library.
+async fn get_sandboxed_config(
     State(state): State<Arc<super::routes::AppState>>,
     headers: HeaderMap,
-) -> Result<Json<OpenAgentConfig>, (StatusCode, String)> {
+) -> Result<Json<SandboxedConfig>, (StatusCode, String)> {
     match ensure_library(&state, &headers).await {
         Ok(library) => library
-            .get_openagent_config()
+            .get_sandboxed_config()
             .await
             .map(Json)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
         Err((StatusCode::SERVICE_UNAVAILABLE, _)) => {
-            let config = workspace::read_openagent_config(&state.config.working_dir).await;
+            let config = workspace::read_sandboxed_config(&state.config.working_dir).await;
             Ok(Json(config))
         }
         Err(e) => Err(e),
     }
 }
 
-/// PUT /api/library/openagent/config - Save OpenAgent config to Library.
-async fn save_openagent_config(
+/// PUT /api/library/sandboxed-sh/config - Save Sandboxed config to Library.
+async fn save_sandboxed_config(
     State(state): State<Arc<super::routes::AppState>>,
     headers: HeaderMap,
-    Json(config): Json<OpenAgentConfig>,
+    Json(config): Json<SandboxedConfig>,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
     match ensure_library(&state, &headers).await {
         Ok(library) => {
             library
-                .save_openagent_config(&config)
+                .save_sandboxed_config(&config)
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
             // Sync to working directory
             if let Err(e) =
-                workspace::sync_openagent_config(&library, &state.config.working_dir).await
+                workspace::sync_sandboxed_config(&library, &state.config.working_dir).await
             {
-                tracing::warn!(error = %e, "Failed to sync openagent config to working dir");
+                tracing::warn!(error = %e, "Failed to sync sandboxed config to working dir");
             }
 
             Ok((
                 StatusCode::OK,
-                "OpenAgent config saved successfully".to_string(),
+                "Sandboxed config saved successfully".to_string(),
             ))
         }
         Err((StatusCode::SERVICE_UNAVAILABLE, _)) => {
             if let Err(e) =
-                workspace::write_openagent_config(&state.config.working_dir, &config).await
+                workspace::write_sandboxed_config(&state.config.working_dir, &config).await
             {
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to write openagent config locally: {}", e),
+                    format!("Failed to write sandboxed config locally: {}", e),
                 ));
             }
             Ok((
                 StatusCode::OK,
-                "OpenAgent config saved locally (Library not configured)".to_string(),
+                "Sandboxed config saved locally (Library not configured)".to_string(),
             ))
         }
         Err(e) => Err(e),
     }
 }
 
-/// GET /api/library/openagent/agents - Get filtered list of visible agents.
+/// GET /api/library/sandboxed-sh/agents - Get filtered list of visible agents.
 /// Fetches agents from OpenCode and filters by hidden_agents config.
 async fn get_visible_agents(
     State(state): State<Arc<super::routes::AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     // Read current config from working directory
-    let config = workspace::read_openagent_config(&state.config.working_dir).await;
+    let config = workspace::read_sandboxed_config(&state.config.working_dir).await;
 
     // Fetch all agents from OpenCode
     let all_agents = crate::api::opencode::fetch_opencode_agents(&state)
@@ -1496,15 +1541,15 @@ async fn get_visible_agents(
 
 fn filter_visible_agents_with_fallback(
     agents: serde_json::Value,
-    config: &OpenAgentConfig,
+    config: &SandboxedConfig,
 ) -> serde_json::Value {
     filter_agents_by_config(agents, config)
 }
 
-/// Filter agents based on OpenAgent config hidden_agents list.
+/// Filter agents based on Sandboxed config hidden_agents list.
 fn filter_agents_by_config(
     agents: serde_json::Value,
-    config: &OpenAgentConfig,
+    config: &SandboxedConfig,
 ) -> serde_json::Value {
     /// Extract agent name from an array entry (can be string or object with name/id)
     fn get_agent_name(entry: &serde_json::Value) -> Option<&str> {
@@ -1584,7 +1629,7 @@ pub async fn validate_agent_exists(
     };
 
     // Read config to get hidden agents list
-    let config = crate::workspace::read_openagent_config(&state.config.working_dir).await;
+    let config = crate::workspace::read_sandboxed_config(&state.config.working_dir).await;
     let visible_agents = filter_visible_agents_with_fallback(all_agents.clone(), &config);
 
     // Extract agent names from the visible agents list.
@@ -1700,12 +1745,6 @@ async fn rename_item(
                 // Sync skills to workspaces
                 sync_skill_to_workspaces(&state, library.as_ref(), &req.new_name).await;
             }
-            ItemType::Tool => {
-                // Update workspace tool lists
-                update_workspace_tool_references(&state, &name, &req.new_name).await;
-                // Sync tools to workspaces
-                sync_tool_to_workspaces(&state, library.as_ref(), &req.new_name).await;
-            }
             ItemType::WorkspaceTemplate => {
                 // Update workspace template references
                 update_workspace_template_references(&state, &name, &req.new_name).await;
@@ -1754,39 +1793,6 @@ async fn update_workspace_skill_references(
                 tracing::warn!(
                     workspace = %workspace_name,
                     "Failed to update workspace skill reference"
-                );
-            }
-        }
-    }
-}
-
-/// Update workspace tool references when a tool is renamed.
-async fn update_workspace_tool_references(
-    state: &super::routes::AppState,
-    old_name: &str,
-    new_name: &str,
-) {
-    let workspaces = state.workspaces.list().await;
-    for workspace in workspaces {
-        if workspace.tools.contains(&old_name.to_string()) {
-            let mut updated_workspace = workspace.clone();
-            updated_workspace.tools = updated_workspace
-                .tools
-                .iter()
-                .map(|t| {
-                    if t == old_name {
-                        new_name.to_string()
-                    } else {
-                        t.clone()
-                    }
-                })
-                .collect();
-
-            let workspace_name = workspace.name.clone();
-            if !state.workspaces.update(updated_workspace).await {
-                tracing::warn!(
-                    workspace = %workspace_name,
-                    "Failed to update workspace tool reference"
                 );
             }
         }
@@ -1850,6 +1856,365 @@ async fn save_claudecode_config(
         StatusCode::OK,
         "Claude Code config saved successfully".to_string(),
     ))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Config Profiles
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// GET /api/library/config-profile - List all config profiles.
+async fn list_config_profiles(
+    State(state): State<Arc<super::routes::AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<ConfigProfileSummary>>, (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .list_config_profiles()
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// POST /api/library/config-profile - Create a new config profile.
+async fn create_config_profile(
+    State(state): State<Arc<super::routes::AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<CreateConfigProfileRequest>,
+) -> Result<Json<ConfigProfile>, (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .create_config_profile(&req.name, req.base_profile.as_deref())
+        .await
+        .map(Json)
+        .map_err(|e| {
+            if e.to_string().contains("already exists") {
+                (StatusCode::CONFLICT, e.to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })
+}
+
+/// GET /api/library/config-profile/:name - Get a config profile by name.
+async fn get_config_profile(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<ConfigProfile>, (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .get_config_profile(&name)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, e.to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })
+}
+
+/// PUT /api/library/config-profile/:name - Save a config profile.
+async fn save_config_profile(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    Json(profile): Json<ConfigProfile>,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .save_config_profile(&name, &profile)
+        .await
+        .map(|_| {
+            (
+                StatusCode::OK,
+                "Config profile saved successfully".to_string(),
+            )
+        })
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// DELETE /api/library/config-profile/:name - Delete a config profile.
+async fn delete_config_profile(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .delete_config_profile(&name)
+        .await
+        .map(|_| {
+            (
+                StatusCode::OK,
+                "Config profile deleted successfully".to_string(),
+            )
+        })
+        .map_err(|e| {
+            if e.to_string().contains("Cannot delete") {
+                (StatusCode::BAD_REQUEST, e.to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })
+}
+
+/// GET /api/library/config-profile/:name/opencode/settings - Get OpenCode settings for a profile.
+async fn get_opencode_settings_for_profile(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .get_opencode_settings_for_profile(&name)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// PUT /api/library/config-profile/:name/opencode/settings - Save OpenCode settings for a profile.
+async fn save_opencode_settings_for_profile(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    Json(settings): Json<serde_json::Value>,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+
+    if !settings.is_object() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Settings must be a JSON object".to_string(),
+        ));
+    }
+
+    library
+        .save_opencode_settings_for_profile(&name, &settings)
+        .await
+        .map(|_| {
+            (
+                StatusCode::OK,
+                "OpenCode settings saved successfully".to_string(),
+            )
+        })
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// GET /api/library/config-profile/:name/sandboxed-sh/config - Get Sandboxed config for a profile.
+async fn get_sandboxed_config_for_profile(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<SandboxedConfig>, (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .get_sandboxed_config_for_profile(&name)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// PUT /api/library/config-profile/:name/sandboxed-sh/config - Save Sandboxed config for a profile.
+async fn save_sandboxed_config_for_profile(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    Json(config): Json<SandboxedConfig>,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .save_sandboxed_config_for_profile(&name, &config)
+        .await
+        .map(|_| {
+            (
+                StatusCode::OK,
+                "Sandboxed config saved successfully".to_string(),
+            )
+        })
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// GET /api/library/config-profile/:name/claudecode/config - Get Claude Code config for a profile.
+async fn get_claudecode_config_for_profile(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<ClaudeCodeConfig>, (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .get_claudecode_config_for_profile(&name)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// PUT /api/library/config-profile/:name/claudecode/config - Save Claude Code config for a profile.
+async fn save_claudecode_config_for_profile(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    Json(config): Json<ClaudeCodeConfig>,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .save_claudecode_config_for_profile(&name, &config)
+        .await
+        .map(|_| {
+            (
+                StatusCode::OK,
+                "Claude Code config saved successfully".to_string(),
+            )
+        })
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// GET /api/library/config-profile/:name/ampcode/config - Get Amp Code config for a profile.
+async fn get_ampcode_config_for_profile(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<AmpCodeConfig>, (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .get_ampcode_config_for_profile(&name)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// PUT /api/library/config-profile/:name/ampcode/config - Save Amp Code config for a profile.
+async fn save_ampcode_config_for_profile(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    Json(config): Json<AmpCodeConfig>,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .save_ampcode_config_for_profile(&name, &config)
+        .await
+        .map(|_| {
+            (
+                StatusCode::OK,
+                "Amp Code config saved successfully".to_string(),
+            )
+        })
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// GET /api/library/config-profile/:name/files - List all files in a config profile.
+async fn list_config_profile_files(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<String>>, (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .list_config_profile_files(&name)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// GET /api/library/config-profile/:name/file/*file_path - Get a specific file from a config profile.
+async fn get_config_profile_file(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path((name, file_path)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<String, (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .get_config_profile_file(&name, &file_path)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, e.to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })
+}
+
+/// PUT /api/library/config-profile/:name/file/*file_path - Save a specific file in a config profile.
+async fn save_config_profile_file(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path((name, file_path)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .save_config_profile_file(&name, &file_path, &body)
+        .await
+        .map(|_| (StatusCode::OK, "File saved successfully".to_string()))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// DELETE /api/library/config-profile/:name/file/*file_path - Delete a specific file from a config profile.
+async fn delete_config_profile_file(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path((name, file_path)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .delete_config_profile_file(&name, &file_path)
+        .await
+        .map(|_| (StatusCode::OK, "File deleted successfully".to_string()))
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, e.to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Harness Defaults Handlers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// GET /api/library/harness-default/:harness - List default files for a harness.
+async fn list_harness_default_files(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path(harness): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<String>>, (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .list_harness_default_files(&harness)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            if e.to_string().contains("Invalid harness") {
+                (StatusCode::BAD_REQUEST, e.to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })
+}
+
+/// GET /api/library/harness-default/:harness/*file_name - Get a harness default file.
+async fn get_harness_default_file(
+    State(state): State<Arc<super::routes::AppState>>,
+    Path((harness, file_name)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<String, (StatusCode, String)> {
+    let library = ensure_library(&state, &headers).await?;
+    library
+        .get_harness_default_file(&harness, &file_name)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("not found") {
+                (StatusCode::NOT_FOUND, e.to_string())
+            } else if e.to_string().contains("Invalid harness") {
+                (StatusCode::BAD_REQUEST, e.to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

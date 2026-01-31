@@ -32,7 +32,6 @@ import {
   getRunningMissions,
   isNetworkError,
   cancelMission,
-  listProviders,
   listWorkspaces,
   getHealth,
   listDesktopSessions,
@@ -49,7 +48,6 @@ import {
   type MissionStatus,
   type RunningMissionInfo,
   type UploadProgress,
-  type Provider,
   type Workspace,
   type DesktopSessionDetail,
   type DesktopSessionStatus,
@@ -103,6 +101,7 @@ import {
   FileArchive,
   File,
   ExternalLink,
+  MessageSquare,
 } from "lucide-react";
 
 type StreamDiagnosticsState = {
@@ -470,12 +469,25 @@ function hasHistoryChanged(
   const currentFingerprints = items
     .filter(i => i.kind === "user" || i.kind === "assistant")
     .map(i => getMessageFingerprint(i.kind, i.content || ""));
-  
+
   const newFingerprints = history.map(e =>
     getMessageFingerprint(e.role === "user" ? "user" : "assistant", e.content || "")
   );
-  
-  if (currentFingerprints.length !== newFingerprints.length) return true;
+
+  // If current items have MORE messages than API history, the API is stale (SSE delivered
+  // messages that haven't been persisted yet). Don't replace - we'd lose messages.
+  // But first verify the overlapping content matches to detect content mismatches.
+  if (currentFingerprints.length > newFingerprints.length) {
+    // Verify that all API messages match the corresponding local messages
+    const hasContentMismatch = newFingerprints.some((fp, i) => fp !== currentFingerprints[i]);
+    // If content matches, keep local (has more messages). If mismatch, history changed.
+    return hasContentMismatch;
+  }
+
+  // If API has more messages, history has changed (e.g., messages from another session)
+  if (currentFingerprints.length < newFingerprints.length) return true;
+
+  // Same count - check if content differs
   return currentFingerprints.some((fp, i) => fp !== newFingerprints[i]);
 }
 
@@ -1926,6 +1938,7 @@ export default function ControlClient() {
   const [viewingMission, setViewingMission] = useState<Mission | null>(null);
   const [missionLoading, setMissionLoading] = useState(false);
   const [recentMissions, setRecentMissions] = useState<Mission[]>([]);
+  const [dismissedResumeUI, setDismissedResumeUI] = useState(false);
 
   // Workspaces for mission creation
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -1983,9 +1996,6 @@ export default function ControlClient() {
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [urlDownloading, setUrlDownloading] = useState(false);
-
-  // Provider and model selection state
-  const [providers, setProviders] = useState<Provider[]>([]);
 
   // Server configuration (fetched from health endpoint)
   const [maxIterations, setMaxIterations] = useState<number>(50); // Default fallback
@@ -2220,7 +2230,6 @@ export default function ControlClient() {
   const isBusy = viewingMissionIsRunning;
 
   const streamCleanupRef = useRef<null | (() => void)>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const enhancedInputRef = useRef<EnhancedInputHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const viewingMissionIdRef = useRef<string | null>(null);
@@ -2281,23 +2290,6 @@ export default function ControlClient() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Auto-resize textarea
-  const adjustTextareaHeight = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    textarea.style.height = "auto";
-    const lineHeight = 20;
-    const maxLines = 10;
-    const maxHeight = lineHeight * maxLines;
-    const newHeight = Math.min(textarea.scrollHeight, maxHeight);
-    textarea.style.height = `${newHeight}px`;
-  }, []);
-
-  useEffect(() => {
-    adjustTextareaHeight();
-  }, [input, adjustTextareaHeight]);
 
   const compressImageFile = useCallback(async (file: File) => {
     if (!file.type.startsWith("image/")) return file;
@@ -2390,9 +2382,9 @@ export default function ControlClient() {
 
       toast.success(`Uploaded ${result.name}`);
 
-      // Add a message about the upload at the beginning
+      // Add a message about the upload at the beginning (use full path)
       setInput((prev) => {
-        const uploadNote = `[Uploaded: ${result.name}]`;
+        const uploadNote = `[Uploaded: ${result.path}]`;
         return prev ? `${uploadNote}\n${prev}` : uploadNote;
       });
     } catch (error) {
@@ -2420,9 +2412,9 @@ export default function ControlClient() {
       const result = await downloadFromUrl(urlInput.trim(), contextPath, undefined, workspaceId, missionId);
       toast.success(`Downloaded ${result.name}`);
 
-      // Add a message about the download at the beginning (consistent with uploads)
+      // Add a message about the download at the beginning (use full path)
       setInput((prev) => {
-        const downloadNote = `[Downloaded: ${result.name}]`;
+        const downloadNote = `[Downloaded: ${result.path}]`;
         return prev ? `${downloadNote}\n${prev}` : downloadNote;
       });
 
@@ -2436,42 +2428,6 @@ export default function ControlClient() {
     }
   }, [urlInput, currentMission, viewingMission]);
 
-  // Handle paste to upload files
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    const handlePaste = async (event: ClipboardEvent) => {
-      const items = event.clipboardData?.items;
-      if (!items) return;
-
-      const files: File[] = [];
-      for (const item of items) {
-        if (item.kind === "file") {
-          const file = item.getAsFile();
-          if (file) files.push(file);
-        }
-      }
-
-      if (files.length === 0) return;
-
-      const textData = event.clipboardData?.getData("text/plain") ?? "";
-      if (textData.trim().length > 0) {
-        return;
-      }
-
-      // Prevent default paste for files
-      event.preventDefault();
-
-      // Upload files
-      for (const file of files) {
-        await handleFileUpload(file);
-      }
-    };
-
-    textarea.addEventListener("paste", handlePaste);
-    return () => textarea.removeEventListener("paste", handlePaste);
-  }, [handleFileUpload]);
 
   // Handle file input change
   const handleFileChange = async (
@@ -2486,6 +2442,13 @@ export default function ControlClient() {
       fileInputRef.current.value = "";
     }
   };
+
+  // Handle paste to upload files (e.g., screenshots from clipboard)
+  const handleFilePaste = useCallback(async (files: File[]) => {
+    for (const file of files) {
+      await handleFileUpload(file);
+    }
+  }, [handleFileUpload]);
 
   // Convert mission history to chat items
   const getActiveDesktopSession = useCallback((mission?: Mission | null) => {
@@ -3278,18 +3241,6 @@ export default function ControlClient() {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Fetch available providers and models for mission creation (retry on auth success)
-  useEffect(() => {
-    listProviders()
-      .then((data) => {
-        setProviders(data.providers);
-      })
-      .catch((err) => {
-        if (isNetworkError(err)) return;
-        console.error("Failed to fetch providers:", err);
-      });
-  }, [authRetryTrigger]);
-
   // Fetch workspaces and agents for mission creation
   useEffect(() => {
     listWorkspaces()
@@ -3452,11 +3403,14 @@ export default function ControlClient() {
   // and could be from any mission. We only cache when explicitly loading from API.
 
   // Handle creating a new mission
+  // Returns the mission ID for the NewMissionDialog to handle navigation
   const handleNewMission = async (options?: {
     workspaceId?: string;
     agent?: string;
     modelOverride?: string;
+    configProfile?: string;
     backend?: string;
+    openInNewTab?: boolean;
   }) => {
     try {
       setMissionLoading(true);
@@ -3464,23 +3418,32 @@ export default function ControlClient() {
         workspaceId: options?.workspaceId,
         agent: options?.agent,
         modelOverride: options?.modelOverride,
+        configProfile: options?.configProfile,
         backend: options?.backend,
       });
-      pendingMissionNavRef.current = mission.id;
-      router.replace(`/control?mission=${mission.id}`, { scroll: false });
-      setCurrentMission(mission);
-      setViewingMission(mission);
-      setViewingMissionId(mission.id); // Also update viewing to the new mission
-      setItems([]);
-      setHasDesktopSession(false);
+
+      // Only update local state for same-tab navigation
+      // For new tab, the new tab will load its own state
+      if (!options?.openInNewTab) {
+        pendingMissionNavRef.current = mission.id;
+        setCurrentMission(mission);
+        setViewingMission(mission);
+        setViewingMissionId(mission.id);
+        setItems([]);
+        setHasDesktopSession(false);
+      }
+
       // Refresh running missions to get accurate state
       const running = await getRunningMissions();
       setRunningMissions(running);
       refreshRecentMissions();
       toast.success("New mission created");
+      // Return ID for dialog to handle navigation
+      return { id: mission.id };
     } catch (err) {
       console.error("Failed to create mission:", err);
       toast.error("Failed to create new mission");
+      throw err; // Re-throw so dialog knows creation failed
     } finally {
       setMissionLoading(false);
     }
@@ -4423,14 +4386,22 @@ export default function ControlClient() {
     // Sync mission state before sending (backend needs current_mission set correctly)
     if (targetMissionId) {
       try {
-        const mission = await loadMission(targetMissionId);
+        let mission = await loadMission(targetMissionId);
+
+        // If the mission is in a resumable state (failed/interrupted/blocked),
+        // resume it first to update the status before sending the message.
+        // Use skipMessage to avoid the auto-generated "MISSION RESUMED" message
+        // since the user is about to send their own custom message.
+        if (["failed", "interrupted", "blocked"].includes(mission.status)) {
+          mission = await resumeMission(mission.id, { skipMessage: true });
+        }
+
         setCurrentMission(mission);
         setViewingMission(mission);
         setViewingMissionId(mission.id);
-        // Only update items if history content has actually changed
-        if (hasHistoryChanged(items, mission.history)) {
-          setItems(missionHistoryToItems(mission));
-        }
+        // Don't sync items from persisted history here - the local items state
+        // is the source of truth and may contain SSE-delivered content that
+        // hasn't been persisted yet. Replacing items would cause messages to disappear.
         applyDesktopSessionState(mission);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -4565,7 +4536,13 @@ export default function ControlClient() {
   const showResumeUI = activeMission &&
     !viewingMissionIsRunning &&
     !waitingForResponse &&
+    !dismissedResumeUI &&
     (isFailed || (!lastTurnCompleted && (activeMission.status === 'interrupted' || activeMission.status === 'blocked')));
+
+  // Reset dismissedResumeUI when switching missions
+  useEffect(() => {
+    setDismissedResumeUI(false);
+  }, [activeMission?.id]);
 
   return (
     <div className="flex h-screen flex-col p-6">
@@ -4645,9 +4622,13 @@ export default function ControlClient() {
         <div className="flex items-center gap-3 shrink-0">
           <NewMissionDialog
             workspaces={workspaces}
-            providers={providers}
             disabled={missionLoading}
             onCreate={handleNewMission}
+            initialValues={activeMission ? {
+              workspaceId: activeMission.workspace_id,
+              agent: activeMission.agent,
+              backend: activeMission.backend,
+            } : undefined}
           />
 
           {/* Thinking panel toggle */}
@@ -5747,6 +5728,13 @@ export default function ControlClient() {
                 <PlayCircle className="h-4 w-4" />
                 {activeMission.status === 'blocked' ? 'Continue' : activeMission.status === 'failed' ? 'Retry' : 'Resume'}
               </button>
+              <button
+                onClick={() => setDismissedResumeUI(true)}
+                className="flex items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04] px-5 py-3 text-sm font-medium text-white/70 transition-colors"
+              >
+                <MessageSquare className="h-4 w-4" />
+                Custom Message
+              </button>
             </div>
           ) : (
             <div className="mx-auto max-w-3xl w-full space-y-2">
@@ -5786,6 +5774,7 @@ export default function ControlClient() {
                   onChange={setInput}
                   onSubmit={handleEnhancedSubmit}
                   onCanSubmitChange={setCanSubmitInput}
+                  onFilePaste={handleFilePaste}
                   placeholder="Message the root agent… (paste files to upload)"
                   backend={viewingMission?.backend ?? currentMission?.backend}
                 />

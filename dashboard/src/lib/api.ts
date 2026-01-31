@@ -1066,20 +1066,6 @@ export interface LibraryAgent {
   permissions: Record<string, string>;
 }
 
-// Library Tool types
-export interface LibraryToolSummary {
-  name: string;
-  description: string | null;
-  path: string;
-}
-
-export interface LibraryTool {
-  name: string;
-  description: string | null;
-  path: string;
-  content: string;
-}
-
 // Migration report
 export interface MigrationReport {
   directories_renamed: [string, string][];
@@ -1114,9 +1100,42 @@ export async function getLibraryStatus(): Promise<LibraryStatus> {
   return libGet("/api/library/status", "Failed to fetch library status");
 }
 
+// Error class for diverged git history
+export class DivergedHistoryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DivergedHistoryError";
+  }
+}
+
 // Sync (git pull)
+// Throws DivergedHistoryError if local and remote histories have diverged
 export async function syncLibrary(): Promise<void> {
-  return libPost("/api/library/sync", undefined, "Failed to sync library");
+  const res = await apiFetch("/api/library/sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    // Check for diverged history error (409 Conflict with DIVERGED_HISTORY prefix)
+    if (res.status === 409 && text.includes("DIVERGED_HISTORY")) {
+      throw new DivergedHistoryError(text.replace("DIVERGED_HISTORY: ", ""));
+    }
+    throw new Error(text || "Failed to sync library");
+  }
+}
+
+// Force sync (reset local to remote)
+// Use this when histories have diverged after a force push
+export async function forceSyncLibrary(): Promise<void> {
+  return libPost("/api/library/force-sync", undefined, "Failed to force sync library");
+}
+
+// Force push (overwrite remote with local)
+// Use this when you want to keep local changes and overwrite remote
+export async function forcePushLibrary(): Promise<void> {
+  return libPost("/api/library/force-push", undefined, "Failed to force push library");
 }
 
 // Commit changes
@@ -1407,33 +1426,6 @@ export async function deleteLibraryAgent(name: string): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Library Tools
-// ─────────────────────────────────────────────────────────────────────────────
-
-// List library tools
-export async function listLibraryTools(): Promise<LibraryToolSummary[]> {
-  return libGet("/api/library/tool", "Failed to fetch library tools");
-}
-
-// Get library tool
-export async function getLibraryTool(name: string): Promise<LibraryTool> {
-  return libGet(`/api/library/tool/${encodeURIComponent(name)}`, "Failed to fetch library tool");
-}
-
-// Save library tool
-export async function saveLibraryTool(
-  name: string,
-  content: string
-): Promise<void> {
-  return libPut(`/api/library/tool/${encodeURIComponent(name)}`, { content }, "Failed to save library tool");
-}
-
-// Delete library tool
-export async function deleteLibraryTool(name: string): Promise<void> {
-  return libDel(`/api/library/tool/${encodeURIComponent(name)}`, "Failed to delete library tool");
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Workspace Templates
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1446,6 +1438,8 @@ export interface WorkspaceTemplateSummary {
   init_scripts?: string[];
 }
 
+export type TailscaleMode = "exit_node" | "tailnet_only";
+
 export interface WorkspaceTemplate {
   name: string;
   description?: string;
@@ -1457,6 +1451,8 @@ export interface WorkspaceTemplate {
   init_scripts: string[];
   init_script: string;
   shared_network?: boolean | null;
+  tailscale_mode?: TailscaleMode | null;
+  config_profile?: string;
 }
 
 export async function listWorkspaceTemplates(): Promise<WorkspaceTemplateSummary[]> {
@@ -1478,6 +1474,8 @@ export async function saveWorkspaceTemplate(
     init_scripts?: string[];
     init_script?: string;
     shared_network?: boolean | null;
+    tailscale_mode?: TailscaleMode | null;
+    config_profile?: string;
   }
 ): Promise<void> {
   return libPut(`/api/library/workspace-template/${encodeURIComponent(name)}`, data, "Failed to save workspace template");
@@ -1500,6 +1498,8 @@ export async function renameWorkspaceTemplate(oldName: string, newName: string):
     init_scripts: template.init_scripts,
     init_script: template.init_script,
     shared_network: template.shared_network,
+    tailscale_mode: template.tailscale_mode,
+    config_profile: template.config_profile,
   });
   // Delete old template
   await deleteWorkspaceTemplate(oldName);
@@ -1708,7 +1708,12 @@ export interface OpenAgentConfig {
 
 // Get OpenAgent config from Library
 export async function getOpenAgentConfig(): Promise<OpenAgentConfig> {
-  return apiGet("/api/library/openagent/config", "Failed to get OpenAgent config");
+  try {
+    return await apiGet("/api/library/openagent/config", "Failed to get OpenAgent config");
+  } catch {
+    // Return default config if endpoint doesn't exist (not yet implemented)
+    return { hidden_agents: [], default_agent: null };
+  }
 }
 
 // Save OpenAgent config to Library
@@ -1718,7 +1723,12 @@ export async function saveOpenAgentConfig(config: OpenAgentConfig): Promise<void
 
 // Get visible agents (filtered by OpenAgent config)
 export async function getVisibleAgents(): Promise<unknown> {
-  return apiGet("/api/library/openagent/agents", "Failed to get visible agents");
+  try {
+    return await apiGet("/api/library/openagent/agents", "Failed to get visible agents");
+  } catch {
+    // Return empty array if endpoint doesn't exist (not yet implemented)
+    return [];
+  }
 }
 
 // Claude Code config stored in Library
@@ -1738,6 +1748,239 @@ export async function saveClaudeCodeConfig(
   config: ClaudeCodeConfig
 ): Promise<void> {
   return apiPut("/api/library/claudecode/config", config, "Failed to save Claude Code config");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Config Profiles API
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ConfigProfileSummary {
+  name: string;
+  is_default: boolean;
+  path: string;
+}
+
+export interface ConfigProfileFile {
+  path: string;
+  content: string;
+}
+
+export interface AmpCodeConfig {
+  default_mode?: string | null;
+}
+
+export interface ConfigProfile {
+  name: string;
+  is_default: boolean;
+  path: string;
+  files: ConfigProfileFile[];
+  opencode_settings: Record<string, unknown>;
+  openagent_config: OpenAgentConfig;
+  claudecode_config: ClaudeCodeConfig;
+  ampcode_config: AmpCodeConfig;
+}
+
+// List all config profiles
+export async function listConfigProfiles(): Promise<ConfigProfileSummary[]> {
+  return apiGet("/api/library/config-profile", "Failed to list config profiles");
+}
+
+// Create a new config profile
+export async function createConfigProfile(
+  name: string,
+  baseProfile?: string
+): Promise<ConfigProfile> {
+  return apiPost(
+    "/api/library/config-profile",
+    { name, base_profile: baseProfile },
+    "Failed to create config profile"
+  );
+}
+
+// Get a config profile by name
+export async function getConfigProfile(name: string): Promise<ConfigProfile> {
+  return apiGet(`/api/library/config-profile/${encodeURIComponent(name)}`, "Failed to get config profile");
+}
+
+// Save a config profile
+export async function saveConfigProfile(name: string, profile: ConfigProfile): Promise<void> {
+  return apiPut(`/api/library/config-profile/${encodeURIComponent(name)}`, profile, "Failed to save config profile");
+}
+
+// Delete a config profile
+export async function deleteConfigProfile(name: string): Promise<void> {
+  return apiDel(`/api/library/config-profile/${encodeURIComponent(name)}`, "Failed to delete config profile");
+}
+
+// Get OpenCode settings for a specific profile
+export async function getLibraryOpenCodeSettingsForProfile(profile: string): Promise<Record<string, unknown>> {
+  return apiGet(
+    `/api/library/config-profile/${encodeURIComponent(profile)}/opencode/settings`,
+    "Failed to get OpenCode settings for profile"
+  );
+}
+
+// Save OpenCode settings for a specific profile
+export async function saveLibraryOpenCodeSettingsForProfile(
+  profile: string,
+  settings: Record<string, unknown>
+): Promise<void> {
+  return apiPut(
+    `/api/library/config-profile/${encodeURIComponent(profile)}/opencode/settings`,
+    settings,
+    "Failed to save OpenCode settings for profile"
+  );
+}
+
+// Get OpenAgent config for a specific profile
+export async function getOpenAgentConfigForProfile(profile: string): Promise<OpenAgentConfig> {
+  try {
+    return await apiGet(
+      `/api/library/config-profile/${encodeURIComponent(profile)}/openagent/config`,
+      "Failed to get OpenAgent config for profile"
+    );
+  } catch {
+    // Return default config if endpoint doesn't exist (not yet implemented)
+    return { hidden_agents: [], default_agent: null };
+  }
+}
+
+// Save OpenAgent config for a specific profile
+export async function saveOpenAgentConfigForProfile(
+  profile: string,
+  config: OpenAgentConfig
+): Promise<void> {
+  return apiPut(
+    `/api/library/config-profile/${encodeURIComponent(profile)}/openagent/config`,
+    config,
+    "Failed to save OpenAgent config for profile"
+  );
+}
+
+// Get Claude Code config for a specific profile
+export async function getClaudeCodeConfigForProfile(profile: string): Promise<ClaudeCodeConfig> {
+  return apiGet(
+    `/api/library/config-profile/${encodeURIComponent(profile)}/claudecode/config`,
+    "Failed to get Claude Code config for profile"
+  );
+}
+
+// Save Claude Code config for a specific profile
+export async function saveClaudeCodeConfigForProfile(
+  profile: string,
+  config: ClaudeCodeConfig
+): Promise<void> {
+  return apiPut(
+    `/api/library/config-profile/${encodeURIComponent(profile)}/claudecode/config`,
+    config,
+    "Failed to save Claude Code config for profile"
+  );
+}
+
+// Get Amp Code config for a specific profile
+export async function getAmpCodeConfigForProfile(profile: string): Promise<AmpCodeConfig> {
+  return apiGet(
+    `/api/library/config-profile/${encodeURIComponent(profile)}/ampcode/config`,
+    "Failed to get Amp Code config for profile"
+  );
+}
+
+// Save Amp Code config for a specific profile
+export async function saveAmpCodeConfigForProfile(
+  profile: string,
+  config: AmpCodeConfig
+): Promise<void> {
+  return apiPut(
+    `/api/library/config-profile/${encodeURIComponent(profile)}/ampcode/config`,
+    config,
+    "Failed to save Amp Code config for profile"
+  );
+}
+
+// List all files in a config profile
+export async function listConfigProfileFiles(profile: string): Promise<string[]> {
+  return apiGet(
+    `/api/library/config-profile/${encodeURIComponent(profile)}/files`,
+    "Failed to list config profile files"
+  );
+}
+
+// Get a specific file from a config profile
+export async function getConfigProfileFile(profile: string, filePath: string): Promise<string> {
+  const response = await fetch(
+    apiUrl(`/api/library/config-profile/${encodeURIComponent(profile)}/file/${filePath}`),
+    {
+      headers: authHeader(),
+    }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to get config profile file: ${response.statusText}`);
+  }
+  return response.text();
+}
+
+// Save a specific file in a config profile
+export async function saveConfigProfileFile(
+  profile: string,
+  filePath: string,
+  content: string
+): Promise<void> {
+  const response = await fetch(
+    apiUrl(`/api/library/config-profile/${encodeURIComponent(profile)}/file/${filePath}`),
+    {
+      method: "PUT",
+      headers: {
+        ...authHeader(),
+        "Content-Type": "text/plain",
+      },
+      body: content,
+    }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to save config profile file: ${response.statusText}`);
+  }
+}
+
+// Delete a specific file from a config profile
+export async function deleteConfigProfileFile(
+  profile: string,
+  filePath: string
+): Promise<void> {
+  const response = await fetch(
+    apiUrl(`/api/library/config-profile/${encodeURIComponent(profile)}/file/${filePath}`),
+    {
+      method: "DELETE",
+      headers: authHeader(),
+    }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to delete config profile file: ${response.statusText}`);
+  }
+}
+
+// List default files for a harness from the library
+export async function listHarnessDefaultFiles(harness: string): Promise<string[]> {
+  return apiGet(
+    `/api/library/harness-default/${encodeURIComponent(harness)}`,
+    "Failed to list harness default files"
+  );
+}
+
+// Get a harness default file from the library
+export async function getHarnessDefaultFile(harness: string, fileName: string): Promise<string> {
+  const response = await fetch(
+    apiUrl(`/api/library/harness-default/${encodeURIComponent(harness)}/${fileName}`),
+    {
+      headers: authHeader(),
+    }
+  );
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error(`Harness default file not found: ${harness}/${fileName}`);
+    }
+    throw new Error(`Failed to get harness default file: ${response.statusText}`);
+  }
+  return response.text();
 }
 
 // AI Provider types and functions are now exported from ./api/providers
@@ -1810,6 +2053,28 @@ export async function getSecretsStatus(): Promise<SecretsStatus> {
 // Get encryption status (for skill content encryption)
 export async function getEncryptionStatus(): Promise<EncryptionStatus> {
   return apiGet('/api/secrets/encryption', 'Failed to get encryption status');
+}
+
+// Get private key (hex-encoded)
+export interface PrivateKeyResponse {
+  key_hex: string | null;
+  key_source: string | null;
+}
+
+export async function getPrivateKey(): Promise<PrivateKeyResponse> {
+  return apiGet('/api/secrets/encryption/key', 'Failed to get private key');
+}
+
+// Set/update private key
+export interface SetPrivateKeyResponse {
+  success: boolean;
+  message: string;
+  reencrypted_count: number;
+  failed_count: number;
+}
+
+export async function setPrivateKey(keyHex: string): Promise<SetPrivateKeyResponse> {
+  return apiPut('/api/secrets/encryption/key', { key_hex: keyHex }, 'Failed to set private key');
 }
 
 // Initialize secrets system

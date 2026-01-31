@@ -10,12 +10,13 @@
 //! - `OPENCODE_BASE_URL` - DEPRECATED. No longer used for mission execution (per-mission CLI mode).
 //! - `OPENCODE_AGENT` - Optional. Default OpenCode agent name (e.g., `Sisyphus`, `oracle`).
 //! - `OPENCODE_PERMISSIVE` - Optional. If true, auto-allows all permissions for OpenCode sessions (default: true).
-//! - `OPEN_AGENT_USERS` - Optional. JSON array of user accounts for multi-user auth.
+//! - `SANDBOXED_USERS` or `SANDBOXED_SH_USERS` (legacy) - Optional. JSON array of user accounts for multi-user auth.
 //! - `LIBRARY_GIT_SSH_KEY` - Optional. SSH key path for library git operations. If set to a path, uses that key.
 //!   If set to empty string, ignores ~/.ssh/config (useful when the config specifies a non-existent key).
 //!   If unset, uses default SSH behavior.
 //! - `LIBRARY_REMOTE` - Optional. Initial library remote URL (can be changed via Settings in the dashboard).
 //!   This environment variable is used as the initial default when no settings file exists.
+//!   If not set, defaults to: https://github.com/Th0rgal/sandboxed-library-template.git
 //!
 //! Note: The agent has **full system access**. It can read/write any file, execute any command,
 //! and search anywhere on the machine. The `WORKING_DIR` is just the default for relative paths.
@@ -222,7 +223,7 @@ pub struct Config {
     pub opencode_permissive: bool,
 
     /// Path to the configuration library git repo.
-    /// Default: {working_dir}/.openagent/library
+    /// Default: {working_dir}/.sandboxed-sh/library
     pub library_path: PathBuf,
 }
 
@@ -369,12 +370,17 @@ impl Config {
             // In debug builds, default to dev_mode=true; in release, default to false.
             .unwrap_or(cfg!(debug_assertions));
 
-        let users = std::env::var("OPEN_AGENT_USERS")
+        // Support both new (SANDBOXED_USERS) and legacy (SANDBOXED_SH_USERS) env vars
+        let users = std::env::var("SANDBOXED_USERS")
+            .or_else(|_| std::env::var("SANDBOXED_SH_USERS"))
             .ok()
             .filter(|raw| !raw.trim().is_empty())
             .map(|raw| {
                 serde_json::from_str::<Vec<UserAccount>>(&raw).map_err(|e| {
-                    ConfigError::InvalidValue("OPEN_AGENT_USERS".to_string(), e.to_string())
+                    ConfigError::InvalidValue(
+                        "SANDBOXED_USERS/SANDBOXED_SH_USERS".to_string(),
+                        e.to_string(),
+                    )
                 })
             })
             .transpose()?
@@ -408,7 +414,9 @@ impl Config {
             match auth.auth_mode(dev_mode) {
                 AuthMode::MultiUser => {
                     if auth.users.is_empty() {
-                        return Err(ConfigError::MissingEnvVar("OPEN_AGENT_USERS".to_string()));
+                        return Err(ConfigError::MissingEnvVar(
+                            "SANDBOXED_USERS or SANDBOXED_SH_USERS".to_string(),
+                        ));
                     }
                     if auth.jwt_secret.is_none() {
                         return Err(ConfigError::MissingEnvVar("JWT_SECRET".to_string()));
@@ -419,7 +427,7 @@ impl Config {
                         .any(|u| u.username.trim().is_empty() || u.password.trim().is_empty())
                     {
                         return Err(ConfigError::InvalidValue(
-                            "OPEN_AGENT_USERS".to_string(),
+                            "SANDBOXED_USERS/SANDBOXED_SH_USERS".to_string(),
                             "username/password must be non-empty".to_string(),
                         ));
                     }
@@ -438,7 +446,7 @@ impl Config {
                         return Err(ConfigError::MissingEnvVar("JWT_SECRET".to_string()));
                     }
                     return Err(ConfigError::MissingEnvVar(
-                        "DASHBOARD_PASSWORD or OPEN_AGENT_USERS".to_string(),
+                        "DASHBOARD_PASSWORD or SANDBOXED_SH_USERS".to_string(),
                     ));
                 }
             }
@@ -450,7 +458,7 @@ impl Config {
         // Note: library_remote is now managed via the settings module (persisted to disk)
         let library_path = std::env::var("LIBRARY_PATH")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| working_dir.join(".openagent/library"));
+            .unwrap_or_else(|_| working_dir.join(".sandboxed-sh/library"));
 
         Ok(Self {
             default_model,
@@ -472,7 +480,7 @@ impl Config {
 
     /// Create a config with custom values (useful for testing).
     pub fn new(working_dir: PathBuf) -> Self {
-        let library_path = working_dir.join(".openagent/library");
+        let library_path = working_dir.join(".sandboxed-sh/library");
         Self {
             default_model: None,
             working_dir,

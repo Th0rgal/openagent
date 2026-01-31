@@ -153,12 +153,21 @@ function highlightBash(code: string): string {
   return html;
 }
 
-// Highlight encrypted tags
+// Highlight encrypted tags (including failed-to-decrypt ones)
 function highlightEncryptedTags(html: string): string {
-  return html.replace(
+  // First handle failed-to-decrypt tags (show in red)
+  html = html.replace(
+    /&lt;encrypted-failed(?:\s+v=&quot;\d+&quot;)?&gt;(.*?)&lt;\/encrypted-failed&gt;/g,
+    '<span class="token-encrypted-failed-tag">&lt;encrypted-failed&gt;</span><span class="token-encrypted-failed-value">$1</span><span class="token-encrypted-failed-tag">&lt;/encrypted-failed&gt;</span>'
+  );
+
+  // Then handle normal encrypted tags (show in yellow)
+  html = html.replace(
     /&lt;encrypted(?:\s+v=&quot;\d+&quot;)?&gt;(.*?)&lt;\/encrypted&gt;/g,
     '<span class="token-encrypted-tag">&lt;encrypted&gt;</span><span class="token-encrypted-value">$1</span><span class="token-encrypted-tag">&lt;/encrypted&gt;</span>'
   );
+
+  return html;
 }
 
 export function ConfigCodeEditor({
@@ -200,6 +209,7 @@ export function ConfigCodeEditor({
 
   // Check if value contains encrypted tags for visual indicator
   const hasEncryptedContent = highlightEncrypted && /<encrypted(?:\s+v="\d+")?>/i.test(value);
+  const hasFailedEncryptedContent = highlightEncrypted && /<encrypted-failed/i.test(value);
 
   return (
     <div
@@ -210,7 +220,12 @@ export function ConfigCodeEditor({
       )}
       aria-disabled={disabled}
     >
-      {hasEncryptedContent && (
+      {hasFailedEncryptedContent && (
+        <div className="absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-medium bg-red-500/20 text-red-400 border border-red-500/30 pointer-events-none z-10">
+          ⚠️ Decryption failed - re-enter values
+        </div>
+      )}
+      {hasEncryptedContent && !hasFailedEncryptedContent && (
         <div className="absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-400 border border-amber-500/30 pointer-events-none z-10">
           Contains encrypted values
         </div>

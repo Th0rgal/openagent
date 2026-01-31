@@ -509,8 +509,8 @@ function TerminalTab({ tabId, isActive, onStatusChange }: { tabId: string; isAct
     setWsStatus("connecting");
     const jwt = getValidJwt()?.token ?? null;
     const proto = jwt
-      ? (["openagent", `jwt.${jwt}`] as string[])
-      : (["openagent"] as string[]);
+      ? (["sandboxed", `jwt.${jwt}`] as string[])
+      : (["sandboxed"] as string[]);
     const API_BASE = getRuntimeApiBase();
     const u = new URL(`${API_BASE}/api/console/ws`);
     u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
@@ -831,8 +831,8 @@ function WorkspaceShellTab({
     setWsStatus("connecting");
     const jwt = getValidJwt()?.token ?? null;
     const proto = jwt
-      ? (["openagent", `jwt.${jwt}`] as string[])
-      : (["openagent"] as string[]);
+      ? (["sandboxed", `jwt.${jwt}`] as string[])
+      : (["sandboxed"] as string[]);
     const API_BASE = getRuntimeApiBase();
     // Connect to workspace-specific shell endpoint
     const u = new URL(`${API_BASE}/api/workspaces/${workspaceId}/shell`);
