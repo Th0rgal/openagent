@@ -1499,6 +1499,7 @@ export async function renameWorkspaceTemplate(oldName: string, newName: string):
     init_script: template.init_script,
     shared_network: template.shared_network,
     tailscale_mode: template.tailscale_mode,
+    config_profile: template.config_profile,
   });
   // Delete old template
   await deleteWorkspaceTemplate(oldName);
