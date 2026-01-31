@@ -311,7 +311,8 @@ const VERSIONED_TAG_REGEX: &str = r#"<encrypted v="(\d+)">([^<]*)</encrypted>"#;
 const ANY_ENCRYPTED_TAG_REGEX: &str = r#"<encrypted(?:\s+v="\d+")?>([^<]*)</encrypted>"#;
 
 /// Regex to match failed-to-decrypt tags.
-const FAILED_ENCRYPTED_TAG_REGEX: &str = r#"<encrypted-failed(?:\s+v="\d+")?>([^<]*)</encrypted-failed>"#;
+const FAILED_ENCRYPTED_TAG_REGEX: &str =
+    r#"<encrypted-failed(?:\s+v="\d+")?>([^<]*)</encrypted-failed>"#;
 
 /// Check if a value is an unversioned encrypted tag (user input format).
 pub fn is_unversioned_encrypted(value: &str) -> bool {
@@ -488,6 +489,12 @@ pub async fn set_private_key_hex(key_hex: &str) -> Result<()> {
 
     tracing::info!("Restored PRIVATE_KEY from backup");
     Ok(())
+}
+
+/// Parse a key from a hex string.
+/// Returns the 32-byte key if valid, or an error otherwise.
+pub fn parse_key_hex(key_hex: &str) -> Result<[u8; KEY_LENGTH]> {
+    parse_key(key_hex)
 }
 
 #[cfg(test)]

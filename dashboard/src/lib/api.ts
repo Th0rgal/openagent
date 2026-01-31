@@ -2039,6 +2039,28 @@ export async function getEncryptionStatus(): Promise<EncryptionStatus> {
   return apiGet('/api/secrets/encryption', 'Failed to get encryption status');
 }
 
+// Get private key (hex-encoded)
+export interface PrivateKeyResponse {
+  key_hex: string | null;
+  key_source: string | null;
+}
+
+export async function getPrivateKey(): Promise<PrivateKeyResponse> {
+  return apiGet('/api/secrets/encryption/key', 'Failed to get private key');
+}
+
+// Set/update private key
+export interface SetPrivateKeyResponse {
+  success: boolean;
+  message: string;
+  reencrypted_count: number;
+  failed_count: number;
+}
+
+export async function setPrivateKey(keyHex: string): Promise<SetPrivateKeyResponse> {
+  return apiPut('/api/secrets/encryption/key', { key_hex: keyHex }, 'Failed to set private key');
+}
+
 // Initialize secrets system
 export async function initializeSecrets(keyId: string = 'default'): Promise<{ key_id: string; message: string }> {
   return apiPost('/api/secrets/initialize', { key_id: keyId }, 'Failed to initialize secrets');
